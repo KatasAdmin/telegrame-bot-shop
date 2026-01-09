@@ -2,17 +2,19 @@ import asyncio
 import json
 import os
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
-from dotenv import load_dotenv
 
-# -------------------- Загрузка переменных окружения --------------------
-load_dotenv()
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+# -------------------- Переменные окружения --------------------
+# В Railpack переменные из TOML/Env
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+ADMIN_ID = os.getenv("ADMIN_ID", "0")
+try:
+    ADMIN_ID = int(ADMIN_ID)
+except ValueError:
+    ADMIN_ID = 0
 ADMIN_IDS = [ADMIN_ID]
 
 # -------------------- Инициализация бота --------------------
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
 # -------------------- Хранилище --------------------
@@ -20,7 +22,6 @@ DATA_FILE = "data.json"
 user_carts = {}
 user_history = {}
 CATEGORIES = {}
-pending_admin = {}
 pending_checkout = {}
 managers = []
 
@@ -46,16 +47,10 @@ def load_data():
             CATEGORIES = data.get("categories", {})
             managers = data.get("managers", [])
         except json.JSONDecodeError:
-            user_carts = {}
-            user_history = {}
-            CATEGORIES = {}
-            managers = []
+            user_carts, user_history, CATEGORIES, managers = {}, {}, {}, []
             save_data()
     else:
-        user_carts = {}
-        user_history = {}
-        CATEGORIES = {}
-        managers = []
+        user_carts, user_history, CATEGORIES, managers = {}, {}, {}, []
         save_data()
 
 # -------------------- Главное меню --------------------
@@ -122,57 +117,34 @@ async def show_history(message, user_id):
         text += f"{i}. {', '.join([p['name'] for p in item['items']])} — ${item['total']} — Адрес: {delivery} — Телефон: {phone}\n"
     await message.answer(text)
 
-# -------------------- Админ-панель --------------------
-async def show_admin_menu(message):
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("➕ Добавить товар", callback_data="admin_add"))
-    kb.add(types.InlineKeyboardButton("✏️ Редактировать товар", callback_data="admin_edit"))
-    kb.add(types.InlineKeyboardButton("❌ Удалить товар", callback_data="admin_delete"))
-    kb.add(types.InlineKeyboardButton("👤 Управление менеджерами", callback_data="admin_managers"))
-    kb.add(types.InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu"))
-    await message.answer("Меню администратора:", reply_markup=kb)
-
-# -------------------- Управление менеджерами --------------------
-async def show_managers_menu(message):
-    kb = types.InlineKeyboardMarkup()
-    if managers:
-        for m_id in managers:
-            kb.add(types.InlineKeyboardButton(f"❌ {m_id}", callback_data=f"remove_manager_{m_id}"))
-    kb.add(types.InlineKeyboardButton("➕ Добавить менеджера", callback_data="add_manager"))
-    kb.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="admin_back"))
-    await message.answer("Список менеджеров:", reply_markup=kb)
-
-# -------------------- Универсальный обработчик сообщений --------------------
+# -------------------- Универсальный обработчик --------------------
 @dp.message()
-async def all_messages(message: types.Message):
+async def handle_message(message: types.Message):
     user_id = message.from_user.id
     text = message.text.strip()
+    load_data()
 
-    # Старт
     if text == "/start":
-        load_data()
-        await message.answer("Привет! Добро пожаловать в магазин 👇\nВыберите действие:", reply_markup=main_menu())
+        await message.answer("Привет! Добро пожаловать 👇", reply_markup=main_menu())
         return
 
-    # Поддержка
     if text == "📞 Поддержка":
         if not managers:
-            await message.answer("Пока нет активных менеджеров, попробуйте позже.")
+            await message.answer("Пока нет активных менеджеров.")
             return
         for m_id in managers:
             try:
                 await bot.send_message(m_id, f"{SUPPORT_MESSAGE}\nПользователь: {user_id}")
-            except Exception as e:
-                print(f"Ошибка при отправке менеджеру {m_id}: {e}")
+            except: pass
         await message.answer("Мы уведомили менеджера, ожидайте ответ.")
         return
 
-    # Шаги оформления заказа
+    # Оформление заказа
     if user_id in pending_checkout:
         step_data = pending_checkout[user_id]
         if step_data["step"] == "phone":
-            if not text.startswith("+380") or not text[1:].isdigit() or len(text) != 13:
-                await message.answer("Неверный формат номера. Введите снова в формате +380XXXXXXXXX:")
+            if not text.startswith("+380") or len(text) != 13 or not text[1:].isdigit():
+                await message.answer("Неверный формат номера. Введите +380XXXXXXXXX")
                 return
             step_data["phone"] = text
             step_data["step"] = "address"
@@ -181,7 +153,7 @@ async def all_messages(message: types.Message):
         elif step_data["step"] == "address":
             step_data["address"] = text
             cart = user_carts.get(user_id, [])
-            total = sum(item['price'] for item in cart)
+            total = sum(i['price'] for i in cart)
             order = {
                 "items": cart.copy(),
                 "total": total,
@@ -193,45 +165,38 @@ async def all_messages(message: types.Message):
             user_carts[user_id] = []
             save_data()
             pending_checkout.pop(user_id)
-            await message.answer(
-                f"✅ Заказ успешно оформлен!\nСумма: ${total}\nНомер: {order['phone']}\nАдрес: {order['address']}"
-            )
-            # Отправка всем менеджерам
-            manager_text = f"Новый заказ от пользователя {user_id}:\nТелефон: {order['phone']}\nАдрес: {order['address']}\n"
-            for i, item in enumerate(order['items'], 1):
-                manager_text += f"{i}. {item['name']} — ${item['price']}\n"
-            manager_text += f"Итого: ${total}"
+            await message.answer(f"✅ Заказ оформлен! Сумма: ${total}")
+            # уведомление менеджеров
             for m in managers:
                 try:
-                    await bot.send_message(m, manager_text)
-                except Exception as e:
-                    print(f"Ошибка при отправке менеджеру {m}: {e}")
+                    text = f"Новый заказ {user_id}:\nТелефон: {order['phone']}\nАдрес: {order['address']}"
+                    for idx, item in enumerate(order['items'], 1):
+                        text += f"\n{idx}. {item['name']} — ${item['price']}"
+                    text += f"\nИтого: ${total}"
+                    await bot.send_message(m, text)
+                except: pass
             return
 
-    # Меню пользователя
+    # Меню
     if text == "🛍 Каталог товаров":
         await show_categories(message)
     elif text == "🔥 Акции / Хиты":
-        await message.answer("Вы открыли акции и хиты!")
+        await message.answer("Акции и хиты пока пусты.")
     elif text == "🧺 Моя корзина":
         await show_cart(message, user_id)
     elif text == "📦 История покупок":
         await show_history(message, user_id)
-    elif text == "❤️ Избранное":
-        await message.answer("Ваш список избранного пока пуст.")
     else:
-        await message.answer("Выберите действие из меню ниже.", reply_markup=main_menu())
+        await message.answer("Выберите действие из меню:", reply_markup=main_menu())
 
-# -------------------- Callback Handler --------------------
+# -------------------- Callback --------------------
 @dp.callback_query()
 async def callback_handler(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     data = callback.data
 
-    # --- Категории и товары ---
     if data.startswith("cat_"):
-        category = data[4:]
-        await show_products(callback.message, category)
+        await show_products(callback.message, data[4:])
         await callback.answer()
     elif data.startswith("prod_"):
         parts = data.split("_")
@@ -252,30 +217,7 @@ async def callback_handler(callback: types.CallbackQuery):
             await callback.answer()
             return
         pending_checkout[user_id] = {"step": "phone"}
-        await callback.message.answer("Введите ваш номер телефона в формате +380XXXXXXXXX:")
-        await callback.answer()
-
-    # --- Админ ---
-    elif data.startswith("admin_"):
-        action = data.split("_")[1]
-        if action == "managers":
-            await show_managers_menu(callback.message)
-        elif action == "add_manager":
-            pending_admin[user_id] = {"action": "add_manager", "step": "enter_id"}
-            await callback.message.answer("Введите Telegram ID нового менеджера:")
-        await callback.answer()
-    
-    # --- Менеджеры ---
-    elif data.startswith("remove_manager_"):
-        remove_id = int(data.split("_")[2])
-        if remove_id in managers:
-            managers.remove(remove_id)
-            save_data()
-            await callback.message.answer(f"❌ Менеджер {remove_id} удален.")
-        await show_managers_menu(callback.message)
-        await callback.answer()
-    elif data == "admin_back":
-        await show_admin_menu(callback.message)
+        await callback.message.answer("Введите номер телефона +380XXXXXXXXX:")
         await callback.answer()
 
 # -------------------- Запуск --------------------
