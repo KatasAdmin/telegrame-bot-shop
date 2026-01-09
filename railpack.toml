@@ -2,16 +2,8 @@
 name = "telegram-shop-bot"
 python_version = "3.11"
 
-[env]
-# Переменные окружения, которые будут установлены в Railway
-# Токен бота и ID администратора не пишем здесь, их добавим через интерфейс Railway
-BOT_TOKEN = ""
-ADMIN_ID = ""
-
 [build]
-# Команды для установки зависимостей
-build_command = "pip install -r requirements.txt"
+build_command = "pip install --upgrade pip && pip install -r requirements.txt"
 
 [run]
-# Команда для запуска бота
 start_command = "python main.py"
