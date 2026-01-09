@@ -1,11 +1,11 @@
 # Telegram Shop Bot
 
-## Description
-Telegram shop bot with a product catalog, shopping cart, order history, and admin panel.
+## Описание
+Телеграм-бот-магазин с каталогом товаров, корзиной, историей покупок и админ-панелью.
 
-## Server Setup
+## Как развернуть на сервере
 
-1. Clone the repository:
+1. Клонируем репозиторий:
    ```bash
    git clone https://github.com/KatasAdmin/telegrame-bot-shop.git
    cd telegrame-bot-shop
