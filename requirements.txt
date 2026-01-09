@@ -1,4 +1,3 @@
-# Telegram Shop Bot dependencies
 aiogram==3.1.1
 python-dotenv==1.2.1
 aiohttp==3.8.5
