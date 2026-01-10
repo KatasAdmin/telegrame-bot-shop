@@ -24,6 +24,28 @@ except ValueError:
 
 ADMIN_IDS = [ADMIN_ID]
 
+# -------------------- Чистый старт --------------------
+def clean_start(token):
+    # Удаляем webhook на всякий случай
+    try:
+        requests.get(f"https://api.telegram.org/bot{token}/deleteWebhook")
+        print("✅ Webhook удалён")
+    except Exception as e:
+        print("❌ Не удалось удалить webhook:", e)
+
+    # Сброс старых getUpdates
+    try:
+        res = requests.get(f"https://api.telegram.org/bot{token}/getUpdates").json()
+        if res.get("result"):
+            last_id = res["result"][-1]["update_id"]
+            requests.get(f"https://api.telegram.org/bot{token}/getUpdates", params={"offset": last_id + 1})
+            print("✅ Сброс старых getUpdates выполнен")
+    except Exception as e:
+        print("❌ Не удалось сбросить getUpdates:", e)
+
+# Выполняем чистый старт перед инициализацией бота
+clean_start(TELEGRAM_TOKEN)
+
 # -------------------- Инициализация бота --------------------
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
@@ -64,18 +86,6 @@ def load_data():
         user_carts, user_history, CATEGORIES, managers = {}, {}, {}, []
         save_data()
 
-# -------------------- Сброс старых getUpdates --------------------
-def reset_updates(token):
-    url = f"https://api.telegram.org/bot{token}/getUpdates"
-    try:
-        res = requests.get(url).json()
-        if res.get("result"):
-            last_id = res["result"][-1]["update_id"]
-            requests.get(url, params={"offset": last_id + 1})
-            print("✅ Сброс старых getUpdates выполнен")
-    except Exception as e:
-        print("❌ Не удалось сбросить getUpdates:", e)
-
 # -------------------- Главное меню --------------------
 def main_menu(user_id):
     kb = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -92,7 +102,7 @@ def main_menu(user_id):
 # -------------------- Каталог --------------------
 async def show_categories(message):
     if not CATEGORIES:
-        await message.answer("Каталог пуст.")
+        await message.answer("Каталог пуст.", reply_markup=main_menu(message.from_user.id))
         return
     kb = InlineKeyboardMarkup()
     for cat in CATEGORIES.keys():
@@ -103,7 +113,7 @@ async def show_categories(message):
 async def show_subcategories(message, category):
     subcats = CATEGORIES.get(category, {})
     if not subcats:
-        await message.answer("Нет подкатегорий в этой категории.")
+        await message.answer("Нет подкатегорий в этой категории.", reply_markup=main_menu(message.from_user.id))
         return
     kb = InlineKeyboardMarkup()
     for sub in subcats.keys():
@@ -114,7 +124,7 @@ async def show_subcategories(message, category):
 async def show_products(message, category, subcategory):
     products = CATEGORIES.get(category, {}).get(subcategory, [])
     if not products:
-        await message.answer("В этой подкатегории пока нет товаров.")
+        await message.answer("В этой подкатегории пока нет товаров.", reply_markup=main_menu(message.from_user.id))
         return
     for prod in products:
         kb = InlineKeyboardMarkup()
@@ -293,7 +303,6 @@ async def callback_handler(callback: types.CallbackQuery):
 # -------------------- Запуск --------------------
 async def main():
     load_data()
-    reset_updates(TELEGRAM_TOKEN)  # Сброс старых getUpdates
     print("🚀 Бот запущен")
     await dp.start_polling(bot)
 
