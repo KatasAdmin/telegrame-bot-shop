@@ -1,273 +1,188 @@
 import asyncio
-import json
 import os
+import signal
+import sys
 
-from aiogram import Bot, Dispatcher, F
-from aiogram.types import (
-    Message,
-    CallbackQuery,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton
+from aiogram import Bot, Dispatcher, types
+
+from keyboards import main_menu, back_to_main, search_keyboard
+from storage import (
+    load_data,
+    save_data,
+    user_carts,
+    user_history,
+    CATEGORIES,
+    managers,
 )
-from aiogram.filters import CommandStart
-from aiogram.enums import ParseMode
 
+# ---------------- ENV ----------------
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-# ================== НАСТРОЙКИ ==================
+if not TELEGRAM_TOKEN or TELEGRAM_TOKEN.strip() == "":
+    print("❌ TELEGRAM_TOKEN не задан!")
+    sys.exit(1)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN") or "PASTE_YOUR_TOKEN_HERE"
-DATA_FILE = "data.json"
+# ---------------- LOCK ----------------
+LOCK_FILE = "/tmp/bot.lock"
+if os.path.exists(LOCK_FILE):
+    print("❌ Бот уже запущен")
+    sys.exit(1)
 
+with open(LOCK_FILE, "w") as f:
+    f.write("lock")
 
-# ================== BOT / DISPATCHER ==================
+def shutdown():
+    if os.path.exists(LOCK_FILE):
+        os.remove(LOCK_FILE)
+    sys.exit(0)
 
-bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
+signal.signal(signal.SIGTERM, lambda *_: shutdown())
+signal.signal(signal.SIGINT, lambda *_: shutdown())
+
+# ---------------- BOT ----------------
+bot = Bot(token=TELEGRAM_TOKEN, parse_mode=types.ParseMode.HTML)
 dp = Dispatcher()
 
+# ---------------- HANDLERS ----------------
+@dp.message()
+async def handle_message(message: types.Message):
+    text = (message.text or "").strip()
+    user_id = str(message.from_user.id)
 
-# ================== ХРАНИЛИЩЕ ==================
+    load_data()
 
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        return {"users": {}, "orders": []}
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-
-data = load_data()
-
-
-def get_user(user_id: int):
-    user_id = str(user_id)
-    if user_id not in data["users"]:
-        data["users"][user_id] = {
-            "cart": [],
-            "history": []
-        }
-        save_data(data)
-    return data["users"][user_id]
-
-
-# ================== КЛАВИАТУРЫ ==================
-
-main_menu_kb = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="🛍 Каталог"), KeyboardButton(text="🧺 Корзина")],
-        [KeyboardButton(text="📦 История заказов")],
-        [KeyboardButton(text="📞 Поддержка")]
-    ],
-    resize_keyboard=True
-)
-
-
-def catalog_kb():
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="👟 Обувь", callback_data="cat_shoes")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main")]
-        ]
-    )
-
-
-def shoes_kb():
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="Nike Air", callback_data="item_nike")],
-            [InlineKeyboardButton(text="Adidas Run", callback_data="item_adidas")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_catalog")]
-        ]
-    )
-
-
-def item_kb(item_id: str):
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="➕ В корзину", callback_data=f"add_{item_id}")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_shoes")]
-        ]
-    )
-
-
-def cart_kb():
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Оформить заказ", callback_data="checkout")],
-            [InlineKeyboardButton(text="🗑 Очистить корзину", callback_data="clear_cart")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main")]
-        ]
-    )
-
-
-# ================== START ==================
-
-@dp.message(CommandStart())
-async def start(message: Message):
-    get_user(message.from_user.id)
-    await message.answer(
-        "👋 Добро пожаловать в магазин!\n\nВыберите действие:",
-        reply_markup=main_menu_kb
-    )
-
-
-# ================== МЕНЮ ==================
-
-@dp.message(F.text == "🛍 Каталог")
-async def open_catalog(message: Message):
-    await message.answer("📂 Каталог товаров:", reply_markup=catalog_kb())
-
-
-@dp.message(F.text == "🧺 Корзина")
-async def open_cart(message: Message):
-    user = get_user(message.from_user.id)
-
-    if not user["cart"]:
-        await message.answer("🧺 Корзина пуста")
+    if text == "/start":
+        await message.answer("Привет! Добро пожаловать 👇", reply_markup=main_menu())
         return
 
-    text = "🧺 <b>Ваша корзина:</b>\n"
-    for item in user["cart"]:
-        text += f"• {item}\n"
-
-    await message.answer(text, reply_markup=cart_kb())
-
-
-@dp.message(F.text == "📦 История заказов")
-async def order_history(message: Message):
-    user = get_user(message.from_user.id)
-
-    if not user["history"]:
-        await message.answer("📦 История заказов пуста")
+    if text == "🛍 Каталог":
+        if not CATEGORIES:
+            await message.answer("Каталог пуст.")
+            return
+        kb = types.InlineKeyboardMarkup(
+            inline_keyboard=[
+                [types.InlineKeyboardButton(text=cat, callback_data=f"cat_{cat}")]
+                for cat in CATEGORIES.keys()
+            ]
+        )
+        await message.answer("Выберите категорию:", reply_markup=kb)
         return
 
-    text = "📦 <b>Ваши заказы:</b>\n"
-    for order in user["history"]:
-        text += f"• {order}\n"
-
-    await message.answer(text)
-
-
-@dp.message(F.text == "📞 Поддержка")
-async def support(message: Message):
-    await message.answer("📞 Поддержка:\nНапишите сюда @support")
-    # ================== CALLBACKS ==================
-
-@dp.callback_query(F.data == "cat_shoes")
-async def open_shoes(callback: CallbackQuery):
-    await callback.message.edit_text(
-        "👟 Обувь:",
-        reply_markup=shoes_kb()
-    )
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "back_catalog")
-async def back_to_catalog(callback: CallbackQuery):
-    await callback.message.edit_text(
-        "📂 Каталог товаров:",
-        reply_markup=catalog_kb()
-    )
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "back_shoes")
-async def back_to_shoes(callback: CallbackQuery):
-    await callback.message.edit_text(
-        "👟 Обувь:",
-        reply_markup=shoes_kb()
-    )
-    await callback.answer()
-
-
-@dp.callback_query(F.data.startswith("item_"))
-async def item_view(callback: CallbackQuery):
-    item_id = callback.data.replace("item_", "")
-
-    items = {
-        "nike": "👟 Nike Air — 120$",
-        "adidas": "👟 Adidas Run — 95$"
-    }
-
-    await callback.message.edit_text(
-        items.get(item_id, "Товар не найден"),
-        reply_markup=item_kb(item_id)
-    )
-    await callback.answer()
-
-
-@dp.callback_query(F.data.startswith("add_"))
-async def add_to_cart(callback: CallbackQuery):
-    item_id = callback.data.replace("add_", "")
-    user = get_user(callback.from_user.id)
-
-    user["cart"].append(item_id)
-    save_data(data)
-
-    await callback.message.answer(
-        "✅ Товар добавлен в корзину",
-        reply_markup=main_menu_kb
-    )
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "clear_cart")
-async def clear_cart(callback: CallbackQuery):
-    user = get_user(callback.from_user.id)
-    user["cart"].clear()
-    save_data(data)
-
-    await callback.message.answer("🗑 Корзина очищена")
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "checkout")
-async def checkout(callback: CallbackQuery):
-    user = get_user(callback.from_user.id)
-
-    if not user["cart"]:
-        await callback.message.answer("❌ Корзина пуста")
-        await callback.answer()
+    if text == "🧺 Корзина":
+        cart = user_carts.get(user_id, [])
+        if not cart:
+            await message.answer("Корзина пуста.", reply_markup=main_menu())
+            return
+        total = sum(item["price"] for item in cart)
+        lines = "\n".join(f"{i+1}. {p['name']} — ${p['price']}" for i, p in enumerate(cart))
+        await message.answer(f"{lines}\n\n💰 Итого: ${total}", reply_markup=back_to_main())
         return
 
-    order_text = ", ".join(user["cart"])
-    user["history"].append(order_text)
-    user["cart"].clear()
+    if text == "📦 История заказов":
+        history = user_history.get(user_id, [])
+        if not history:
+            await message.answer("История пуста.", reply_markup=main_menu())
+            return
+        lines = []
+        for i, order in enumerate(history, 1):
+            items = ", ".join(p["name"] for p in order["items"])
+            lines.append(f"{i}. {items} — ${order['total']}")
+        await message.answer("\n".join(lines), reply_markup=main_menu())
+        return
 
-    data["orders"].append({
-        "user": callback.from_user.id,
-        "items": order_text
-    })
+    if text == "📞 Поддержка":
+        if not managers:
+            await message.answer("Пока нет менеджеров.", reply_markup=main_menu())
+            return
+        for m_id in managers:
+            try:
+                await bot.send_message(m_id, f"Пользователь {user_id} просит поддержку")
+            except Exception:
+                continue
+        await message.answer("Мы уведомили менеджера.", reply_markup=main_menu())
+        return
 
-    save_data(data)
+    if text == "🔍 Поиск":
+        await message.answer("Выберите фильтр:", reply_markup=search_keyboard())
+        return
 
-    await callback.message.answer(
-        "✅ Заказ оформлен!\nСпасибо за покупку 🎉",
-        reply_markup=main_menu_kb
-    )
-    await callback.answer()
+    await message.answer("Выберите действие из меню 👇", reply_markup=main_menu())
+    # ---------------- CALLBACKS ----------------
+@dp.callback_query()
+async def callbacks(cb: types.CallbackQuery):
+    user_id = str(cb.from_user.id)
+    data = cb.data
 
+    # Назад в главное меню
+    if data == "back_main":
+        await cb.message.answer("Главное меню:", reply_markup=main_menu())
+        await cb.answer()
+        return
 
-@dp.callback_query(F.data == "back_main")
-async def back_main(callback: CallbackQuery):
-    await callback.message.answer(
-        "🏠 Главное меню:",
-        reply_markup=main_menu_kb
-    )
-    await callback.answer()
+    # Категория -> подкатегории
+    if data.startswith("cat_"):
+        cat = data[4:]
+        subs = CATEGORIES.get(cat, {})
+        if not subs:
+            await cb.message.answer("В этой категории нет подкатегорий.", reply_markup=main_menu())
+            await cb.answer()
+            return
+        kb = types.InlineKeyboardMarkup(
+            inline_keyboard=[
+                [types.InlineKeyboardButton(text=sub, callback_data=f"sub_{cat}_{sub}")]
+                for sub in subs
+            ]
+            + [[types.InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main")]]
+        )
+        await cb.message.answer("Выберите подкатегорию:", reply_markup=kb)
+        await cb.answer()
+        return
 
+    # Подкатегория -> товары
+    if data.startswith("sub_"):
+        _, cat, sub = data.split("_", 2)
+        products = CATEGORIES.get(cat, {}).get(sub, [])
+        if not products:
+            await cb.message.answer("В этой подкатегории пока нет товаров.", reply_markup=main_menu())
+            await cb.answer()
+            return
+        for p in products:
+            kb = types.InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [types.InlineKeyboardButton(text="🛒 В корзину", callback_data=f"buy_{cat}_{sub}_{p['name']}")],
+                    [types.InlineKeyboardButton(text="⬅️ Назад", callback_data=f"cat_{cat}")]
+                ]
+            )
+            await cb.message.answer(
+                f"{p['name']}\nЦена: ${p['price']}\n{p.get('description', '')}",
+                reply_markup=kb,
+            )
+        await cb.answer()
+        return
 
-# ================== ЗАПУСК ==================
+    # Добавление товара в корзину
+    if data.startswith("buy_"):
+        _, cat, sub, name = data.split("_", 3)
+        product = next((p for p in CATEGORIES.get(cat, {}).get(sub, []) if p["name"] == name), None)
+        if not product:
+            await cb.message.answer("Ошибка добавления в корзину.", reply_markup=main_menu())
+            await cb.answer()
+            return
+        user_carts.setdefault(user_id, []).append(product)
+        save_data()
+        await cb.message.answer(f"✅ {name} добавлен(а) в корзину.", reply_markup=main_menu())
+        await cb.answer()
+        return
 
+# ---------------- START ----------------
 async def main():
+    load_data()
     print("🚀 Бот запущен")
     await dp.start_polling(bot)
 
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        shutdown()
