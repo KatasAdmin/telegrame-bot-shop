@@ -13,7 +13,7 @@ ADMIN_ID = os.getenv("ADMIN_ID", "0")
 print("DEBUG TELEGRAM_TOKEN =", TELEGRAM_TOKEN)
 print("DEBUG ADMIN_ID =", ADMIN_ID)
 
-if not TELEGRAM_TOKEN or TELEGRAM_TOKEN.strip() == "":
+if TELEGRAM_TOKEN is None or TELEGRAM_TOKEN.strip() == "":
     print("❌ ERROR: TELEGRAM_TOKEN не получен из переменных окружения")
     sys.exit(1)
 
@@ -79,55 +79,14 @@ def reset_updates(token):
 # -------------------- Главное меню --------------------
 def main_menu(user_id):
     kb = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-
-    if user_id in ADMIN_IDS:
-        kb.add(
-            KeyboardButton("🛍 Каталог товаров"),
-            KeyboardButton("🔥 Акции / Хиты")
-        )
-        kb.add(
-            KeyboardButton("🧺 Моя корзина"),
-            KeyboardButton("📦 История покупок")
-        )
-        kb.add(
-            KeyboardButton("👨‍💼 Менеджеры"),
-            KeyboardButton("📞 Поддержка")
-        )
-        kb.add(
-            KeyboardButton("📊 Статистика"),
-            KeyboardButton("⚙️ Управление товарами")
-        )
-    elif user_id in managers:
-        kb.add(
-            KeyboardButton("🛍 Каталог товаров"),
-            KeyboardButton("🔥 Акции / Хиты")
-        )
-        kb.add(
-            KeyboardButton("🧺 Моя корзина"),
-            KeyboardButton("📦 История покупок")
-        )
-        kb.add(
-            KeyboardButton("📞 Поддержка"),
-            KeyboardButton("📊 Заказы")
-        )
-    else:
-        kb.add(
-            KeyboardButton("🛍 Каталог товаров"),
-            KeyboardButton("🔥 Акции / Хиты")
-        )
-        kb.add(
-            KeyboardButton("🧺 Моя корзина"),
-            KeyboardButton("📦 История покупок")
-        )
-        kb.add(
-            KeyboardButton("❤️ Избранное"),
-            KeyboardButton("📞 Поддержка")
-        )
-
-    # Защита на случай пустой клавиатуры
-    if not kb.keyboard:
-        kb.add(KeyboardButton("🔹 Главное меню"))
-
+    kb.add(
+        KeyboardButton("🛍 Каталог"),
+        KeyboardButton("🧺 Корзина"),
+        KeyboardButton("📦 История заказов"),
+        KeyboardButton("📞 Поддержка"),
+        KeyboardButton("❤️ Избранное"),
+        KeyboardButton("🔍 Поиск")
+    )
     return kb
 
 # -------------------- Каталог --------------------
@@ -138,8 +97,7 @@ async def show_categories(message):
     kb = InlineKeyboardMarkup()
     for cat in CATEGORIES.keys():
         kb.add(InlineKeyboardButton(cat, callback_data=f"cat_{cat}"))
-    kb.add(InlineKeyboardButton("Поиск по цене 0-1000", callback_data="price_0_1000"))
-    kb.add(InlineKeyboardButton("Поиск по цене 1000+", callback_data="price_1000"))
+    kb.add(InlineKeyboardButton("⬅️ Главное меню", callback_data="back_main"))
     await message.answer("Выберите категорию:", reply_markup=kb)
 
 async def show_subcategories(message, category):
@@ -160,10 +118,8 @@ async def show_products(message, category, subcategory):
         return
     for prod in products:
         kb = InlineKeyboardMarkup()
-        kb.add(
-            InlineKeyboardButton("🛒 В корзину", callback_data=f"prod_{category}_{subcategory}_{prod['name']}"),
-            InlineKeyboardButton("⬅️ Назад", callback_data=f"back_sub_{category}")
-        )
+        kb.add(InlineKeyboardButton("🛒 В корзину", callback_data=f"prod_{category}_{subcategory}_{prod['name']}"))
+        kb.add(InlineKeyboardButton("⬅️ Назад", callback_data=f"back_sub_{category}"))
         await bot.send_photo(
             chat_id=message.chat.id,
             photo=prod.get("photo", ""),
@@ -175,7 +131,7 @@ async def show_products(message, category, subcategory):
 async def show_cart(message, user_id):
     cart = user_carts.get(user_id, [])
     if not cart:
-        await message.answer("Ваша корзина пока пуста.")
+        await message.answer("Ваша корзина пока пуста.", reply_markup=main_menu(user_id))
         return
     text = "Ваша корзина:\n"
     total = 0
@@ -184,24 +140,25 @@ async def show_cart(message, user_id):
         total += item['price']
     text += f"\n💰 Итого: ${total}"
     kb = InlineKeyboardMarkup()
-    kb.add(
-        InlineKeyboardButton("💳 Оплатить заказ", callback_data="checkout"),
-        InlineKeyboardButton("⬅️ Назад", callback_data="back_categories")
-    )
+    kb.add(InlineKeyboardButton("💳 Оплатить заказ", callback_data="checkout"))
+    kb.add(InlineKeyboardButton("⬅️ Главное меню", callback_data="back_main"))
     await message.answer(text, reply_markup=kb)
 
 # -------------------- История --------------------
 async def show_history(message, user_id):
     history = user_history.get(user_id, [])
     if not history:
-        await message.answer("История ваших покупок пока пуста.")
+        await message.answer("История ваших покупок пока пуста.", reply_markup=main_menu(user_id))
         return
-    text = "Ваша история покупок:\n"
+    text = "История ваших покупок:\n"
     for i, item in enumerate(history, 1):
         delivery = item.get("address", "Не указано")
         phone = item.get("phone", "Не указан")
-        text += f"{i}. {', '.join([p['name'] for p in item['items']])} — ${item['total']} — Адрес: {delivery} — Телефон: {phone}\n"
-    await message.answer(text)
+        items_list = ', '.join([p['name'] for p in item['items']])
+        text += f"{i}. {items_list} — ${item['total']} — Адрес: {delivery} — Телефон: {phone}\n"
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("⬅️ Главное меню", callback_data="back_main"))
+    await message.answer(text, reply_markup=kb)
 
 # -------------------- Менеджеры --------------------
 async def show_managers(message):
@@ -210,13 +167,12 @@ async def show_managers(message):
         return
     text = "Менеджеры:\n" + "\n".join([str(m) for m in managers])
     kb = InlineKeyboardMarkup()
-    kb.add(
-        InlineKeyboardButton("Добавить менеджера", callback_data="add_manager"),
-        InlineKeyboardButton("Удалить менеджера", callback_data="remove_manager")
-    )
+    kb.add(InlineKeyboardButton("Добавить менеджера", callback_data="add_manager"))
+    kb.add(InlineKeyboardButton("Удалить менеджера", callback_data="remove_manager"))
+    kb.add(InlineKeyboardButton("⬅️ Главное меню", callback_data="back_main"))
     await message.answer(text, reply_markup=kb)
 
-# -------------------- Универсальный обработчик --------------------
+# -------------------- Универсальный обработчик сообщений --------------------
 @dp.message()
 async def handle_message(message: types.Message):
     user_id = message.from_user.id
@@ -227,43 +183,39 @@ async def handle_message(message: types.Message):
         await message.answer("Привет! Добро пожаловать 👇", reply_markup=main_menu(user_id))
         return
 
-    if text == "📞 Поддержка":
-        if not managers:
-            await message.answer("Пока нет активных менеджеров.")
-            return
-        for m_id in managers:
-            try:
-                await bot.send_message(m_id, f"{SUPPORT_MESSAGE}\nПользователь: {user_id}")
-            except: pass
-        await message.answer("Мы уведомили менеджера, ожидайте ответ.")
+    if text == "🛍 Каталог":
+        await show_categories(message)
         return
 
-    if text == "👨‍💼 Менеджеры" and user_id in ADMIN_IDS:
-        await show_managers(message)
-        return
-
-    if text == "⚙️ Управление товарами" and user_id in ADMIN_IDS:
-        kb = InlineKeyboardMarkup()
-        kb.add(
-            InlineKeyboardButton("Добавить категорию", callback_data="add_category"),
-            InlineKeyboardButton("Редактировать категорию", callback_data="edit_category"),
-            InlineKeyboardButton("Удалить категорию", callback_data="remove_category")
-        )
-        await message.answer("Управление товарами:", reply_markup=kb)
-        return
-
-    if text == "🧺 Моя корзина":
+    if text == "🧺 Корзина":
         await show_cart(message, user_id)
         return
-    if text == "📦 История покупок":
+
+    if text == "📦 История заказов":
         await show_history(message, user_id)
         return
 
-    if text == "🛍 Каталог товаров":
-        await show_categories(message)
+    if text == "📞 Поддержка":
+        if not managers:
+            await message.answer("Пока нет активных менеджеров.", reply_markup=main_menu(user_id))
+            return
+        for m_id in managers:
+            try:
+                await bot.send_message(m_id, f"Пользователь {user_id} просит поддержку")
+            except: pass
+        await message.answer("Мы уведомили менеджера, ожидайте ответ.", reply_markup=main_menu(user_id))
         return
-    if text == "🔥 Акции / Хиты":
-        await message.answer("Акции и хиты пока пусты.")
+
+    if text == "❤️ Избранное":
+        await message.answer("Здесь будут ваши любимые товары.", reply_markup=main_menu(user_id))
+        return
+
+    if text == "🔍 Поиск":
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("Цена 0-1000", callback_data="price_0_1000"))
+        kb.add(InlineKeyboardButton("Цена 1000+", callback_data="price_1000"))
+        kb.add(InlineKeyboardButton("⬅️ Главное меню", callback_data="back_main"))
+        await message.answer("Выберите фильтр для поиска товаров:", reply_markup=kb)
         return
 
     await message.answer("Выберите действие из меню:", reply_markup=main_menu(user_id))
@@ -293,7 +245,10 @@ async def callback_handler(callback: types.CallbackQuery):
         if product:
             user_carts.setdefault(user_id, []).append(product)
             save_data()
-            await callback.message.answer(f"✅ {name} добавлен(а) в корзину.")
+            await callback.message.answer(f"✅ {name} добавлен(а) в корзину.", reply_markup=main_menu(user_id))
+        await callback.answer()
+    elif data == "back_main":
+        await callback.message.answer("Главное меню:", reply_markup=main_menu(user_id))
         await callback.answer()
     elif data == "back_categories":
         await show_categories(callback.message)
@@ -304,11 +259,20 @@ async def callback_handler(callback: types.CallbackQuery):
         await callback.answer()
     elif data == "checkout":
         if not user_carts.get(user_id):
-            await callback.message.answer("Ваша корзина пуста.")
+            await callback.message.answer("Ваша корзина пуста.", reply_markup=main_menu(user_id))
             await callback.answer()
             return
-        pending_checkout[user_id] = {"step": "phone"}
-        await callback.message.answer("Введите номер телефона +380XXXXXXXXX:")
+        # Симуляция оплаты
+        cart = user_carts.pop(user_id)
+        total = sum(item['price'] for item in cart)
+        user_history.setdefault(user_id, []).append({
+            "items": cart,
+            "total": total,
+            "address": "Не указано",
+            "phone": "Не указан"
+        })
+        save_data()
+        await callback.message.answer(f"✅ Ваш заказ на ${total} оплачен и добавлен в историю!", reply_markup=main_menu(user_id))
         await callback.answer()
     elif data.startswith("price_"):
         max_price = 1000 if data == "price_0_1000" else None
@@ -321,9 +285,9 @@ async def callback_handler(callback: types.CallbackQuery):
                     elif max_price is not None and p["price"] <= 1000:
                         results.append(f"{p['name']} — ${p['price']}")
         if results:
-            await callback.message.answer("Результаты поиска по цене:\n" + "\n".join(results))
+            await callback.message.answer("Результаты поиска по цене:\n" + "\n".join(results), reply_markup=main_menu(user_id))
         else:
-            await callback.message.answer("Товары не найдены по выбранной цене.")
+            await callback.message.answer("Товары не найдены по выбранной цене.", reply_markup=main_menu(user_id))
         await callback.answer()
 
 # -------------------- Запуск --------------------
