@@ -6,13 +6,9 @@ import sys
 
 from aiogram import Bot, Dispatcher, types
 
-# ---------------- ENV ----------------
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-
-if not TELEGRAM_TOKEN:
-    print("❌ TELEGRAM_TOKEN не задан")
-    sys.exit(1)
+# ---------------- BOT TOKEN & ADMIN ----------------
+TELEGRAM_TOKEN = "8278813878:AAFUHXC5K1vrBZ6zrUKILn7qRWAm33y6AUk"
+ADMIN_ID = 8385663990
 
 # ---------------- LOCK ----------------
 LOCK_FILE = "/tmp/bot.lock"
@@ -23,15 +19,17 @@ if os.path.exists(LOCK_FILE):
 with open(LOCK_FILE, "w") as f:
     f.write("lock")
 
+
 def shutdown():
     if os.path.exists(LOCK_FILE):
         os.remove(LOCK_FILE)
     sys.exit(0)
 
+
 signal.signal(signal.SIGTERM, lambda *_: shutdown())
 signal.signal(signal.SIGINT, lambda *_: shutdown())
 
-# ---------------- BOT ----------------
+# ---------------- BOT & DISPATCHER ----------------
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
@@ -42,6 +40,7 @@ user_history = {}
 CATEGORIES = {}  # {"Категория": {"Подкатегория": [товары]}}
 managers = []
 
+
 def save_data():
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump({
@@ -50,6 +49,7 @@ def save_data():
             "categories": CATEGORIES,
             "managers": managers
         }, f, ensure_ascii=False, indent=4)
+
 
 def load_data():
     global user_carts, user_history, CATEGORIES, managers
@@ -79,11 +79,13 @@ def main_menu():
         resize_keyboard=True
     )
 
+
 def back_to_main():
     return types.ReplyKeyboardMarkup(
         keyboard=[[types.KeyboardButton(text="⬅️ Главное меню")]],
         resize_keyboard=True
     )
+
 
 def search_keyboard():
     return types.ReplyKeyboardMarkup(
@@ -216,6 +218,7 @@ async def main():
     load_data()
     print("🚀 Бот запущен")
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
