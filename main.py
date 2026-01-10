@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import signal
 import sys
@@ -16,6 +17,7 @@ if not TELEGRAM_TOKEN:
 # ---------------- LOCK ----------------
 LOCK_FILE = "/tmp/bot.lock"
 if os.path.exists(LOCK_FILE):
+    print("❌ Бот уже запущен")
     sys.exit(1)
 
 with open(LOCK_FILE, "w") as f:
@@ -41,7 +43,6 @@ CATEGORIES = {}  # {"Категория": {"Подкатегория": [това
 managers = []
 
 def save_data():
-    import json
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump({
             "carts": user_carts,
@@ -51,7 +52,6 @@ def save_data():
         }, f, ensure_ascii=False, indent=4)
 
 def load_data():
-    import json
     global user_carts, user_history, CATEGORIES, managers
     if os.path.exists(DATA_FILE):
         try:
@@ -72,26 +72,27 @@ def load_data():
 def main_menu():
     return types.ReplyKeyboardMarkup(
         keyboard=[
-            [types.KeyboardButton("🛍 Каталог"), types.KeyboardButton("🧺 Корзина")],
-            [types.KeyboardButton("📦 История заказов"), types.KeyboardButton("📞 Поддержка")],
-            [types.KeyboardButton("❤️ Избранное"), types.KeyboardButton("🔍 Поиск")]
+            [types.KeyboardButton(text="🛍 Каталог"), types.KeyboardButton(text="🧺 Корзина")],
+            [types.KeyboardButton(text="📦 История заказов"), types.KeyboardButton(text="📞 Поддержка")],
+            [types.KeyboardButton(text="❤️ Избранное"), types.KeyboardButton(text="🔍 Поиск")]
         ],
         resize_keyboard=True
     )
 
 def back_to_main():
     return types.ReplyKeyboardMarkup(
-        keyboard=[[types.KeyboardButton("⬅️ Главное меню")]],
+        keyboard=[[types.KeyboardButton(text="⬅️ Главное меню")]],
         resize_keyboard=True
     )
 
 def search_keyboard():
-    return types.InlineKeyboardMarkup(
-        inline_keyboard=[
-            [types.InlineKeyboardButton("Цена 0-1000", callback_data="price_0_1000")],
-            [types.InlineKeyboardButton("Цена 1000+", callback_data="price_1000")],
-            [types.InlineKeyboardButton("⬅️ Главное меню", callback_data="back_main")]
-        ]
+    return types.ReplyKeyboardMarkup(
+        keyboard=[
+            [types.KeyboardButton(text="Цена 0-1000")],
+            [types.KeyboardButton(text="Цена 1000+")],
+            [types.KeyboardButton(text="⬅️ Главное меню")]
+        ],
+        resize_keyboard=True
     )
 
 # ---------------- HANDLERS ----------------
@@ -107,7 +108,7 @@ async def handle_message(message: types.Message):
 
     if text == "🛍 Каталог":
         if not CATEGORIES:
-            await message.answer("Каталог пуст.")
+            await message.answer("Каталог пуст.", reply_markup=main_menu())
             return
         kb = types.InlineKeyboardMarkup(
             inline_keyboard=[
@@ -124,8 +125,8 @@ async def handle_message(message: types.Message):
             await message.answer("Корзина пуста.", reply_markup=main_menu())
             return
         total = sum(item["price"] for item in cart)
-        text_lines = "\n".join(f"{i+1}. {p['name']} — ${p['price']}" for i, p in enumerate(cart))
-        await message.answer(f"{text_lines}\n\n💰 Итого: ${total}", reply_markup=back_to_main())
+        items_text = "\n".join(f"{i+1}. {p['name']} — ${p['price']}" for i, p in enumerate(cart))
+        await message.answer(f"{items_text}\n\n💰 Итого: ${total}", reply_markup=back_to_main())
         return
 
     if text == "📦 История заказов":
@@ -142,13 +143,18 @@ async def handle_message(message: types.Message):
 
     if text == "📞 Поддержка":
         if not managers:
-            await message.answer("Пока нет активных менеджеров.", reply_markup=main_menu())
+            await message.answer("Нет доступных менеджеров.", reply_markup=main_menu())
             return
         for m in managers:
             try:
                 await bot.send_message(m, f"Пользователь {user_id} просит поддержку")
-            except: pass
-        await message.answer("Мы уведомили менеджера.", reply_markup=main_menu())
+            except:
+                pass
+        await message.answer("Менеджер уведомлен.", reply_markup=main_menu())
+        return
+
+    if text == "❤️ Избранное":
+        await message.answer("Здесь будут ваши любимые товары.", reply_markup=main_menu())
         return
 
     if text == "🔍 Поиск":
@@ -162,7 +168,6 @@ async def handle_message(message: types.Message):
 async def callbacks(cb: types.CallbackQuery):
     user_id = str(cb.from_user.id)
     data = cb.data
-    load_data()
 
     if data == "back_main":
         await cb.message.answer("Главное меню:", reply_markup=main_menu())
@@ -176,7 +181,7 @@ async def callbacks(cb: types.CallbackQuery):
             inline_keyboard=[
                 [types.InlineKeyboardButton(text=sub, callback_data=f"sub_{cat}_{sub}")]
                 for sub in subs
-            ] + [[types.InlineKeyboardButton("⬅️ Назад", callback_data="back_main")]]
+            ] + [[types.InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main")]]
         )
         await cb.message.answer("Подкатегории:", reply_markup=kb)
         await cb.answer()
@@ -188,10 +193,13 @@ async def callbacks(cb: types.CallbackQuery):
         for p in products:
             kb = types.InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [types.InlineKeyboardButton("🛒 В корзину", callback_data=f"buy_{cat}_{sub}_{p['name']}")]
+                    [types.InlineKeyboardButton(text="🛒 В корзину", callback_data=f"buy_{cat}_{sub}_{p['name']}")]
                 ]
             )
-            await cb.message.answer(f"{p['name']}\n${p['price']}\n{p['description']}", reply_markup=kb)
+            await cb.message.answer(
+                f"{p['name']}\n${p['price']}\n{p['description']}",
+                reply_markup=kb,
+            )
         await cb.answer()
         return
 
