@@ -12,7 +12,7 @@ ADMIN_ID = os.getenv("ADMIN_ID", "0")
 print("DEBUG TELEGRAM_TOKEN =", TELEGRAM_TOKEN)
 print("DEBUG ADMIN_ID =", ADMIN_ID)
 
-if TELEGRAM_TOKEN is None or TELEGRAM_TOKEN.strip() == "":
+if not TELEGRAM_TOKEN or TELEGRAM_TOKEN.strip() == "":
     print("❌ ERROR: TELEGRAM_TOKEN не получен из переменных окружения")
     sys.exit(1)
 
@@ -223,7 +223,6 @@ async def callback_handler(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     data = callback.data
 
-    # -------------------- Категории --------------------
     if data.startswith("cat_"):
         category = data[4:]
         await show_subcategories(callback.message, category)
