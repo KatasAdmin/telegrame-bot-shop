@@ -2,9 +2,9 @@ import asyncio
 import json
 import os
 import sys
-import requests
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+import signal
 
 # -------------------- Переменные окружения --------------------
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -24,27 +24,23 @@ except ValueError:
 
 ADMIN_IDS = [ADMIN_ID]
 
-# -------------------- Чистый старт --------------------
-def clean_start(token):
-    # Удаляем webhook на всякий случай
-    try:
-        requests.get(f"https://api.telegram.org/bot{token}/deleteWebhook")
-        print("✅ Webhook удалён")
-    except Exception as e:
-        print("❌ Не удалось удалить webhook:", e)
+# -------------------- Защита от двойного запуска --------------------
+LOCK_FILE = "/tmp/bot.lock"
+if os.path.exists(LOCK_FILE):
+    print("❌ Бот уже запущен, второй старт запрещён")
+    sys.exit(1)
 
-    # Сброс старых getUpdates
-    try:
-        res = requests.get(f"https://api.telegram.org/bot{token}/getUpdates").json()
-        if res.get("result"):
-            last_id = res["result"][-1]["update_id"]
-            requests.get(f"https://api.telegram.org/bot{token}/getUpdates", params={"offset": last_id + 1})
-            print("✅ Сброс старых getUpdates выполнен")
-    except Exception as e:
-        print("❌ Не удалось сбросить getUpdates:", e)
+with open(LOCK_FILE, "w") as f:
+    f.write("lock")
 
-# Выполняем чистый старт перед инициализацией бота
-clean_start(TELEGRAM_TOKEN)
+def shutdown():
+    print("🛑 Завершение бота")
+    if os.path.exists(LOCK_FILE):
+        os.remove(LOCK_FILE)
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, lambda s, f: shutdown())
+signal.signal(signal.SIGINT, lambda s, f: shutdown())
 
 # -------------------- Инициализация бота --------------------
 bot = Bot(token=TELEGRAM_TOKEN)
@@ -102,7 +98,7 @@ def main_menu(user_id):
 # -------------------- Каталог --------------------
 async def show_categories(message):
     if not CATEGORIES:
-        await message.answer("Каталог пуст.", reply_markup=main_menu(message.from_user.id))
+        await message.answer("Каталог пуст.")
         return
     kb = InlineKeyboardMarkup()
     for cat in CATEGORIES.keys():
@@ -113,7 +109,7 @@ async def show_categories(message):
 async def show_subcategories(message, category):
     subcats = CATEGORIES.get(category, {})
     if not subcats:
-        await message.answer("Нет подкатегорий в этой категории.", reply_markup=main_menu(message.from_user.id))
+        await message.answer("Нет подкатегорий в этой категории.")
         return
     kb = InlineKeyboardMarkup()
     for sub in subcats.keys():
@@ -124,7 +120,7 @@ async def show_subcategories(message, category):
 async def show_products(message, category, subcategory):
     products = CATEGORIES.get(category, {}).get(subcategory, [])
     if not products:
-        await message.answer("В этой подкатегории пока нет товаров.", reply_markup=main_menu(message.from_user.id))
+        await message.answer("В этой подкатегории пока нет товаров.")
         return
     for prod in products:
         kb = InlineKeyboardMarkup()
@@ -160,7 +156,7 @@ async def show_history(message, user_id):
     if not history:
         await message.answer("История ваших покупок пока пуста.", reply_markup=main_menu(user_id))
         return
-    text = "История ваших покупок:\n"
+    text = "Ваша история покупок:\n"
     for i, item in enumerate(history, 1):
         delivery = item.get("address", "Не указано")
         phone = item.get("phone", "Не указан")
