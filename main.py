@@ -6,14 +6,14 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
 # -------------------- Переменные окружения --------------------
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID", "0")
 
-print("DEBUG BOT_TOKEN =", BOT_TOKEN)
+print("DEBUG TELEGRAM_TOKEN =", TELEGRAM_TOKEN)
 print("DEBUG ADMIN_ID =", ADMIN_ID)
 
-if BOT_TOKEN is None or BOT_TOKEN.strip() == "":
-    print("❌ ERROR: BOT_TOKEN не получен из переменных окружения")
+if TELEGRAM_TOKEN is None or TELEGRAM_TOKEN.strip() == "":
+    print("❌ ERROR: TELEGRAM_TOKEN не получен из переменных окружения")
     sys.exit(1)
 
 try:
@@ -24,7 +24,7 @@ except ValueError:
 ADMIN_IDS = [ADMIN_ID]
 
 # -------------------- Инициализация бота --------------------
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
 # -------------------- Хранилище --------------------
