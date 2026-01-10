@@ -13,7 +13,7 @@ ADMIN_ID = os.getenv("ADMIN_ID", "0")
 print("DEBUG TELEGRAM_TOKEN =", TELEGRAM_TOKEN)
 print("DEBUG ADMIN_ID =", ADMIN_ID)
 
-if TELEGRAM_TOKEN is None or TELEGRAM_TOKEN.strip() == "":
+if not TELEGRAM_TOKEN or TELEGRAM_TOKEN.strip() == "":
     print("❌ ERROR: TELEGRAM_TOKEN не получен из переменных окружения")
     sys.exit(1)
 
@@ -78,20 +78,56 @@ def reset_updates(token):
 
 # -------------------- Главное меню --------------------
 def main_menu(user_id):
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+
     if user_id in ADMIN_IDS:
-        kb.add(KeyboardButton("🛍 Каталог товаров"), KeyboardButton("🔥 Акции / Хиты"))
-        kb.add(KeyboardButton("🧺 Моя корзина"), KeyboardButton("📦 История покупок"))
-        kb.add(KeyboardButton("👨‍💼 Менеджеры"), KeyboardButton("📞 Поддержка"))
-        kb.add(KeyboardButton("📊 Статистика"), KeyboardButton("⚙️ Управление товарами"))
+        kb.add(
+            KeyboardButton("🛍 Каталог товаров"),
+            KeyboardButton("🔥 Акции / Хиты")
+        )
+        kb.add(
+            KeyboardButton("🧺 Моя корзина"),
+            KeyboardButton("📦 История покупок")
+        )
+        kb.add(
+            KeyboardButton("👨‍💼 Менеджеры"),
+            KeyboardButton("📞 Поддержка")
+        )
+        kb.add(
+            KeyboardButton("📊 Статистика"),
+            KeyboardButton("⚙️ Управление товарами")
+        )
     elif user_id in managers:
-        kb.add(KeyboardButton("🛍 Каталог товаров"), KeyboardButton("🔥 Акции / Хиты"))
-        kb.add(KeyboardButton("🧺 Моя корзина"), KeyboardButton("📦 История покупок"))
-        kb.add(KeyboardButton("📞 Поддержка"), KeyboardButton("📊 Заказы"))
+        kb.add(
+            KeyboardButton("🛍 Каталог товаров"),
+            KeyboardButton("🔥 Акции / Хиты")
+        )
+        kb.add(
+            KeyboardButton("🧺 Моя корзина"),
+            KeyboardButton("📦 История покупок")
+        )
+        kb.add(
+            KeyboardButton("📞 Поддержка"),
+            KeyboardButton("📊 Заказы")
+        )
     else:
-        kb.add(KeyboardButton("🛍 Каталог товаров"), KeyboardButton("🔥 Акции / Хиты"))
-        kb.add(KeyboardButton("🧺 Моя корзина"), KeyboardButton("📦 История покупок"))
-        kb.add(KeyboardButton("❤️ Избранное"), KeyboardButton("📞 Поддержка"))
+        kb.add(
+            KeyboardButton("🛍 Каталог товаров"),
+            KeyboardButton("🔥 Акции / Хиты")
+        )
+        kb.add(
+            KeyboardButton("🧺 Моя корзина"),
+            KeyboardButton("📦 История покупок")
+        )
+        kb.add(
+            KeyboardButton("❤️ Избранное"),
+            KeyboardButton("📞 Поддержка")
+        )
+
+    # Защита на случай пустой клавиатуры
+    if not kb.keyboard:
+        kb.add(KeyboardButton("🔹 Главное меню"))
+
     return kb
 
 # -------------------- Каталог --------------------
@@ -124,8 +160,10 @@ async def show_products(message, category, subcategory):
         return
     for prod in products:
         kb = InlineKeyboardMarkup()
-        kb.add(InlineKeyboardButton("🛒 В корзину", callback_data=f"prod_{category}_{subcategory}_{prod['name']}"))
-        kb.add(InlineKeyboardButton("⬅️ Назад", callback_data=f"back_sub_{category}"))
+        kb.add(
+            InlineKeyboardButton("🛒 В корзину", callback_data=f"prod_{category}_{subcategory}_{prod['name']}"),
+            InlineKeyboardButton("⬅️ Назад", callback_data=f"back_sub_{category}")
+        )
         await bot.send_photo(
             chat_id=message.chat.id,
             photo=prod.get("photo", ""),
@@ -146,8 +184,10 @@ async def show_cart(message, user_id):
         total += item['price']
     text += f"\n💰 Итого: ${total}"
     kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("💳 Оплатить заказ", callback_data="checkout"))
-    kb.add(InlineKeyboardButton("⬅️ Назад", callback_data="back_categories"))
+    kb.add(
+        InlineKeyboardButton("💳 Оплатить заказ", callback_data="checkout"),
+        InlineKeyboardButton("⬅️ Назад", callback_data="back_categories")
+    )
     await message.answer(text, reply_markup=kb)
 
 # -------------------- История --------------------
@@ -170,8 +210,10 @@ async def show_managers(message):
         return
     text = "Менеджеры:\n" + "\n".join([str(m) for m in managers])
     kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("Добавить менеджера", callback_data="add_manager"))
-    kb.add(InlineKeyboardButton("Удалить менеджера", callback_data="remove_manager"))
+    kb.add(
+        InlineKeyboardButton("Добавить менеджера", callback_data="add_manager"),
+        InlineKeyboardButton("Удалить менеджера", callback_data="remove_manager")
+    )
     await message.answer(text, reply_markup=kb)
 
 # -------------------- Универсальный обработчик --------------------
@@ -202,9 +244,11 @@ async def handle_message(message: types.Message):
 
     if text == "⚙️ Управление товарами" and user_id in ADMIN_IDS:
         kb = InlineKeyboardMarkup()
-        kb.add(InlineKeyboardButton("Добавить категорию", callback_data="add_category"))
-        kb.add(InlineKeyboardButton("Редактировать категорию", callback_data="edit_category"))
-        kb.add(InlineKeyboardButton("Удалить категорию", callback_data="remove_category"))
+        kb.add(
+            InlineKeyboardButton("Добавить категорию", callback_data="add_category"),
+            InlineKeyboardButton("Редактировать категорию", callback_data="edit_category"),
+            InlineKeyboardButton("Удалить категорию", callback_data="remove_category")
+        )
         await message.answer("Управление товарами:", reply_markup=kb)
         return
 
@@ -285,7 +329,7 @@ async def callback_handler(callback: types.CallbackQuery):
 # -------------------- Запуск --------------------
 async def main():
     load_data()
-    reset_updates(TELEGRAM_TOKEN)  # <--- сброс старых getUpdates
+    reset_updates(TELEGRAM_TOKEN)  # Сброс старых getUpdates
     print("🚀 Бот запущен")
     await dp.start_polling(bot)
 
