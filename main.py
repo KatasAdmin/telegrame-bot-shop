@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+import requests
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -12,7 +13,7 @@ ADMIN_ID = os.getenv("ADMIN_ID", "0")
 print("DEBUG TELEGRAM_TOKEN =", TELEGRAM_TOKEN)
 print("DEBUG ADMIN_ID =", ADMIN_ID)
 
-if not TELEGRAM_TOKEN or TELEGRAM_TOKEN.strip() == "":
+if TELEGRAM_TOKEN is None or TELEGRAM_TOKEN.strip() == "":
     print("❌ ERROR: TELEGRAM_TOKEN не получен из переменных окружения")
     sys.exit(1)
 
@@ -62,6 +63,18 @@ def load_data():
     else:
         user_carts, user_history, CATEGORIES, managers = {}, {}, {}, []
         save_data()
+
+# -------------------- Сброс старых getUpdates --------------------
+def reset_updates(token):
+    url = f"https://api.telegram.org/bot{token}/getUpdates"
+    try:
+        res = requests.get(url).json()
+        if res.get("result"):
+            last_id = res["result"][-1]["update_id"]
+            requests.get(url, params={"offset": last_id + 1})
+            print("✅ Сброс старых getUpdates выполнен")
+    except Exception as e:
+        print("❌ Не удалось сбросить getUpdates:", e)
 
 # -------------------- Главное меню --------------------
 def main_menu(user_id):
@@ -168,12 +181,10 @@ async def handle_message(message: types.Message):
     text = message.text.strip()
     load_data()
 
-    # -------------------- Старт --------------------
     if text == "/start":
         await message.answer("Привет! Добро пожаловать 👇", reply_markup=main_menu(user_id))
         return
 
-    # -------------------- Поддержка --------------------
     if text == "📞 Поддержка":
         if not managers:
             await message.answer("Пока нет активных менеджеров.")
@@ -185,12 +196,10 @@ async def handle_message(message: types.Message):
         await message.answer("Мы уведомили менеджера, ожидайте ответ.")
         return
 
-    # -------------------- Менеджеры --------------------
     if text == "👨‍💼 Менеджеры" and user_id in ADMIN_IDS:
         await show_managers(message)
         return
 
-    # -------------------- Управление товарами --------------------
     if text == "⚙️ Управление товарами" and user_id in ADMIN_IDS:
         kb = InlineKeyboardMarkup()
         kb.add(InlineKeyboardButton("Добавить категорию", callback_data="add_category"))
@@ -199,7 +208,6 @@ async def handle_message(message: types.Message):
         await message.answer("Управление товарами:", reply_markup=kb)
         return
 
-    # -------------------- Корзина и история --------------------
     if text == "🧺 Моя корзина":
         await show_cart(message, user_id)
         return
@@ -207,7 +215,6 @@ async def handle_message(message: types.Message):
         await show_history(message, user_id)
         return
 
-    # -------------------- Каталог --------------------
     if text == "🛍 Каталог товаров":
         await show_categories(message)
         return
@@ -278,6 +285,7 @@ async def callback_handler(callback: types.CallbackQuery):
 # -------------------- Запуск --------------------
 async def main():
     load_data()
+    reset_updates(TELEGRAM_TOKEN)  # <--- сброс старых getUpdates
     print("🚀 Бот запущен")
     await dp.start_polling(bot)
 
