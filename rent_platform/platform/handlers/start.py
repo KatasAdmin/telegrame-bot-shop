@@ -1,17 +1,11 @@
 # rent_platform/platform/handlers/start.py
+from aiogram import Router
+from aiogram.filters import CommandStart
+from aiogram.types import Message
 
-from fastapi import APIRouter
-
-router = APIRouter()
+router = Router()
 
 
-@router.get("/start")
-async def platform_start():
-    return {
-        "message": "👋 Ласкаво просимо до платформи оренди ботів",
-        "actions": [
-            "Орендувати бота",
-            "Мої боти",
-            "Налаштування"
-        ]
-    }
+@router.message(CommandStart())
+async def start_cmd(m: Message):
+    await m.answer("✅ Rent Platform запущено.\n\nДалі буде маркетплейс модулів і оренда 😏🚀")
