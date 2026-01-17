@@ -5,6 +5,11 @@ from aiogram import Router, F
 from aiogram.filters import CommandStart
 from aiogram.types import Message, CallbackQuery
 
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
+
+from rent_platform.platform.keyboards import my_bots_kb, my_bots_list_kb
+from rent_platform.platform.storage import list_bots, add_bot, delete_bot
 from rent_platform.platform.keyboards import (
     main_menu_kb,
     main_menu_inline_kb,
@@ -195,4 +200,110 @@ async def cb_partners_sub(call: CallbackQuery) -> None:
         "rules": "📜 *Правила*\n\n(заглушка: умови партнерки)",
     }
     await call.message.answer(mapping.get(key, "Пункт у розробці."), parse_mode="Markdown", reply_markup=partners_inline_kb())
+    await call.answer()
+
+class MyBotsFlow(StatesGroup):
+    waiting_token = State()
+
+
+async def _render_my_bots(message: Message) -> None:
+    user_id = message.from_user.id
+    items = list_bots(user_id)
+
+    if not items:
+        await message.answer(
+            "🤖 *Мої боти*\n\n"
+            "Поки порожньо.\n"
+            "Натисни **➕ Додати бота** і встав токен.\n\n"
+            "_Пізніше тут буде: статус оренди, модулі, конфігурація._",
+            parse_mode="Markdown",
+            reply_markup=my_bots_kb(),
+        )
+        return
+
+    text = "🤖 *Мої боти*\n\n"
+    for i, it in enumerate(items, 1):
+        text += f"{i}) **{it.get('name','Bot')}**  (id: `{it['id']}`)\n"
+    text += "\nНижче можеш видалити бота або додати нового."
+
+    await message.answer(text, parse_mode="Markdown", reply_markup=my_bots_kb())
+    await message.answer("🧹 Швидке видалення:", reply_markup=my_bots_list_kb(items))
+
+
+# Перехоплюємо кнопку "Мої боти" — замінимо заглушку на реальний екран
+@router.message(F.text == BTN_MY_BOTS)
+async def my_bots_text(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await _render_my_bots(message)
+
+
+@router.callback_query(F.data == "pl:my_bots")
+async def cb_my_bots(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    if call.message:
+        # використаємо message.answer (менше ризику з редагуванням)
+        fake_msg = call.message
+        # call.message є Message, просто відобразимо туди
+        user_id = call.from_user.id
+        items = list_bots(user_id)
+
+        if not items:
+            await fake_msg.answer(
+                "🤖 *Мої боти*\n\n"
+                "Поки порожньо.\nНатисни **➕ Додати бота** і встав токен.",
+                parse_mode="Markdown",
+                reply_markup=my_bots_kb(),
+            )
+        else:
+            text = "🤖 *Мої боти*\n\n"
+            for i, it in enumerate(items, 1):
+                text += f"{i}) **{it.get('name','Bot')}**  (id: `{it['id']}`)\n"
+            text += "\nНижче можеш видалити бота або додати нового."
+            await fake_msg.answer(text, parse_mode="Markdown", reply_markup=my_bots_kb())
+            await fake_msg.answer("🧹 Швидке видалення:", reply_markup=my_bots_list_kb(items))
+
+    await call.answer()
+
+
+@router.callback_query(F.data == "pl:my_bots:refresh")
+async def cb_my_bots_refresh(call: CallbackQuery, state: FSMContext) -> None:
+    await cb_my_bots(call, state)
+
+
+@router.callback_query(F.data == "pl:my_bots:add")
+async def cb_my_bots_add(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(MyBotsFlow.waiting_token)
+    if call.message:
+        await call.message.answer(
+            "➕ *Додати бота*\n\n"
+            "Встав токен бота (формат як у BotFather: `123456:AA...`).\n\n"
+            "❗️Не кидай токен у публічні чати.",
+            parse_mode="Markdown",
+        )
+    await call.answer()
+
+
+@router.message(MyBotsFlow.waiting_token, F.text)
+async def my_bots_receive_token(message: Message, state: FSMContext) -> None:
+    token = (message.text or "").strip()
+
+    # легка валідація
+    if ":" not in token or len(token) < 20:
+        await message.answer("❌ Схоже на невалідний токен. Спробуй ще раз (має бути `числа:букви...`).")
+        return
+
+    user_id = message.from_user.id
+    add_bot(user_id, token=token, name="Bot")
+
+    await state.clear()
+    await message.answer("✅ Додав. Тепер це буде твоїм “орендованим/підключеним ботом” у платформі.")
+    await _render_my_bots(message)
+
+
+@router.callback_query(F.data.startswith("pl:my_bots:del:"))
+async def cb_my_bots_delete(call: CallbackQuery, state: FSMContext) -> None:
+    bot_id = call.data.split("pl:my_bots:del:", 1)[1]
+    ok = delete_bot(call.from_user.id, bot_id)
+    if call.message:
+        await call.message.answer("🗑 Видалив." if ok else "⚠️ Не знайшов такого бота.")
     await call.answer()
