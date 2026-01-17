@@ -1,11 +1,198 @@
-# rent_platform/platform/handlers/start.py
-from aiogram import Router
-from aiogram.filters import CommandStart
-from aiogram.types import Message
+from __future__ import annotations
 
+import logging
+from aiogram import Router, F
+from aiogram.filters import CommandStart
+from aiogram.types import Message, CallbackQuery
+
+from rent_platform.platform.keyboards import (
+    main_menu_kb,
+    main_menu_inline_kb,
+    back_to_menu_kb,
+    partners_inline_kb,
+    about_inline_kb,
+    BTN_MARKETPLACE,
+    BTN_MY_BOTS,
+    BTN_CABINET,
+    BTN_PARTNERS,
+    BTN_HELP,
+)
+
+log = logging.getLogger(__name__)
 router = Router()
 
 
+def _label(message: Message) -> str:
+    chat_id = message.chat.id if message.chat else None
+    user_id = message.from_user.id if message.from_user else None
+    return f"chat={chat_id}, user={user_id}"
+
+
+async def _send_main_menu(message: Message) -> None:
+    text = (
+        "✅ *Rent Platform запущено*\n\n"
+        "Оберіть розділ:\n"
+        "• 🧩 Маркетплейс — підключення модулів\n"
+        "• 🤖 Мої боти — список орендованих/підключених\n"
+        "• 👤 Кабінет — тариф, рахунки, статус\n"
+        "• 🤝 Партнери — рефералка/виплати\n"
+        "• 🆘 Підтримка — допомога\n"
+    )
+    await message.answer(text, parse_mode="Markdown", reply_markup=main_menu_kb(is_admin=False))
+    await message.answer("Швидкі кнопки:", reply_markup=main_menu_inline_kb())
+
+
 @router.message(CommandStart())
-async def start_cmd(m: Message):
-    await m.answer("✅ Rent Platform запущено.\n\nДалі буде маркетплейс модулів і оренда 😏🚀")
+async def cmd_start(message: Message) -> None:
+    log.info("platform /start: %s", _label(message))
+    await _send_main_menu(message)
+
+
+# ===== Reply-кнопки (текст) =====
+
+@router.message(F.text == BTN_MARKETPLACE)
+async def marketplace_text(message: Message) -> None:
+    await message.answer(
+        "🧩 *Маркетплейс*\n\n"
+        "Тут буде каталог модулів (shop / invest / …), підключення та керування.\n"
+        "Поки що заглушка — далі зробимо список і «підключити».",
+        parse_mode="Markdown",
+        reply_markup=back_to_menu_kb(),
+    )
+
+
+@router.message(F.text == BTN_MY_BOTS)
+async def my_bots_text(message: Message) -> None:
+    await message.answer(
+        "🤖 *Мої боти*\n\n"
+        "Тут буде:\n"
+        "• список ботів, які ти орендував/підключив\n"
+        "• статус (активний/прострочений)\n"
+        "• кнопка «Налаштувати»\n"
+        "• кнопка «Змінити токен»\n\n"
+        "Поки що заглушка 🙂",
+        parse_mode="Markdown",
+        reply_markup=back_to_menu_kb(),
+    )
+
+
+@router.message(F.text == BTN_CABINET)
+async def cabinet_text(message: Message) -> None:
+    await message.answer(
+        "👤 *Кабінет*\n\n"
+        "Тут буде:\n"
+        "• тариф і дата завершення\n"
+        "• рахунок на оплату / історія оплат\n"
+        "• баланс / бонуси (пізніше)\n\n"
+        "Поки що заглушка 🙂",
+        parse_mode="Markdown",
+        reply_markup=back_to_menu_kb(),
+    )
+
+
+@router.message(F.text == BTN_PARTNERS)
+async def partners_text(message: Message) -> None:
+    await message.answer(
+        "🤝 *Партнерська програма*\n\n"
+        "Тут буде рефералка, статистика та виплати.\n"
+        "Обери дію нижче 👇",
+        parse_mode="Markdown",
+        reply_markup=partners_inline_kb(),
+    )
+
+
+@router.message(F.text == BTN_HELP)
+async def support_text(message: Message) -> None:
+    await message.answer(
+        "🆘 *Підтримка*\n\n"
+        "Напиши, що не працює, і додай:\n"
+        "• що натискав\n"
+        "• скрін/лог (якщо є)\n\n"
+        "Також є розділ «Загальна інформація» 👇",
+        parse_mode="Markdown",
+        reply_markup=about_inline_kb(),
+    )
+
+
+# ===== Callback (inline) =====
+
+@router.callback_query(F.data == "pl:menu")
+async def cb_menu(call: CallbackQuery) -> None:
+    if call.message:
+        await call.message.answer("⬇️ Меню", reply_markup=main_menu_kb(is_admin=False))
+        await call.message.answer("Швидкі кнопки:", reply_markup=main_menu_inline_kb())
+    await call.answer()
+
+
+@router.callback_query(F.data == "pl:marketplace")
+async def cb_marketplace(call: CallbackQuery) -> None:
+    if call.message:
+        await call.message.answer(
+            "🧩 *Маркетплейс*\n\n(заглушка, далі зробимо список модулів)",
+            parse_mode="Markdown",
+            reply_markup=back_to_menu_kb(),
+        )
+    await call.answer()
+
+
+@router.callback_query(F.data == "pl:my_bots")
+async def cb_my_bots(call: CallbackQuery) -> None:
+    if call.message:
+        await call.message.answer(
+            "🤖 *Мої боти*\n\n(заглушка, далі підвʼяжемо БД і tenant-и)",
+            parse_mode="Markdown",
+            reply_markup=back_to_menu_kb(),
+        )
+    await call.answer()
+
+
+@router.callback_query(F.data == "pl:cabinet")
+async def cb_cabinet(call: CallbackQuery) -> None:
+    if call.message:
+        await call.message.answer(
+            "👤 *Кабінет*\n\n(заглушка, далі — тариф/рахунки/оплата)",
+            parse_mode="Markdown",
+            reply_markup=back_to_menu_kb(),
+        )
+    await call.answer()
+
+
+@router.callback_query(F.data == "pl:partners")
+async def cb_partners(call: CallbackQuery) -> None:
+    if call.message:
+        await call.message.answer(
+            "🤝 *Партнери*\n\nОбери дію 👇",
+            parse_mode="Markdown",
+            reply_markup=partners_inline_kb(),
+        )
+    await call.answer()
+
+
+@router.callback_query(F.data == "pl:support")
+async def cb_support(call: CallbackQuery) -> None:
+    if call.message:
+        await call.message.answer(
+            "🆘 *Підтримка*\n\nТакож є «Загальна інформація» 👇",
+            parse_mode="Markdown",
+            reply_markup=about_inline_kb(),
+        )
+    await call.answer()
+
+
+# --- Partners sub-callbacks (заглушки) ---
+
+@router.callback_query(F.data.startswith("pl:partners:"))
+async def cb_partners_sub(call: CallbackQuery) -> None:
+    if not call.message:
+        await call.answer()
+        return
+
+    key = call.data.split("pl:partners:", 1)[1]
+    mapping = {
+        "link": "🔗 *Моя реф-силка*\n\n(заглушка: далі згенеруємо рефкод і посилання)",
+        "stats": "📊 *Статистика*\n\n(заглушка: реєстрації/оплати/комісія)",
+        "payouts": "💸 *Виплати*\n\n(заглушка: реквізити/історія/статус)",
+        "rules": "📜 *Правила*\n\n(заглушка: умови партнерки)",
+    }
+    await call.message.answer(mapping.get(key, "Пункт у розробці."), parse_mode="Markdown", reply_markup=partners_inline_kb())
+    await call.answer()
