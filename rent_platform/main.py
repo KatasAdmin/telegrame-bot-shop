@@ -61,6 +61,11 @@ async def on_startup():
 @app.on_event("shutdown")
 async def on_shutdown():
     await bot.session.close()
+    try:
+        from rent_platform.db.session import engine
+        await engine.dispose()
+    except Exception:
+        pass
 
 
 @app.get("/")
