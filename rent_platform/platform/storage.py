@@ -30,7 +30,7 @@ def list_bots(user_id: int) -> list[dict]:
 def add_bot(user_id: int, token: str, name: str = "Bot") -> dict:
     bot_id = secrets.token_hex(4)      # короткий id
     secret = secrets.token_urlsafe(16) # секрет для webhook URL
-    active_modules = ["shop"]          # дефолтний набір
+    active_modules = ["core", "shop"]          # дефолтний набір
 
     item = UserBot(id=bot_id, token=token, secret=secret, name=name, active_modules=active_modules)
     _USER_BOTS.setdefault(user_id, []).append(item)
