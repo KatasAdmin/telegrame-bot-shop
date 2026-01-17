@@ -1,92 +1,59 @@
+# rent_platform/main.py
+from __future__ import annotations
+
 import asyncio
 import logging
 
+from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher
-from aiogram.enums import ParseMode
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-from aiohttp import web
+from aiogram.types import Update
 
 from rent_platform.config import settings
-from rent_platform.core.tenant_ctx import (
-    register_tenant,
-    init_tenants,
-)
-from rent_platform.core.webhook import set_webhook
+from rent_platform.core.tenant_ctx import init_tenants  # заглушка вже є
+from rent_platform.platform.handlers.start import router as start_router
+
+log = logging.getLogger(__name__)
+
+app = FastAPI()
+
+bot = Bot(token=settings.BOT_TOKEN)
+dp = Dispatcher()
+dp.include_router(start_router)
 
 
-# -------------------------
-# LOGGING
-# -------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-)
-logger = logging.getLogger(__name__)
+@app.on_event("startup")
+async def on_startup():
+    logging.basicConfig(level=logging.INFO)
+
+    # init (пізніше: БД, tenants, registry)
+    init_tenants()
+
+    # webhook set
+    webhook_full = settings.WEBHOOK_URL.rstrip("/") + settings.WEBHOOK_PATH
+    await bot.set_webhook(webhook_full)
+    log.info("Webhook set to %s", webhook_full)
 
 
-# -------------------------
-# APP FACTORY
-# -------------------------
-async def create_app() -> web.Application:
-    """
-    Створює aiohttp app + ініціалізує всі tenant-и
-    """
-    app = web.Application()
-
-    # ---- Dispatcher (один на всі tenant-и)
-    dp = Dispatcher()
-    app["dp"] = dp
-
-    # ---- Реєстрація tenant-ів (ПОКИ ХАРДКОД)
-    register_tenant(
-        tenant_id="demo",
-        bot_token=settings.BOT_TOKEN,
-        modules=["shop"],
-    )
-
-    # ---- Ініціалізація tenant-ів (створює Bot, підключає роутери)
-    await init_tenants(dp)
-
-    # ---- Webhook handler
-    SimpleRequestHandler(
-        dispatcher=dp,
-        bot=None,  # боти беруться з tenant_ctx
-    ).register(app, path="/webhook")
-
-    setup_application(app, dp, bot=None)
-
-    logger.info("🚀 Platform initialized")
-    return app
+@app.on_event("shutdown")
+async def on_shutdown():
+    await bot.delete_webhook(drop_pending_updates=True)
+    await bot.session.close()
 
 
-# -------------------------
-# START
-# -------------------------
-async def main():
-    logger.info("🚀 Starting Rent Platform...")
-
-    app = await create_app()
-
-    runner = web.AppRunner(app)
-    await runner.setup()
-
-    site = web.TCPSite(
-        runner,
-        host="0.0.0.0",
-        port=settings.PORT,
-    )
-
-    await site.start()
-
-    # ---- Webhook (один URL, мульти-tenant всередині)
-    await set_webhook(settings.WEBHOOK_URL)
-
-    logger.info(f"✅ Server started on port {settings.PORT}")
-
-    # ---- Keep alive
-    while True:
-        await asyncio.sleep(3600)
+@app.get("/")
+async def root():
+    return {"ok": True, "service": "rent_platform"}
 
 
+@app.post(settings.WEBHOOK_PATH)
+async def telegram_webhook(req: Request):
+    data = await req.json()
+    update = Update.model_validate(data)
+    await dp.feed_update(bot, update)
+    return {"ok": True}
+
+
+# optional local run (не заважає Railway)
 if __name__ == "__main__":
-    asyncio.run(main())
+    import uvicorn
+    uvicorn.run("rent_platform.main:app", host="0.0.0.0", port=int(settings.PORT))
