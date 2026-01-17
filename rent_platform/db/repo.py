@@ -1,51 +1,51 @@
 from __future__ import annotations
 
-from sqlalchemy import select, delete
+import secrets
+import time
+from typing import Any
+
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from rent_platform.db.models import Tenant, TenantModule
+from rent_platform.db.models import Tenant
 
 
-async def create_tenant(
-    db: AsyncSession,
-    *,
-    tenant_id: str,
-    owner_user_id: int,
-    bot_token: str,
-    secret: str,
-) -> Tenant:
-    t = Tenant(id=tenant_id, owner_user_id=owner_user_id, bot_token=bot_token, secret=secret, status="active", created_ts=0)
-    db.add(t)
-
-    # дефолтні модулі: core + shop
-    db.add(TenantModule(tenant_id=tenant_id, module_key="core", enabled=True))
-    db.add(TenantModule(tenant_id=tenant_id, module_key="shop", enabled=True))
-
-    await db.commit()
-    await db.refresh(t)
-    return t
-
-
-async def get_tenant(db: AsyncSession, tenant_id: str) -> Tenant | None:
-    res = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
-    return res.scalar_one_or_none()
-
-
-async def get_tenant_enabled_modules(db: AsyncSession, tenant_id: str) -> list[str]:
-    res = await db.execute(
-        select(TenantModule.module_key)
-        .where(TenantModule.tenant_id == tenant_id, TenantModule.enabled.is_(True))
+async def list_tenants_by_owner(session: AsyncSession, owner_user_id: int) -> list[dict[str, Any]]:
+    res = await session.execute(
+        select(Tenant).where(Tenant.owner_user_id == owner_user_id).order_by(Tenant.created_ts.desc())
     )
-    return [r[0] for r in res.all()]
+    items = res.scalars().all()
+    return [{"id": t.id, "name": "Bot", "token": t.bot_token, "secret": t.secret, "status": t.status} for t in items]
 
 
-async def delete_tenant(db: AsyncSession, owner_user_id: int, tenant_id: str) -> bool:
-    # захист: видаляє тільки власник
-    res = await db.execute(select(Tenant).where(Tenant.id == tenant_id, Tenant.owner_user_id == owner_user_id))
-    t = res.scalar_one_or_none()
-    if not t:
+async def create_tenant(session: AsyncSession, owner_user_id: int, bot_token: str, name: str = "Bot") -> dict[str, Any]:
+    tenant_id = secrets.token_hex(4)   # короткий id як було
+    secret = secrets.token_urlsafe(24)
+    ts = int(time.time())
+
+    t = Tenant(
+        id=tenant_id,
+        owner_user_id=owner_user_id,
+        bot_token=bot_token,
+        secret=secret,
+        status="active",
+        created_ts=ts,
+    )
+    session.add(t)
+    await session.commit()
+
+    return {"id": t.id, "name": name, "token": t.bot_token, "secret": t.secret, "status": t.status}
+
+
+async def delete_tenant(session: AsyncSession, owner_user_id: int, tenant_id: str) -> bool:
+    # видаляємо тільки якщо власник той самий
+    res = await session.execute(
+        select(Tenant.id).where(Tenant.id == tenant_id, Tenant.owner_user_id == owner_user_id)
+    )
+    ok = res.scalar_one_or_none() is not None
+    if not ok:
         return False
 
-    await db.execute(delete(Tenant).where(Tenant.id == tenant_id))
-    await db.commit()
+    await session.execute(delete(Tenant).where(Tenant.id == tenant_id))
+    await session.commit()
     return True
