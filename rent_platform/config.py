@@ -1,21 +1,23 @@
 # rent_platform/config.py
 
-import os
-from pydantic import BaseSettings
+from pydantic_settings import BaseSettings
+from pydantic import Field
 
 
 class Settings(BaseSettings):
-    # PLATFORM
-    PLATFORM_BOT_TOKEN: str | None = os.getenv("PLATFORM_BOT_TOKEN")
+    # === BOT / PLATFORM ===
+    BOT_TOKEN: str = Field(..., env="BOT_TOKEN")
 
-    # TELEGRAM
-    TELEGRAM_API_URL: str = "https://api.telegram.org"
+    # === SERVER ===
+    PORT: int = Field(8080, env="PORT")
+    WEBHOOK_URL: str = Field(..., env="WEBHOOK_URL")
 
-    # ENV
-    ENV: str = os.getenv("ENV", "dev")
+    # === ENV ===
+    ENV: str = Field("prod", env="ENV")
 
     class Config:
         env_file = ".env"
+        extra = "ignore"
 
 
 settings = Settings()
