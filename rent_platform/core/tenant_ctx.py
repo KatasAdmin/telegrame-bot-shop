@@ -1,34 +1,32 @@
 # rent_platform/core/tenant_ctx.py
+from __future__ import annotations
 
+from contextvars import ContextVar
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
-class TenantContext:
-    tenant_id: str
+class Tenant:
+    id: str
     bot_token: str
-    active_modules: list[str]
-    is_active: bool = True
 
 
-# ⚠️ ПОКИ in-memory (пізніше БД)
-TENANTS: dict[str, TenantContext] = {}
+# активний tenant у контексті запиту
+_current_tenant: ContextVar[Optional[Tenant]] = ContextVar("current_tenant", default=None)
 
 
-def get_tenant(tenant_id: str) -> TenantContext:
-    tenant = TENANTS.get(tenant_id)
-    if not tenant:
-        raise ValueError(f"Tenant {tenant_id} not found")
-    return tenant
+def set_current_tenant(t: Optional[Tenant]) -> None:
+    _current_tenant.set(t)
 
 
-def register_tenant(
-    tenant_id: str,
-    bot_token: str,
-    modules: list[str] | None = None
-):
-    TENANTS[tenant_id] = TenantContext(
-        tenant_id=tenant_id,
-        bot_token=bot_token,
-        active_modules=modules or []
-    )
+def get_current_tenant() -> Optional[Tenant]:
+    return _current_tenant.get()
+
+
+def init_tenants() -> None:
+    """
+    Заглушка на старт.
+    Пізніше тут підключимо БД і підвантаження tenant'ів/конфігів.
+    """
+    return
