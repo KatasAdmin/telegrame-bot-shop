@@ -272,7 +272,7 @@ async def my_bots_receive_token(message: Message, state: FSMContext) -> None:
         return
 
     user_id = message.from_user.id
-    item = add_bot(user_id, token=token, name="Bot")
+    item = await add_bot(user_id, token=token, name="Bot")
 
     # ✅ ставимо webhook tenant-боту
     from rent_platform.core.tenant_ctx import get_tenant, ensure_tenant_webhook
@@ -291,7 +291,7 @@ async def my_bots_receive_token(message: Message, state: FSMContext) -> None:
 @router.callback_query(F.data.startswith("pl:my_bots:del:"))
 async def cb_my_bots_delete(call: CallbackQuery, state: FSMContext) -> None:
     bot_id = call.data.split("pl:my_bots:del:", 1)[1]
-    ok = delete_bot(call.from_user.id, bot_id)
+    ok = await delete_bot(call.from_user.id, bot_id)
     if call.message:
         await call.message.answer("🗑 Видалив." if ok else "⚠️ Не знайшов такого бота.")
     await call.answer()
