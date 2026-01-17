@@ -1,18 +1,16 @@
-# rent_platform/config.py
 from __future__ import annotations
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    # Telegram (platform bot)
+    # Telegram
     BOT_TOKEN: str
-    WEBHOOK_URL: str  # https://your-app.up.railway.app
+    WEBHOOK_URL: str
     WEBHOOK_PATH: str = "/tg/webhook"
-    DATABASE_URL: str | None = None
 
-    # Tenant bots
-    TENANT_WEBHOOK_PREFIX: str = "/tg/t"  # /tg/t/{bot_id}/{secret}
+    # DB
+    DATABASE_URL: str  # тепер у тебе є в Railway
 
     # Railway/Render/Heroku
     PORT: int = 8080
