@@ -1,29 +1,39 @@
 # rent_platform/shared/utils.py
 from __future__ import annotations
 
-import logging
-from typing import Optional
-
 from aiogram import Bot
-
-log = logging.getLogger(__name__)
 
 
 async def send_message(
-    bot: Bot,
+    bot_or_token: Bot | str,
     chat_id: int,
     text: str,
     *,
-    parse_mode: Optional[str] = None,
+    parse_mode: str = "HTML",
     disable_web_page_preview: bool = True,
 ) -> None:
     """
-    Універсальна відправка повідомлень для модулів.
-    Працює і для platform bot, і для tenant bot (потрібно передати відповідний Bot).
+    Універсальна відправка повідомлення.
+    - bot_or_token: або готовий aiogram.Bot, або token (str)
     """
-    await bot.send_message(
-        chat_id=chat_id,
-        text=text,
-        parse_mode=parse_mode,
-        disable_web_page_preview=disable_web_page_preview,
-    )
+    if isinstance(bot_or_token, Bot):
+        bot = bot_or_token
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode=parse_mode,
+            disable_web_page_preview=disable_web_page_preview,
+        )
+        return
+
+    # fallback: якщо передали токен
+    bot = Bot(token=bot_or_token)
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode=parse_mode,
+            disable_web_page_preview=disable_web_page_preview,
+        )
+    finally:
+        await bot.session.close()
