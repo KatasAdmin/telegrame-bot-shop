@@ -1,6 +1,8 @@
+# rent_platform/platform/handlers/start.py
 from __future__ import annotations
 
 import logging
+
 from aiogram import Router, F
 from aiogram.filters import CommandStart
 from aiogram.types import Message, CallbackQuery
@@ -8,9 +10,9 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
-from rent_platform.platform.keyboards import my_bots_kb, my_bots_list_kb
-from rent_platform.platform.storage import list_bots, add_bot, delete_bot
 from rent_platform.platform.keyboards import (
+    my_bots_kb,
+    my_bots_list_kb,
     main_menu_kb,
     main_menu_inline_kb,
     back_to_menu_kb,
@@ -22,6 +24,7 @@ from rent_platform.platform.keyboards import (
     BTN_PARTNERS,
     BTN_HELP,
 )
+from rent_platform.platform.storage import list_bots, add_bot, delete_bot
 
 log = logging.getLogger(__name__)
 router = Router()
@@ -61,21 +64,6 @@ async def marketplace_text(message: Message) -> None:
         "🧩 *Маркетплейс*\n\n"
         "Тут буде каталог модулів (shop / invest / …), підключення та керування.\n"
         "Поки що заглушка — далі зробимо список і «підключити».",
-        parse_mode="Markdown",
-        reply_markup=back_to_menu_kb(),
-    )
-
-
-@router.message(F.text == BTN_MY_BOTS)
-async def my_bots_text(message: Message) -> None:
-    await message.answer(
-        "🤖 *Мої боти*\n\n"
-        "Тут буде:\n"
-        "• список ботів, які ти орендував/підключив\n"
-        "• статус (активний/прострочений)\n"
-        "• кнопка «Налаштувати»\n"
-        "• кнопка «Змінити токен»\n\n"
-        "Поки що заглушка 🙂",
         parse_mode="Markdown",
         reply_markup=back_to_menu_kb(),
     )
@@ -140,17 +128,6 @@ async def cb_marketplace(call: CallbackQuery) -> None:
     await call.answer()
 
 
-@router.callback_query(F.data == "pl:my_bots")
-async def cb_my_bots(call: CallbackQuery) -> None:
-    if call.message:
-        await call.message.answer(
-            "🤖 *Мої боти*\n\n(заглушка, далі підвʼяжемо БД і tenant-и)",
-            parse_mode="Markdown",
-            reply_markup=back_to_menu_kb(),
-        )
-    await call.answer()
-
-
 @router.callback_query(F.data == "pl:cabinet")
 async def cb_cabinet(call: CallbackQuery) -> None:
     if call.message:
@@ -199,8 +176,15 @@ async def cb_partners_sub(call: CallbackQuery) -> None:
         "payouts": "💸 *Виплати*\n\n(заглушка: реквізити/історія/статус)",
         "rules": "📜 *Правила*\n\n(заглушка: умови партнерки)",
     }
-    await call.message.answer(mapping.get(key, "Пункт у розробці."), parse_mode="Markdown", reply_markup=partners_inline_kb())
+    await call.message.answer(
+        mapping.get(key, "Пункт у розробці."),
+        parse_mode="Markdown",
+        reply_markup=partners_inline_kb(),
+    )
     await call.answer()
+
+
+# ===== My Bots (реальний екран) =====
 
 class MyBotsFlow(StatesGroup):
     waiting_token = State()
@@ -230,7 +214,6 @@ async def _render_my_bots(message: Message) -> None:
     await message.answer("🧹 Швидке видалення:", reply_markup=my_bots_list_kb(items))
 
 
-# Перехоплюємо кнопку "Мої боти" — замінимо заглушку на реальний екран
 @router.message(F.text == BTN_MY_BOTS)
 async def my_bots_text(message: Message, state: FSMContext) -> None:
     await state.clear()
@@ -241,14 +224,11 @@ async def my_bots_text(message: Message, state: FSMContext) -> None:
 async def cb_my_bots(call: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     if call.message:
-        # використаємо message.answer (менше ризику з редагуванням)
-        fake_msg = call.message
-        # call.message є Message, просто відобразимо туди
         user_id = call.from_user.id
         items = list_bots(user_id)
 
         if not items:
-            await fake_msg.answer(
+            await call.message.answer(
                 "🤖 *Мої боти*\n\n"
                 "Поки порожньо.\nНатисни **➕ Додати бота** і встав токен.",
                 parse_mode="Markdown",
@@ -259,8 +239,8 @@ async def cb_my_bots(call: CallbackQuery, state: FSMContext) -> None:
             for i, it in enumerate(items, 1):
                 text += f"{i}) **{it.get('name','Bot')}**  (id: `{it['id']}`)\n"
             text += "\nНижче можеш видалити бота або додати нового."
-            await fake_msg.answer(text, parse_mode="Markdown", reply_markup=my_bots_kb())
-            await fake_msg.answer("🧹 Швидке видалення:", reply_markup=my_bots_list_kb(items))
+            await call.message.answer(text, parse_mode="Markdown", reply_markup=my_bots_kb())
+            await call.message.answer("🧹 Швидке видалення:", reply_markup=my_bots_list_kb(items))
 
     await call.answer()
 
@@ -287,7 +267,6 @@ async def cb_my_bots_add(call: CallbackQuery, state: FSMContext) -> None:
 async def my_bots_receive_token(message: Message, state: FSMContext) -> None:
     token = (message.text or "").strip()
 
-    # легка валідація
     if ":" not in token or len(token) < 20:
         await message.answer("❌ Схоже на невалідний токен. Спробуй ще раз (має бути `числа:букви...`).")
         return
