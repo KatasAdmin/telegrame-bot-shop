@@ -1,30 +1,21 @@
 # rent_platform/core/registry.py
+from __future__ import annotations
 
-from typing import Callable
+from typing import Awaitable, Callable, Any
 
-MODULES: dict[str, Callable] = {}
+# Один модуль = одна async-функція/хендлер (може бути router factory пізніше)
+ModuleHandler = Callable[..., Awaitable[Any]]
 
-
-def register_module(name: str, router_factory: Callable):
-    MODULES[name] = router_factory
-
-
-def get_module(name: str):
-    return MODULES.get(name)
-
-# rent_platform/core/registry.py
-
-from rent_platform.modules.shop.router import handle_update as shop_handler
-
-MODULES = {}
-
-def register_module(name: str, router_factory):
-    MODULES[name] = router_factory
+MODULES: dict[str, ModuleHandler] = {}
 
 
-def get_module(name: str):
-    return MODULES.get(name)
+def register_module(key: str, handler: ModuleHandler) -> None:
+    MODULES[key] = handler
 
 
-# 🔥 РЕЄСТРАЦІЯ МОДУЛІВ
-register_module("shop", shop_handler)
+def get_module(key: str) -> ModuleHandler | None:
+    return MODULES.get(key)
+
+
+def list_modules() -> list[str]:
+    return sorted(MODULES.keys())
