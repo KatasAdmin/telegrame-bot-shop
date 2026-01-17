@@ -5,15 +5,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    # Telegram
+    # Telegram (platform bot)
     BOT_TOKEN: str
     WEBHOOK_URL: str  # https://your-app.up.railway.app
     WEBHOOK_PATH: str = "/tg/webhook"
 
+    # Tenant bots
+    TENANT_WEBHOOK_PREFIX: str = "/tg/t"  # /tg/t/{bot_id}/{secret}
+
     # Railway/Render/Heroku
     PORT: int = 8080
 
-    # dev flag
     DEBUG: bool = False
 
     model_config = SettingsConfigDict(
