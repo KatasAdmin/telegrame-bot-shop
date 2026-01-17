@@ -1,1 +1,1 @@
-web: uvicorn rent_platform.main:app --host 0.0.0.0 --port $PORT
+web: python run_migrations.py && uvicorn rent_platform.main:app --host 0.0.0.0 --port $PORT
