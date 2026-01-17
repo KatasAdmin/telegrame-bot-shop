@@ -1,43 +1,92 @@
-# rent_platform/main.py
-
+import asyncio
 import logging
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+
+from aiogram import Bot, Dispatcher
+from aiogram.enums import ParseMode
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiohttp import web
 
 from rent_platform.config import settings
-from rent_platform.core.webhook import handle_webhook
-from rent_platform.platform.handlers.start import router as platform_router
+from rent_platform.core.tenant_ctx import (
+    register_tenant,
+    init_tenants,
+)
+from rent_platform.core.webhook import set_webhook
 
-logging.basicConfig(level=logging.INFO)
+
+# -------------------------
+# LOGGING
+# -------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(
-    title="Rent Platform",
-    description="Multi-tenant Telegram Bot Platform",
-    version="0.1.0"
-)
 
-# --- health check ---
-@app.get("/")
-async def root():
-    return {
-        "status": "ok",
-        "service": "rent-platform",
-        "message": "🚀 Platform is alive"
-    }
+# -------------------------
+# APP FACTORY
+# -------------------------
+async def create_app() -> web.Application:
+    """
+    Створює aiohttp app + ініціалізує всі tenant-и
+    """
+    app = web.Application()
 
-# --- telegram webhook ---
-@app.post("/webhook/{tenant_id}")
-async def telegram_webhook(tenant_id: str, request: Request):
-    payload = await request.json()
-    try:
-        await handle_webhook(tenant_id, payload)
-        return JSONResponse({"ok": True})
-    except Exception as e:
-        logger.exception("Webhook error")
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    # ---- Dispatcher (один на всі tenant-и)
+    dp = Dispatcher()
+    app["dp"] = dp
 
-# --- platform (main bot) routes ---
-app.include_router(platform_router, prefix="/platform")
+    # ---- Реєстрація tenant-ів (ПОКИ ХАРДКОД)
+    register_tenant(
+        tenant_id="demo",
+        bot_token=settings.BOT_TOKEN,
+        modules=["shop"],
+    )
 
-logger.info("🚀 Rent Platform started")
+    # ---- Ініціалізація tenant-ів (створює Bot, підключає роутери)
+    await init_tenants(dp)
+
+    # ---- Webhook handler
+    SimpleRequestHandler(
+        dispatcher=dp,
+        bot=None,  # боти беруться з tenant_ctx
+    ).register(app, path="/webhook")
+
+    setup_application(app, dp, bot=None)
+
+    logger.info("🚀 Platform initialized")
+    return app
+
+
+# -------------------------
+# START
+# -------------------------
+async def main():
+    logger.info("🚀 Starting Rent Platform...")
+
+    app = await create_app()
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    site = web.TCPSite(
+        runner,
+        host="0.0.0.0",
+        port=settings.PORT,
+    )
+
+    await site.start()
+
+    # ---- Webhook (один URL, мульти-tenant всередині)
+    await set_webhook(settings.WEBHOOK_URL)
+
+    logger.info(f"✅ Server started on port {settings.PORT}")
+
+    # ---- Keep alive
+    while True:
+        await asyncio.sleep(3600)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
