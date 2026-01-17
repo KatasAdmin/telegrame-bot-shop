@@ -9,12 +9,18 @@ log = logging.getLogger(__name__)
 
 
 def init_modules() -> None:
-    # ✅ імпортуємо модулі ЛИШЕ коли стартуємо сервіс
-    # так легше дебажити і не вбиває імпорт дерева одразу
+    # core
+    try:
+        from rent_platform.modules.core.router import handle_update as core_handler
+        register_module("core", core_handler)
+    except Exception as e:
+        log.exception("Failed to init module 'core': %s", e)
+        raise
+
+    # shop
     try:
         from rent_platform.modules.shop.router import handle_update as shop_handler
         register_module("shop", shop_handler)
     except Exception as e:
         log.exception("Failed to init module 'shop': %s", e)
-        # якщо хочеш щоб сервіс падав при проблемі модуля — re-raise
         raise
