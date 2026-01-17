@@ -27,14 +27,8 @@ def _get_or_create_dp(bot_token: str) -> Dispatcher:
 
     dp = Dispatcher()
 
-    # Тут ПІЗНІШЕ:
-    # 1) підключимо core/tenant_ctx middleware (визначити tenant)
-    # 2) підключимо platform handlers (оренда/налаштування)
-    # 3) підключимо modules/... routers динамічно через manifest/registry
-    #
-    # Example:
-    # from platform.handlers.start import router as platform_start_router
-    # dp.include_router(platform_start_router)
+    from platform.handlers.start import router as platform_router
+    dp.include_router(platform_router)
 
     _dispatchers[bot_token] = dp
     return dp
