@@ -1,23 +1,26 @@
 # rent_platform/config.py
+from __future__ import annotations
 
-from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    # === BOT / PLATFORM ===
-    BOT_TOKEN: str = Field(..., env="BOT_TOKEN")
+    # Telegram
+    BOT_TOKEN: str
+    WEBHOOK_URL: str  # https://your-app.up.railway.app
+    WEBHOOK_PATH: str = "/tg/webhook"
 
-    # === SERVER ===
-    PORT: int = Field(8080, env="PORT")
-    WEBHOOK_URL: str = Field(..., env="WEBHOOK_URL")
+    # Railway/Render/Heroku
+    PORT: int = 8080
 
-    # === ENV ===
-    ENV: str = Field("prod", env="ENV")
+    # dev flag
+    DEBUG: bool = False
 
-    class Config:
-        env_file = ".env"
-        extra = "ignore"
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 
 settings = Settings()
