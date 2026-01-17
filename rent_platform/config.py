@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     BOT_TOKEN: str
     WEBHOOK_URL: str  # https://your-app.up.railway.app
     WEBHOOK_PATH: str = "/tg/webhook"
+    DATABASE_URL: str
 
     # Tenant bots
     TENANT_WEBHOOK_PREFIX: str = "/tg/t"  # /tg/t/{bot_id}/{secret}
