@@ -192,7 +192,7 @@ class MyBotsFlow(StatesGroup):
 
 async def _render_my_bots(message: Message) -> None:
     user_id = message.from_user.id
-    items = list_bots(user_id)
+    items = await list_bots(user_id)
 
     if not items:
         await message.answer(
@@ -225,7 +225,7 @@ async def cb_my_bots(call: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     if call.message:
         user_id = call.from_user.id
-        items = list_bots(user_id)
+        items = await list_bots(user_id)
 
         if not items:
             await call.message.answer(
