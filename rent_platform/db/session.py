@@ -1,29 +1,30 @@
 from __future__ import annotations
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+import os
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy import text
 
-from rent_platform.config import settings
+DATABASE_URL = os.environ["DATABASE_URL"]
 
+# Railway зазвичай дає postgresql://, але async драйвер хоче +asyncpg
+if DATABASE_URL.startswith("postgresql://"):
+    ASYNC_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+elif DATABASE_URL.startswith("postgres://"):
+    ASYNC_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+else:
+    ASYNC_URL = DATABASE_URL
 
-def _fix_db_url(url: str) -> str:
-    # Railway часто дає postgres:// або postgresql://
-    if url.startswith("postgres://"):
-        return url.replace("postgres://", "postgresql+asyncpg://", 1)
-    if url.startswith("postgresql://"):
-        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    return url
-
-
-engine = create_async_engine(
-    _fix_db_url(settings.DATABASE_URL),
-    pool_pre_ping=True,
-)
-
-SessionLocal: async_sessionmaker[AsyncSession] = async_sessionmaker(
-    engine,
-    expire_on_commit=False,
-)
+engine = create_async_engine(ASYNC_URL, pool_pre_ping=True)
 
 
-async def get_session() -> AsyncSession:
-    return SessionLocal()
+async def db_fetch_one(query: str, params: dict) -> dict | None:
+    async with engine.connect() as conn:
+        res = await conn.execute(text(query), params)
+        row = res.mappings().first()
+        return dict(row) if row else None
+
+
+async def db_fetch_all(query: str, params: dict) -> list[dict]:
+    async with engine.connect() as conn:
+        res = await conn.execute(text(query), params)
+        return [dict(r) for r in res.mappings().all()]
