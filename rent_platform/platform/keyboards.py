@@ -103,3 +103,34 @@ def about_inline_kb() -> InlineKeyboardMarkup:
     )
     kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
     return kb.as_markup()
+    
+# === My bots ===
+
+def my_bots_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text="➕ Додати бота", callback_data="pl:my_bots:add"),
+        InlineKeyboardButton(text="🔄 Оновити", callback_data="pl:my_bots:refresh"),
+        width=2,
+    )
+    kb.row(
+        InlineKeyboardButton(text="⚙️ Налаштування (скоро)", callback_data="pl:my_bots:settings_stub"),
+        width=1,
+    )
+    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"), width=1)
+    return kb.as_markup()
+
+
+def my_bots_list_kb(items: list[dict]) -> InlineKeyboardMarkup:
+    """
+    items: [{"id": "...", "name": "..."}]
+    """
+    kb = InlineKeyboardBuilder()
+    for it in items:
+        bot_id = it["id"]
+        name = it.get("name") or "Bot"
+        kb.row(
+            InlineKeyboardButton(text=f"🗑 {name}", callback_data=f"pl:my_bots:del:{bot_id}")
+        )
+    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="pl:my_bots"), width=1)
+    return kb.as_markup()
