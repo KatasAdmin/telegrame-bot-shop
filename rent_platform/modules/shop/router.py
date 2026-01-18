@@ -1,4 +1,3 @@
-# rent_platform/modules/shop/router.py
 from __future__ import annotations
 
 from aiogram import Bot
@@ -8,25 +7,16 @@ from rent_platform.shared.utils import send_message
 
 
 async def handle_update(tenant: dict, update: dict, bot: Bot) -> bool:
-    """
-    Tenant module handler contract:
-      - tenant: dict з БД (id, bot_token, secret, ...)
-      - update: raw telegram update dict
-      - bot: готовий aiogram.Bot для цього tenant-а
-    Return True якщо апдейт оброблено модулем.
-    """
     message = update.get("message")
     if not message:
         return False
 
     text = (message.get("text") or "").strip()
-    chat = message.get("chat") or {}
-    chat_id = chat.get("id")
+    chat_id = (message.get("chat") or {}).get("id")
     if not chat_id:
         return False
 
-    tenant_id = tenant.get("id")  # в БД поле tenants.id
-    db = get_shop_db(tenant_id)
+    db = get_shop_db(tenant["id"])  # ✅ tenant id тепер в dict
 
     # --- старт магазину ---
     if text == "/shop":
@@ -36,7 +26,7 @@ async def handle_update(tenant: dict, update: dict, bot: Bot) -> bool:
             "🛒 <b>Ласкаво просимо в магазин!</b>\n\n"
             "Команди:\n"
             "/products — товари\n"
-            "/orders — мої замовлення",
+            "/orders — мої замовлення"
         )
         return True
 
@@ -53,12 +43,10 @@ async def handle_update(tenant: dict, update: dict, bot: Bot) -> bool:
         await send_message(bot, chat_id, "\n".join(lines))
         return True
 
-    # (на майбутнє) --- список замовлень ---
+    # --- замовлення (заглушка) ---
     if text == "/orders":
         if not db["orders"]:
             await send_message(bot, chat_id, "Замовлень ще немає 🙂")
             return True
-        await send_message(bot, chat_id, f"🧾 Замовлень: {len(db['orders'])}")
-        return True
 
     return False
