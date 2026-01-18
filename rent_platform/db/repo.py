@@ -328,24 +328,6 @@ class ModuleRepo:
         """
         rows = await db_fetch_all(q, {"tid": tenant_id})
         return [r["module_key"] for r in rows]
-    
-        @staticmethod
-        async def ensure_defaults(tenant_id: str, product_key: str | None = None) -> None:
-            """
-            Вмикаємо базові модулі для tenant-а.
-            core — завжди.
-            product_key — якщо оренда через маркетплейс, то увімкнути модуль продукту (module_key == product_key).
-            """
-        # core завжди
-            await ModuleRepo.enable(tenant_id, "core")
-
-        # продукт (якщо є)
-            if product_key:
-                await ModuleRepo.enable(tenant_id, product_key)
-                return
-
-        # fallback (якщо tenant створили "вручну" без продукту)
-            await ModuleRepo.enable(tenant_id, "shop")
 
     @staticmethod
     async def enable(tenant_id: str, module_key: str) -> None:
@@ -366,18 +348,19 @@ class ModuleRepo:
         """
         await db_execute(q, {"tid": tenant_id, "mk": module_key})
 
-        @staticmethod
-        async def ensure_defaults(tenant_id: str, product_key: str | None = None) -> None:
-        # core завжди
-            await ModuleRepo.enable(tenant_id, "core")
+    @staticmethod
+    async def ensure_defaults(tenant_id: str, product_key: str | None = None) -> None:
+        """
+        core — завжди
+        product_key — якщо оренда через маркетплейс, то увімкнути модуль продукту
+        fallback — якщо руками додали токен без продукту -> shop
+        """
+        await ModuleRepo.enable(tenant_id, "core")
 
-        # якщо продукт заданий — вмикаємо його модуль (ключ == module_key)
-            if product_key:
-                await ModuleRepo.enable(tenant_id, product_key)
-            else:
-            # fallback (якщо руками додали “просто токен”)
-            # можеш лишити або прибрати — як хочеш
-                await ModuleRepo.enable(tenant_id, "shop")
+        if product_key:
+            await ModuleRepo.enable(tenant_id, product_key)
+        else:
+            await ModuleRepo.enable(tenant_id, "shop")
 
     @staticmethod
     async def list_all(tenant_id: str) -> list[dict]:
