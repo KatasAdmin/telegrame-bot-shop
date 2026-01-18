@@ -1,13 +1,13 @@
-"""product_key + warnings + trial usage
+"""trial usage + product_key + warning timestamps
 
-Revision ID: 0006_product_key_warnings_trial
+Revision ID: 0006_trial_warnings_product_key
 Revises: 0005_tenant_display_name
 Create Date: 2026-01-18
 """
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0006_product_key_warnings_trial"
+revision = "0006_trial_warnings_product_key"
 down_revision = "0005_tenant_display_name"
 branch_labels = None
 depends_on = None
