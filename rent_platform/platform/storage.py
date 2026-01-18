@@ -80,12 +80,15 @@ async def delete_bot(user_id: int, bot_id: str) -> bool:
     if not row:
         return False
 
-    # ✅ soft delete
-    ok = await TenantRepo.soft_delete(owner_user_id=user_id, tenant_id=bot_id)
+    # 1) статус deleted (soft delete)
+    ok = await TenantRepo.soft_delete(user_id, bot_id)
     if not ok:
         return False
 
-    # ✅ зняти webhook, щоб Telegram перестав слати апдейти
+    # 2) провертаємо secret, щоб старі URL померли
+    await TenantRepo.rotate_secret(user_id, bot_id)
+
+    # 3) знімаємо webhook (щоб Telegram взагалі перестав слати апдейти)
     tenant_bot = Bot(token=row["bot_token"])
     try:
         await tenant_bot.delete_webhook(drop_pending_updates=True)
