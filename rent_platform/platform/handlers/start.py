@@ -392,7 +392,7 @@ async def _render_marketplace_pick_bot(message: Message) -> None:
 
     if not items:
         await message.answer(
-            "🧩 *Маркетплейс*\n\nПоки що немає продуктів.",
+            "🧩 *Маркетплейс*\n\nПоки що немає продуктів 🙂",
             parse_mode="Markdown",
             reply_markup=back_to_menu_kb(),
         )
@@ -401,6 +401,10 @@ async def _render_marketplace_pick_bot(message: Message) -> None:
     lines = ["🧩 *Маркетплейс ботів*", "", "Обери продукт 👇"]
     for it in items:
         lines.append(f"• *{it['title']}* — {it.get('short','')}")
+        rate = it.get("rate_per_min_uah", 0)
+        if rate:
+            lines.append(f"   ⏱ Тариф: *{rate} грн/хв*")
+
     await message.answer(
         "\n".join(lines),
         parse_mode="Markdown",
@@ -446,6 +450,80 @@ async def cb_marketplace_buy(call: CallbackQuery) -> None:
         reply_markup=back_to_menu_kb(),
     )
     await call.answer("Готово ✅")
+
+@router.callback_query(F.data.startswith("pl:prod:"))
+async def cb_product_open(call: CallbackQuery) -> None:
+    if not call.message:
+        await call.answer()
+        return
+
+    product_key = call.data.split("pl:prod:", 1)[1]
+    p = await get_marketplace_product(product_key)
+    if not p:
+        await call.answer("Не знайшов продукт", show_alert=True)
+        return
+
+    rate = p.get("rate_per_min_uah", 0)
+    rate_line = f"\n\n⏱ *Тариф:* {rate} грн/хв" if rate else ""
+
+    await call.message.answer(
+        f"{p['desc']}{rate_line}\n\n"
+        f"✅ Натисни *Купити*, щоб створити свою копію (BotFather token буде твій).",
+        parse_mode="Markdown",
+        reply_markup=marketplace_product_kb(product_key),
+    )
+    await call.answer()
+
+@router.callback_query(F.data.startswith("pl:buy:"))
+async def cb_product_buy(call: CallbackQuery, state: FSMContext) -> None:
+    if not call.message:
+        await call.answer()
+        return
+
+    product_key = call.data.split("pl:buy:", 1)[1]
+    p = await get_marketplace_product(product_key)
+    if not p:
+        await call.answer("Не знайшов продукт", show_alert=True)
+        return
+
+    await state.set_state(BuyFlow.waiting_token)
+    await state.update_data(buy_product_key=product_key)
+
+    await call.message.answer(
+        "✅ *Покупка: створення твоєї копії*\n\n"
+        "Встав *BotFather token* бота, який буде працювати як твоя копія цього продукту.\n"
+        "Формат: `123456:AA...`\n\n"
+        "⚠️ Не кидай токен у публічні чати.",
+        parse_mode="Markdown",
+        reply_markup=back_to_menu_kb(),
+    )
+    await call.answer()
+
+@router.message(BuyFlow.waiting_token, F.text)
+async def buy_receive_token(message: Message, state: FSMContext) -> None:
+    token = (message.text or "").strip()
+
+    if ":" not in token or len(token) < 20:
+        await message.answer("❌ Схоже на невалідний токен. Спробуй ще раз.")
+        return
+
+    data = await state.get_data()
+    product_key = data.get("buy_product_key")
+    p = await get_marketplace_product(product_key) if product_key else None
+
+    if not p:
+        await state.clear()
+        await message.answer("⚠️ Продукт не знайдено. Спробуй купити ще раз.", reply_markup=back_to_menu_kb())
+        return
+
+    # створюємо tenant як копію продукту (token — клієнта)
+    await add_bot(message.from_user.id, token=token, name=p["title"])
+
+    await state.clear()
+    await message.answer("✅ Готово! Копію створено. Тепер вона в «Мої боти» 👇")
+    await _render_my_bots(message)
+
+
 # ======================================================================
 # My Bots
 # ======================================================================
