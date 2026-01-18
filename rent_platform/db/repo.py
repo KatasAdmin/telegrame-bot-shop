@@ -26,41 +26,83 @@ class TenantRepo:
         ORDER BY created_ts DESC
         """
         rows = await db_fetch_all(q, {"uid": owner_user_id})
-        # name поки статичне (пізніше додамо поле name в tenants)
         return [
-            {"id": r["id"], "name": "Bot", "token": r["bot_token"], "secret": r["secret"], "status": r["status"]}
+            {
+                "id": r["id"],
+                "name": "Bot",
+                "token": r["bot_token"],
+                "secret": r["secret"],
+                "status": r["status"],
+            }
             for r in rows
         ]
 
     @staticmethod
     async def create(owner_user_id: int, bot_token: str) -> dict[str, Any]:
-        tenant_id = secrets.token_hex(4)        # короткий id
-        secret = secrets.token_urlsafe(24)      # довгий secret
+        tenant_id = secrets.token_hex(4)
+        secret = secrets.token_urlsafe(24)
         created_ts = int(time.time())
 
         q = """
         INSERT INTO tenants (id, owner_user_id, bot_token, secret, status, created_ts)
         VALUES (:id, :uid, :token, :secret, 'active', :ts)
         """
-        await db_execute(q, {"id": tenant_id, "uid": owner_user_id, "token": bot_token, "secret": secret, "ts": created_ts})
+        await db_execute(
+            q,
+            {"id": tenant_id, "uid": owner_user_id, "token": bot_token, "secret": secret, "ts": created_ts},
+        )
 
-        return {"id": tenant_id, "owner_user_id": owner_user_id, "bot_token": bot_token, "secret": secret, "status": "active"}
+        return {
+            "id": tenant_id,
+            "owner_user_id": owner_user_id,
+            "bot_token": bot_token,
+            "secret": secret,
+            "status": "active",
+        }
 
     @staticmethod
-    async def delete(owner_user_id: int, tenant_id: str) -> bool:
-        # перевіряємо власника
-        exists = await db_fetch_one(
+    async def get_token_secret_for_owner(owner_user_id: int, tenant_id: str) -> dict | None:
+        q = """
+        SELECT id, bot_token, secret, status
+        FROM tenants
+        WHERE id = :id AND owner_user_id = :uid
+        """
+        return await db_fetch_one(q, {"id": tenant_id, "uid": owner_user_id})
+
+    @staticmethod
+    async def set_status(owner_user_id: int, tenant_id: str, status: str) -> bool:
+        # status: active / paused / deleted (можеш додати expired пізніше)
+        q = """
+        UPDATE tenants
+        SET status = :st
+        WHERE id = :id AND owner_user_id = :uid
+        """
+        await db_execute(q, {"st": status, "id": tenant_id, "uid": owner_user_id})
+        # перевіримо що такий tenant існує
+        row = await db_fetch_one(
             "SELECT id FROM tenants WHERE id = :id AND owner_user_id = :uid",
             {"id": tenant_id, "uid": owner_user_id},
         )
-        if not exists:
-            return False
+        return bool(row)
 
-        await db_execute(
-            "DELETE FROM tenants WHERE id = :id AND owner_user_id = :uid",
+    @staticmethod
+    async def set_bot_token(owner_user_id: int, tenant_id: str, bot_token: str) -> bool:
+        q = """
+        UPDATE tenants
+        SET bot_token = :token
+        WHERE id = :id AND owner_user_id = :uid
+        """
+        await db_execute(q, {"token": bot_token, "id": tenant_id, "uid": owner_user_id})
+        row = await db_fetch_one(
+            "SELECT id FROM tenants WHERE id = :id AND owner_user_id = :uid",
             {"id": tenant_id, "uid": owner_user_id},
         )
-        return True
+        return bool(row)
+
+    @staticmethod
+    async def delete(owner_user_id: int, tenant_id: str) -> bool:
+        # ✅ soft delete
+        return await TenantRepo.set_status(owner_user_id, tenant_id, "deleted")
 
 
 class ModuleRepo:
@@ -77,7 +119,6 @@ class ModuleRepo:
 
     @staticmethod
     async def enable(tenant_id: str, module_key: str) -> None:
-        # upsert (бо uq_tenant_module)
         q = """
         INSERT INTO tenant_modules (tenant_id, module_key, enabled)
         VALUES (:tid, :mk, true)
@@ -97,6 +138,5 @@ class ModuleRepo:
 
     @staticmethod
     async def ensure_defaults(tenant_id: str) -> None:
-        # мінімум: core + shop (потім зробимо вибір у маркетплейсі)
         await ModuleRepo.enable(tenant_id, "core")
         await ModuleRepo.enable(tenant_id, "shop")
