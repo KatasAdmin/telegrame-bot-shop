@@ -1,3 +1,4 @@
+# rent_platform/platform/keyboards.py
 from __future__ import annotations
 
 from aiogram.types import (
@@ -6,9 +7,8 @@ from aiogram.types import (
     KeyboardButton,
     ReplyKeyboardMarkup,
 )
-
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
 
 # === Тексти кнопок (одним місцем) ===
 BTN_MARKETPLACE = "🧩 Маркетплейс"
@@ -182,8 +182,6 @@ def marketplace_modules_kb(bot_id: str, modules: list[dict]) -> InlineKeyboardMa
         key = m["key"]
         title = m.get("title") or key
         enabled = bool(m.get("enabled"))
-
-        # одна кнопка-тумблер
         btn_text = f"{'✅' if enabled else '➕'} {title}"
         kb.row(
             InlineKeyboardButton(
@@ -200,7 +198,8 @@ def marketplace_modules_kb(bot_id: str, modules: list[dict]) -> InlineKeyboardMa
     kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
     return kb.as_markup()
 
-#===== Гроші/ Оплати/ Крипта / Інше
+
+# === Гроші / оплата ===
 
 def cabinet_pay_kb(bot_id: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
