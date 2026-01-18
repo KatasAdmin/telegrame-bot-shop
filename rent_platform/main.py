@@ -25,6 +25,18 @@ dp.include_router(start_router)
 
 _webhook_inited = False
 
+# ✅ кеш tenant Bot-ів (на процес)
+_TENANT_BOTS: dict[str, Bot] = {}
+
+
+def _get_tenant_bot(tenant_id: str, token: str) -> Bot:
+    bot = _TENANT_BOTS.get(tenant_id)
+    if bot:
+        return bot
+    bot = Bot(token=token)
+    _TENANT_BOTS[tenant_id] = bot
+    return bot
+
 
 @app.on_event("startup")
 async def on_startup():
@@ -60,7 +72,23 @@ async def on_startup():
 
 @app.on_event("shutdown")
 async def on_shutdown():
+    # platform bot session
     await platform_bot.session.close()
+
+    # tenant bot sessions
+    for bot in _TENANT_BOTS.values():
+        try:
+            await bot.session.close()
+        except Exception:
+            pass
+    _TENANT_BOTS.clear()
+
+    # db engine dispose (якщо є)
+    try:
+        from rent_platform.db.session import engine
+        await engine.dispose()
+    except Exception:
+        pass
 
 
 @app.get("/")
@@ -89,13 +117,10 @@ async def tenant_webhook(bot_id: str, secret: str, req: Request):
     if tenant["secret"] != secret:
         raise HTTPException(status_code=403, detail="bad secret")
 
-    # створюємо tenant bot на льоту (потім оптимізуємо кешем)
-    tenant_bot = Bot(token=tenant["bot_token"])
+    tenant_bot = _get_tenant_bot(bot_id, tenant["bot_token"])
 
-    # які модулі ввімкнені
     enabled = await ModuleRepo.list_enabled(bot_id)
 
-    # проганяємо по модулях, поки хтось не “обробить”
     for module_key in enabled:
         handler = get_module(module_key)
         if not handler:
@@ -104,5 +129,4 @@ async def tenant_webhook(bot_id: str, secret: str, req: Request):
         if handled:
             break
 
-    await tenant_bot.session.close()
     return {"ok": True}
