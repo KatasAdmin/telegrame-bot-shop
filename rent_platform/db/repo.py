@@ -12,7 +12,8 @@ class TenantRepo:
     async def get_by_id(tenant_id: str) -> dict | None:
         q = """
         SELECT id, owner_user_id, bot_token, secret, status, created_ts,
-               plan_key, paid_until_ts, paused_reason
+                plan_key, paid_until_ts, paused_reason,
+                display_name
         FROM tenants
         WHERE id = :id
         """
@@ -22,7 +23,8 @@ class TenantRepo:
     async def list_by_owner(owner_user_id: int) -> list[dict[str, Any]]:
         q = """
         SELECT id, bot_token, secret, status, created_ts,
-               plan_key, paid_until_ts, paused_reason
+               plan_key, paid_until_ts, paused_reason,
+               display_name
         FROM tenants
         WHERE owner_user_id = :uid
         ORDER BY created_ts DESC
@@ -246,3 +248,19 @@ class TenantIntegrationRepo:
         DO UPDATE SET enabled = EXCLUDED.enabled, updated_ts = EXCLUDED.updated_ts
         """
         await db_execute(q, {"tid": tenant_id, "p": provider, "en": bool(enabled), "ts": int(time.time())})
+    
+    @staticmethod
+    async def set_display_name(owner_user_id: int, tenant_id: str, display_name: str) -> bool:
+        q = """
+        UPDATE tenants
+        SET display_name = :dn
+        WHERE id = :id AND owner_user_id = :uid
+        """
+        res = await db_execute(q, {"dn": display_name.strip()[:128], "id": tenant_id, "uid": owner_user_id})
+        if res is None:
+            row = await TenantRepo.get_token_secret_for_owner(owner_user_id, tenant_id)
+            return bool(row)
+        try:
+            return int(res) > 0
+        except Exception:
+            return True
