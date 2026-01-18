@@ -188,6 +188,33 @@ def marketplace_modules_kb(bot_id: str, modules: list[dict]) -> InlineKeyboardMa
     return kb.as_markup()
 
 
+def marketplace_products_kb(items: list[dict]) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for it in items:
+        kb.row(
+            InlineKeyboardButton(
+                text=f"{it['title']}",
+                callback_data=f"pl:mkp:open:{it['key']}",
+            )
+        )
+        kb.row(
+            InlineKeyboardButton(
+                text=f"⚡ {it.get('rate_per_min_uah', 0)} грн/хв",
+                callback_data=f"pl:mkp:open:{it['key']}",
+            )
+        )
+    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
+    return kb.as_markup()
+
+
+def marketplace_buy_kb(product_key: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="🛍 Купити з балансу", callback_data=f"pl:mkp:buy:{product_key}"))
+    kb.row(InlineKeyboardButton(text="💳 Купити банком (скоро)", callback_data="pl:noop"))
+    kb.row(InlineKeyboardButton(text="🪙 Купити криптою (скоро)", callback_data="pl:noop"))
+    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="pl:marketplace"))
+    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
+    return kb.as_markup()
 # === Cabinet pay ===
 
 def cabinet_pay_kb(bot_id: str) -> InlineKeyboardMarkup:
