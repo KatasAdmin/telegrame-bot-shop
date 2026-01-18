@@ -110,7 +110,8 @@ async def _maybe_apply_billing_pause(tenant: dict) -> tuple[bool, str | None]:
 
 @app.on_event("startup")
 async def on_startup():
-    global _webhook_inited
+    global _webhook_inited, _BILL_TASK
+
     logging.basicConfig(level=logging.INFO)
 
     init_tenants()
@@ -120,19 +121,30 @@ async def on_startup():
 
     webhook_full = settings.WEBHOOK_URL.rstrip("/") + settings.WEBHOOK_PATH
 
+    # 1) якщо webhook вже інітнули в цьому воркері — просто піднімаємо billing loop (якщо ще не піднятий)
     if _webhook_inited:
         log.info("Startup: webhook already inited in this worker")
+        if _BILL_TASK is None:
+            _BILL_TASK = asyncio.create_task(billing_loop(platform_bot, _BILL_STOP))
+            log.info("billing loop started")
         return
 
+    # 2) перевіряємо поточний webhook у Telegram
     try:
         info = await platform_bot.get_webhook_info()
         if (info.url or "").strip() == webhook_full:
             log.info("Webhook уже корректен: %s", webhook_full)
             _webhook_inited = True
+
+            if _BILL_TASK is None:
+                _BILL_TASK = asyncio.create_task(billing_loop(platform_bot, _BILL_STOP))
+                log.info("billing loop started")
+
             return
     except Exception as e:
         log.warning("getWebhookInfo failed: %s", e)
 
+    # 3) ставимо webhook
     await platform_bot.set_webhook(
         webhook_full,
         drop_pending_updates=False,
@@ -141,9 +153,23 @@ async def on_startup():
     _webhook_inited = True
     log.info("Webhook set to %s", webhook_full)
 
+    # 4) старт billing loop
+    if _BILL_TASK is None:
+        _BILL_TASK = asyncio.create_task(billing_loop(platform_bot, _BILL_STOP))
+        log.info("billing loop started")
+
 
 @app.on_event("shutdown")
 async def on_shutdown():
+    # ✅ stop billing loop
+    _BILL_STOP.set()
+    global _BILL_TASK
+    if _BILL_TASK:
+        try:
+            await _BILL_TASK
+        except Exception:
+            pass
+
     # platform bot session
     await platform_bot.session.close()
 
@@ -158,7 +184,6 @@ async def on_shutdown():
     # db engine dispose (якщо є)
     try:
         from rent_platform.db.session import engine
-
         await engine.dispose()
     except Exception:
         pass
