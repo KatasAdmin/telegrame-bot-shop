@@ -17,11 +17,10 @@ def _tenant_webhook_url(tenant_id: str, secret: str) -> str:
 
 
 # ======================================================================
-# My Bots
+# My bots
 # ======================================================================
 
 async def list_bots(user_id: int) -> list[dict]:
-    # repo вже повертає status/plan_key/paid_until_ts/paused_reason (як ти оновив)
     return await TenantRepo.list_by_owner(user_id)
 
 
@@ -100,10 +99,10 @@ async def delete_bot(user_id: int, bot_id: str) -> bool:
     if not ok:
         return False
 
-    # 2) rotate secret (щоб старі /tg/t/... URL точно померли)
+    # 2) rotate secret (щоб старі tenant URL точно померли)
     await TenantRepo.rotate_secret(user_id, bot_id)
 
-    # 3) знімаємо webhook (щоб Telegram взагалі перестав слати апдейти)
+    # 3) знімаємо webhook
     tenant_bot = Bot(token=row["bot_token"])
     try:
         await tenant_bot.delete_webhook(drop_pending_updates=True)
@@ -114,57 +113,15 @@ async def delete_bot(user_id: int, bot_id: str) -> bool:
 
 
 # ======================================================================
-# Cabinet
+# Marketplace (модулі)
 # ======================================================================
 
-async def get_cabinet(user_id: int) -> dict[str, Any]:
-    """
-    Кабінет — агрегує інфу по всім ботам юзера.
-    Тут поки що без оплат, але вже показуємо:
-    - статуси
-    - план
-    - paid_until_ts
-    - expired (прострочка)
-    - paused_reason
-    """
-    now = int(time.time())
-    bots = await TenantRepo.list_by_owner(user_id)
-
-    # нормалізуємо + рахуємо expired
-    out = []
-    for b in bots:
-        st = (b.get("status") or "active").lower()
-        paid_until = int(b.get("paid_until_ts") or 0)
-
-        # expired має сенс тільки якщо бот активний/paused і є paid_until
-        expired = False
-        if st in ("active", "paused") and paid_until and paid_until < now:
-            expired = True
-
-        out.append(
-            {
-                "id": b["id"],
-                "name": b.get("name") or "Bot",
-                "status": st,
-                "plan_key": b.get("plan_key") or "free",
-                "paid_until_ts": paid_until,
-                "paused_reason": b.get("paused_reason"),
-                "expired": expired,
-            }
-        )
-
-    return {"now": now, "bots": out}
-
-
-# ======================================================================
-# Marketplace (modules)
-# ======================================================================
-
-# Поки що "каталог" хардкодом. Далі підтягнемо з modules/*/manifest.py автоматом.
-MODULE_CATALOG: dict[str, dict] = {
+# Поки що каталог хардкодом.
+# Потім підтягнемо автоматом з modules/*/manifest.py.
+MODULE_CATALOG: dict[str, dict[str, Any]] = {
     "core": {
         "title": "🧠 Core",
-        "desc": "Базові команди /start, системні штуки",
+        "desc": "Базові команди /start та системні штуки",
         "price_month": 0,
     },
     "shop": {
@@ -176,7 +133,7 @@ MODULE_CATALOG: dict[str, dict] = {
 
 
 async def list_bot_modules(user_id: int, bot_id: str) -> dict | None:
-    # перевіряємо власника
+    # перевіряємо доступ (власник)
     row = await TenantRepo.get_token_secret_for_owner(user_id, bot_id)
     if not row:
         return None
@@ -184,9 +141,9 @@ async def list_bot_modules(user_id: int, bot_id: str) -> dict | None:
     current = await ModuleRepo.list_all(bot_id)
     enabled = {x["module_key"] for x in current if x["enabled"]}
 
-    result = []
+    modules: list[dict[str, Any]] = []
     for key, meta in MODULE_CATALOG.items():
-        result.append(
+        modules.append(
             {
                 "key": key,
                 "title": meta["title"],
@@ -196,7 +153,7 @@ async def list_bot_modules(user_id: int, bot_id: str) -> dict | None:
             }
         )
 
-    return {"bot_id": bot_id, "status": row.get("status"), "modules": result}
+    return {"bot_id": bot_id, "status": row.get("status"), "modules": modules}
 
 
 async def enable_module(user_id: int, bot_id: str, module_key: str) -> bool:
@@ -223,9 +180,56 @@ async def disable_module(user_id: int, bot_id: str, module_key: str) -> bool:
     if not row:
         return False
 
-    # core краще не вимикати, щоб не "вбити" /start
+    # core краще не вимикати, щоб не "вбити" /start у tenant-бота
     if module_key == "core":
         return False
 
     await ModuleRepo.disable(bot_id, module_key)
     return True
+
+
+# ======================================================================
+# Cabinet
+# ======================================================================
+
+async def get_cabinet(user_id: int) -> dict[str, Any]:
+    """
+    Повертає дані для Кабінету:
+    {
+      "now": 123,
+      "bots": [
+         {
+           "id": "...",
+           "name": "Bot",
+           "status": "active|paused|deleted",
+           "plan_key": "free|basic|...",
+           "paid_until_ts": 0|int,
+           "paused_reason": "manual|billing|...",
+           "expired": bool
+         }, ...
+      ]
+    }
+    """
+    now = int(time.time())
+    items = await TenantRepo.list_by_owner(user_id)
+
+    bots: list[dict[str, Any]] = []
+    for it in items:
+        plan = (it.get("plan_key") or "free")
+        paid_until = int(it.get("paid_until_ts") or 0)
+
+        expired = bool(paid_until and paid_until < now)
+
+        bots.append(
+            {
+                "id": it["id"],
+                "name": it.get("name") or "Bot",
+                "status": (it.get("status") or "active"),
+                "plan_key": plan,
+                "paid_until_ts": paid_until,
+                "paused_reason": it.get("paused_reason"),
+                "expired": expired,
+            }
+        )
+
+    return {"now": now, "bots": bots}
