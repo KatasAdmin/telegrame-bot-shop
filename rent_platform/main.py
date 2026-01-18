@@ -26,6 +26,7 @@ platform_bot = Bot(token=settings.BOT_TOKEN)
 dp = Dispatcher()
 
 from rent_platform.platform.handlers.start import router as start_router  # noqa: E402
+
 dp.include_router(start_router)
 
 _webhook_inited = False
@@ -154,6 +155,7 @@ async def on_shutdown():
     # db engine dispose (якщо є)
     try:
         from rent_platform.db.session import engine
+
         await engine.dispose()
     except Exception:
         pass
