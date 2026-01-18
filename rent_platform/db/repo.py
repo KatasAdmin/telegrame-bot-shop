@@ -288,10 +288,18 @@ class ModuleRepo:
         """
         await db_execute(q, {"tid": tenant_id, "mk": module_key})
 
-    @staticmethod
-    async def ensure_defaults(tenant_id: str) -> None:
-        await ModuleRepo.enable(tenant_id, "core")
-        await ModuleRepo.enable(tenant_id, "shop")
+        @staticmethod
+        async def ensure_defaults(tenant_id: str, product_key: str | None = None) -> None:
+        # core завжди
+            await ModuleRepo.enable(tenant_id, "core")
+
+        # якщо продукт заданий — вмикаємо його модуль (ключ == module_key)
+            if product_key:
+                await ModuleRepo.enable(tenant_id, product_key)
+            else:
+            # fallback (якщо руками додали “просто токен”)
+            # можеш лишити або прибрати — як хочеш
+                await ModuleRepo.enable(tenant_id, "shop")
 
     @staticmethod
     async def list_all(tenant_id: str) -> list[dict]:
