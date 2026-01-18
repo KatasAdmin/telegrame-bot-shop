@@ -38,11 +38,26 @@ async def list_bots(user_id: int) -> list[dict]:
     return await TenantRepo.list_by_owner(user_id)
 
 
-async def add_bot(user_id: int, token: str, name: str = "Bot") -> dict:
+async def add_bot(user_id: int, token: str, name: str = "Bot", product_key: str | None = None) -> dict:
+    """
+    Створює tenant-а (орендований бот) і одразу виставляє webhook на tenant endpoint.
+    product_key: якщо tenant створено з маркетплейсу — зберігаємо який саме продукт купили.
+    """
     tenant = await TenantRepo.create(owner_user_id=user_id, bot_token=token)
+
+    # display name
     await TenantRepo.set_display_name(user_id, tenant["id"], name)
 
+    # привʼязка продукту (важливо для tenant modules)
+    if product_key:
+        await TenantRepo.set_product_key(user_id, tenant["id"], product_key)
+
+    # дефолтні модулі
     await ModuleRepo.ensure_defaults(tenant["id"])
+
+    # модуль під конкретний продукт
+    if product_key == "shop_bot":
+        await ModuleRepo.enable(tenant["id"], "shop_bot")
 
     url = _tenant_webhook_url(tenant["id"], tenant["secret"])
     tenant_bot = Bot(token=token)
@@ -55,7 +70,7 @@ async def add_bot(user_id: int, token: str, name: str = "Bot") -> dict:
     finally:
         await tenant_bot.session.close()
 
-    return {"id": tenant["id"], "name": name, "status": tenant["status"]}
+    return {"id": tenant["id"], "name": name, "status": tenant["status"], "product_key": product_key}
 
 
 async def pause_bot(user_id: int, bot_id: str) -> bool:
@@ -139,10 +154,10 @@ PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
             "Ти додаєш свої ключі Mono/Privat/CryptoBot — гроші йдуть тобі.\n\n"
             "_Критичні ключі платформи сховані._"
         ),
-        # тариф для списання з балансу (поки просто число, далі прив’яжемо до billing)
-        "rate_per_min_uah": 0.02,  # 2 коп/хв як приклад
+        "rate_per_min_uah": 0.02,
     },
 }
+
 
 async def list_marketplace_products() -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
@@ -157,6 +172,7 @@ async def list_marketplace_products() -> list[dict[str, Any]]:
         )
     return items
 
+
 async def get_marketplace_product(product_key: str) -> dict[str, Any] | None:
     meta = PRODUCT_CATALOG.get(product_key)
     if not meta:
@@ -167,6 +183,7 @@ async def get_marketplace_product(product_key: str) -> dict[str, Any] | None:
         "desc": meta["desc"],
         "rate_per_min_uah": meta.get("rate_per_min_uah", 0),
     }
+
 
 async def buy_product(user_id: int, product_key: str) -> dict[str, Any] | None:
     """
@@ -183,6 +200,7 @@ async def buy_product(user_id: int, product_key: str) -> dict[str, Any] | None:
         "desc": meta["desc"],
         "rate_per_min_uah": meta.get("rate_per_min_uah", 0),
     }
+
 
 # ======================================================================
 # Cabinet
@@ -233,24 +251,9 @@ async def create_payment_link(user_id: int, bot_id: str, months: int = 1) -> dic
 # ======================================================================
 
 SUPPORTED_PROVIDERS: dict[str, dict[str, Any]] = {
-    "mono": {
-        "title": "🏦 Mono",
-        "secrets": [
-            ("mono.token", "Mono API token"),
-        ],
-    },
-    "privat": {
-        "title": "🏦 Privat",
-        "secrets": [
-            ("privat.token", "Privat API token"),
-        ],
-    },
-    "cryptobot": {
-        "title": "🪙 CryptoBot",
-        "secrets": [
-            ("cryptobot.token", "CryptoBot token"),
-        ],
-    },
+    "mono": {"title": "🏦 Mono", "secrets": [("mono.token", "Mono API token")]},
+    "privat": {"title": "🏦 Privat", "secrets": [("privat.token", "Privat API token")]},
+    "cryptobot": {"title": "🪙 CryptoBot", "secrets": [("cryptobot.token", "CryptoBot token")]},
 }
 
 
@@ -261,7 +264,6 @@ async def get_bot_config(user_id: int, bot_id: str) -> dict | None:
     if (row.get("status") or "").lower() == "deleted":
         return None
 
-    # інтеграції
     ints = await TenantIntegrationRepo.list_all(bot_id)
     enabled_map = {x["provider"]: bool(x["enabled"]) for x in ints}
 
@@ -302,7 +304,6 @@ async def toggle_integration(user_id: int, bot_id: str, provider: str) -> bool:
 
 
 async def set_bot_secret(user_id: int, bot_id: str, secret_key: str, secret_value: str) -> bool:
-    # секрет має бути з нашого whitelist
     allowed = set()
     for meta in SUPPORTED_PROVIDERS.values():
         for sk, _lbl in meta["secrets"]:
