@@ -84,7 +84,11 @@ async def marketplace_text(message: Message) -> None:
 
 @router.message(F.text == BTN_CABINET)
 async def cabinet_text(message: Message) -> None:
-    await _render_cabinet(message)
+    try:
+        await _render_cabinet(message)
+    except Exception as e:
+        log.exception("cabinet failed: %s", e)
+        await message.answer("⚠️ Кабінет тимчасово впав. Я вже бачу помилку в логах 🙂", reply_markup=back_to_menu_kb())
 
 
 @router.message(F.text == BTN_PARTNERS)
@@ -132,9 +136,12 @@ async def cb_marketplace(call: CallbackQuery) -> None:
 @router.callback_query(F.data == "pl:cabinet")
 async def cb_cabinet(call: CallbackQuery) -> None:
     if call.message:
-        await _render_cabinet(call.message)
+        try:
+            await _render_cabinet(call.message)
+        except Exception as e:
+            log.exception("cb_cabinet failed: %s", e)
+            await call.message.answer("⚠️ Кабінет тимчасово впав.", reply_markup=back_to_menu_kb())
     await call.answer()
-
 
 @router.callback_query(F.data == "pl:partners")
 async def cb_partners(call: CallbackQuery) -> None:
@@ -182,6 +189,11 @@ async def cb_partners_sub(call: CallbackQuery) -> None:
 # ======================================================================
 # Кабінет
 # ======================================================================
+
+def _fmt_ts(ts: int) -> str:
+    if not ts:
+        return "—"
+    return datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d %H:%M")
 
 async def _render_cabinet(message: Message) -> None:
     user_id = message.from_user.id
