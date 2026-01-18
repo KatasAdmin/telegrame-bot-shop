@@ -8,7 +8,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "0007_billing_balance_ledger"
-down_revision = "0006_product_key_warnings_trial"
+down_revision = "0006_trial_warnings_product_key"
 branch_labels = None
 depends_on = None
 
