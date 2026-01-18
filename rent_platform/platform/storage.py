@@ -119,74 +119,76 @@ async def delete_bot(user_id: int, bot_id: str) -> bool:
 
 
 # ======================================================================
-# Marketplace (модулі)
+# Marketplace (продукти)
 # ======================================================================
 
-MODULE_CATALOG: dict[str, dict[str, Any]] = {
-    "core": {
-        "title": "🧠 Core",
-        "desc": "Базові команди /start та системні штуки",
-        "price_month": 0,
-    },
-    "shop": {
-        "title": "🛒 Shop",
-        "desc": "Магазин: товари/замовлення (MVP)",
-        "price_month": 100,
+# Манекен-продукт (перший “товар” в маркетплейсі)
+PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
+    "shop_bot": {
+        "title": "🛒 Luna Shop Bot",
+        "short": "Магазин-бот: товари, кошик, замовлення (MVP)",
+        "desc": (
+            "🛒 *Luna Shop Bot*\n\n"
+            "Це готовий бот-магазин, який ти береш в оренду і налаштовуєш під себе.\n\n"
+            "*Що вміє (MVP):*\n"
+            "• Каталог / категорії / товари\n"
+            "• Кошик + оформлення\n"
+            "• Замовлення + статуси\n\n"
+            "*Оплати (режим 2):*\n"
+            "Ти додаєш свої ключі Mono/Privat/CryptoBot — гроші йдуть тобі.\n\n"
+            "_Критичні ключі платформи сховані._"
+        ),
+        # тариф для списання з балансу (поки просто число, далі прив’яжемо до billing)
+        "rate_per_min_uah": 0.02,  # 2 коп/хв як приклад
     },
 }
 
-
-async def list_bot_modules(user_id: int, bot_id: str) -> dict | None:
-    row = await TenantRepo.get_token_secret_for_owner(user_id, bot_id)
-    if not row:
-        return None
-
-    current = await ModuleRepo.list_all(bot_id)
-    enabled = {x["module_key"] for x in current if x["enabled"]}
-
-    modules: list[dict[str, Any]] = []
-    for key, meta in MODULE_CATALOG.items():
-        modules.append(
+async def list_marketplace_products() -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for key, meta in PRODUCT_CATALOG.items():
+        items.append(
             {
                 "key": key,
                 "title": meta["title"],
-                "desc": meta["desc"],
-                "price_month": meta["price_month"],
-                "enabled": key in enabled,
+                "short": meta["short"],
+                "rate_per_min_uah": meta.get("rate_per_min_uah", 0),
             }
         )
+    return items
 
-    return {"bot_id": bot_id, "status": row.get("status"), "modules": modules}
+async def get_marketplace_product(product_key: str) -> dict[str, Any] | None:
+    meta = PRODUCT_CATALOG.get(product_key)
+    if not meta:
+        return None
+    return {
+        "key": product_key,
+        "title": meta["title"],
+        "desc": meta["desc"],
+        "rate_per_min_uah": meta.get("rate_per_min_uah", 0),
+    }
 
+async def buy_product(user_id: int, product_key: str) -> dict | None:
+    """
+    MVP-покупка:
+    створюємо tenant (бот-інстанс) і прив’язуємо product_key в plan_key (тимчасово)
+    потім plan_key замінимо на окреме поле product_key.
+    """
+    meta = PRODUCT_CATALOG.get(product_key)
+    if not meta:
+        return None
 
-async def enable_module(user_id: int, bot_id: str, module_key: str) -> bool:
-    if module_key not in MODULE_CATALOG:
-        return False
+    # ⚠️ Тут ПОКИ що ми створюємо tenant без реального токена,
+    # бо “орендований бот” — це твій runtime, не BotFather token.
+    # В MVP просто створимо запис і покажемо в “Мої боти”.
+    tenant = await TenantRepo.create(owner_user_id=user_id, bot_token="__RENTED_RUNTIME__")
 
-    row = await TenantRepo.get_token_secret_for_owner(user_id, bot_id)
-    if not row:
-        return False
+    # використовуємо plan_key як product_key тимчасово (щоб не робити міграцію прямо зараз)
+    await TenantRepo.set_plan_key(user_id, tenant["id"], product_key)  # якщо нема — скажеш, дам repo метод
 
-    if (row.get("status") or "").lower() == "deleted":
-        return False
+    # дефолтні модулі/налаштування лишаємо як є (core тощо)
+    await ModuleRepo.ensure_defaults(tenant["id"])
 
-    await ModuleRepo.enable(bot_id, module_key)
-    return True
-
-
-async def disable_module(user_id: int, bot_id: str, module_key: str) -> bool:
-    if module_key not in MODULE_CATALOG:
-        return False
-
-    row = await TenantRepo.get_token_secret_for_owner(user_id, bot_id)
-    if not row:
-        return False
-
-    if module_key == "core":
-        return False
-
-    await ModuleRepo.disable(bot_id, module_key)
-    return True
+    return {"id": tenant["id"], "name": meta["title"], "status": tenant["status"], "product_key": product_key}
 
 
 # ======================================================================
