@@ -21,6 +21,8 @@ from rent_platform.platform.keyboards import (
     back_to_menu_kb,
     partners_inline_kb,
     about_inline_kb,
+    marketplace_products_kb,
+    marketplace_product_kb,
     cabinet_pay_kb,
     config_kb,
     BTN_MARKETPLACE,
