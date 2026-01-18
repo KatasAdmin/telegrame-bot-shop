@@ -9,7 +9,7 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
-# === Тексти кнопок ===
+# === Тексти кнопок (одним місцем, щоб потім легко міняти/локалізувати) ===
 BTN_MARKETPLACE = "🧩 Маркетплейс"
 BTN_MY_BOTS = "🤖 Мої боти"
 BTN_CABINET = "👤 Кабінет"
@@ -98,39 +98,56 @@ def my_bots_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="🔄 Оновити", callback_data="pl:my_bots:refresh"),
         width=2,
     )
+    kb.row(
+        InlineKeyboardButton(text="⚙️ Налаштування (скоро)", callback_data="pl:my_bots:settings_stub"),
+        width=1,
+    )
     kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"), width=1)
     return kb.as_markup()
 
 
 def my_bots_list_kb(items: list[dict]) -> InlineKeyboardMarkup:
     """
-    items: [{"id": "...", "name": "...", "status": "..."}]
+    items: [{"id": "...", "name": "...", "status": "active|paused|deleted"}]
+    Робимо “керування” по кожному боту:
+    - active: pause + delete
+    - paused: resume + delete
+    - deleted: noop (тільки напис)
     """
     kb = InlineKeyboardBuilder()
 
     for it in items:
         bot_id = it["id"]
         name = it.get("name") or "Bot"
-        status = (it.get("status") or "active").lower()
+        st = (it.get("status") or "active").lower()
 
-        # 1) рядок: назва + статус
+        # 1) Заголовок-рядок (не тиснеться, просто "noop")
+        badge = "✅ active" if st == "active" else ("⏸ paused" if st == "paused" else ("🗑 deleted" if st == "deleted" else st))
         kb.row(
             InlineKeyboardButton(
-                text=f"🤖 {name} • {status}",
-                callback_data=f"pl:my_bots:open:{bot_id}",
-            ),
-            width=1,
+                text=f"🤖 {name} — {badge}",
+                callback_data=f"pl:my_bots:noop:{bot_id}",
+            )
         )
 
-        # 2) рядок: дії
-        actions = InlineKeyboardBuilder()
-        if status == "active":
-            actions.add(InlineKeyboardButton(text="⏸ Пауза", callback_data=f"pl:my_bots:pause:{bot_id}"))
-        elif status == "paused":
-            actions.add(InlineKeyboardButton(text="▶️ Відновити", callback_data=f"pl:my_bots:resume:{bot_id}"))
-
-        actions.add(InlineKeyboardButton(text="🗑 Видалити", callback_data=f"pl:my_bots:del:{bot_id}"))
-        kb.row(*actions.buttons, width=2)
+        # 2) Кнопки дій
+        if st == "active":
+            kb.row(
+                InlineKeyboardButton(text="⏸ Пауза", callback_data=f"pl:my_bots:pause:{bot_id}"),
+                InlineKeyboardButton(text="🗑 Видалити", callback_data=f"pl:my_bots:del:{bot_id}"),
+                width=2,
+            )
+        elif st == "paused":
+            kb.row(
+                InlineKeyboardButton(text="▶️ Відновити", callback_data=f"pl:my_bots:resume:{bot_id}"),
+                InlineKeyboardButton(text="🗑 Видалити", callback_data=f"pl:my_bots:del:{bot_id}"),
+                width=2,
+            )
+        else:
+            # deleted або інший статус — не даємо зайвих дій
+            kb.row(
+                InlineKeyboardButton(text="🙂 (недоступно)", callback_data=f"pl:my_bots:noop:{bot_id}")
+            )
 
     kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="pl:my_bots"), width=1)
     return kb.as_markup()
