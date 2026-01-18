@@ -29,9 +29,9 @@ class TenantRepo:
         return [
             {
                 "id": r["id"],
-                "name": "Bot",
-                "token": r["bot_token"],
-                "secret": r["secret"],
+                "name": "Bot",  # пізніше додамо поле name
+                "token": r["bot_token"],  # ⚠️ у UI не показуємо
+                "secret": r["secret"],    # ⚠️ у UI не показуємо
                 "status": r["status"],
             }
             for r in rows
@@ -60,6 +60,7 @@ class TenantRepo:
             "status": "active",
         }
 
+    # ✅ потрібне для pause/resume/delete (щоб дістати токен/secret і переконатися що це власник)
     @staticmethod
     async def get_token_secret_for_owner(owner_user_id: int, tenant_id: str) -> dict | None:
         q = """
@@ -71,37 +72,25 @@ class TenantRepo:
 
     @staticmethod
     async def set_status(owner_user_id: int, tenant_id: str, status: str) -> bool:
-        # status: active / paused / deleted (можеш додати expired пізніше)
         q = """
         UPDATE tenants
         SET status = :st
         WHERE id = :id AND owner_user_id = :uid
         """
-        await db_execute(q, {"st": status, "id": tenant_id, "uid": owner_user_id})
-        # перевіримо що такий tenant існує
-        row = await db_fetch_one(
-            "SELECT id FROM tenants WHERE id = :id AND owner_user_id = :uid",
-            {"id": tenant_id, "uid": owner_user_id},
-        )
-        return bool(row)
+        res = await db_execute(q, {"st": status, "id": tenant_id, "uid": owner_user_id})
+        # db_execute у тебе може повертати rowcount або None.
+        # Якщо None — просто перевіримо, що tenant існує.
+        if res is None:
+            exists = await TenantRepo.get_token_secret_for_owner(owner_user_id, tenant_id)
+            return bool(exists)
+        try:
+            return int(res) > 0
+        except Exception:
+            return True
 
+    # ✅ SOFT delete (нічого не видаляємо фізично)
     @staticmethod
-    async def set_bot_token(owner_user_id: int, tenant_id: str, bot_token: str) -> bool:
-        q = """
-        UPDATE tenants
-        SET bot_token = :token
-        WHERE id = :id AND owner_user_id = :uid
-        """
-        await db_execute(q, {"token": bot_token, "id": tenant_id, "uid": owner_user_id})
-        row = await db_fetch_one(
-            "SELECT id FROM tenants WHERE id = :id AND owner_user_id = :uid",
-            {"id": tenant_id, "uid": owner_user_id},
-        )
-        return bool(row)
-
-    @staticmethod
-    async def delete(owner_user_id: int, tenant_id: str) -> bool:
-        # ✅ soft delete
+    async def soft_delete(owner_user_id: int, tenant_id: str) -> bool:
         return await TenantRepo.set_status(owner_user_id, tenant_id, "deleted")
 
 
