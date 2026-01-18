@@ -117,11 +117,13 @@ async def tenant_webhook(bot_id: str, secret: str, req: Request):
     if tenant["secret"] != secret:
         raise HTTPException(status_code=403, detail="bad secret")
 
-    # ✅ ВАЖЛИВО: tenant активний?
+    # 🔒 ВАЖЛИВО: якщо бот на паузі / видалений / не оплачений
     if tenant.get("status") != "active":
-        raise HTTPException(status_code=404, detail="tenant inactive")
+        # Telegram отримає 200 і не буде ретраїв
+        return {"ok": True}
 
     tenant_bot = _get_tenant_bot(bot_id, tenant["bot_token"])
+
     enabled = await ModuleRepo.list_enabled(bot_id)
 
     for module_key in enabled:
