@@ -104,7 +104,8 @@ async def cmd_start(message: Message) -> None:
 # ======================================================================
 
 @router.message(F.text == BTN_MARKETPLACE)
-async def marketplace_text(message: Message) -> None:
+async def marketplace_text(message: Message, state: FSMContext) -> None:
+    await state.clear()
     await _render_marketplace_pick_bot(message)
 
 
@@ -470,9 +471,17 @@ async def mkp_receive_token(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     product_key = data.get("mkp_product_key")
 
-    if ":" not in token or len(token) < 20:
-        await message.answer("❌ Схоже на невалідний токен. Спробуй ще раз.")
+    if not product_key:
+        await state.clear()
+        await message.answer(
+            "⚠️ Стан покупки загубився. Зайди в Маркетплейс і натисни «Купити» ще раз.",
+            reply_markup=back_to_menu_kb(),
+        )
         return
+
+        if ":" not in token or len(token) < 20:
+            await message.answer("❌ Схоже на невалідний токен. Спробуй ще раз.")
+            return
 
     # створюємо tenant нормально (з webhook), бо це реальний токен
     p = await get_marketplace_product(product_key)
