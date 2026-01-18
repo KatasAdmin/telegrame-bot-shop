@@ -40,19 +40,27 @@ async def list_bots(user_id: int) -> list[dict]:
 
 
 async def add_bot(user_id: int, token: str, name: str = "Bot", product_key: str | None = None) -> dict:
+    """
+    Створює tenant (орендованого бота), вмикає базові модулі та модуль продукту,
+    ставить webhook на tenant-url.
+    """
     tenant = await TenantRepo.create(owner_user_id=user_id, bot_token=token)
 
-    # display name
+    # ім'я в UI
     await TenantRepo.set_display_name(user_id, tenant["id"], name)
 
-    # product key (який продукт орендований)
+    # ✅ Фундамент: модулі вмикаємо напряму, без ensure_defaults (щоб не ламалось)
+    await ModuleRepo.enable(tenant["id"], "core")
+
     if product_key:
+        # оренда з маркетплейсу -> вмикаємо модуль продукту
         await TenantRepo.set_product_key(user_id, tenant["id"], product_key)
+        await ModuleRepo.enable(tenant["id"], product_key)
+    else:
+        # ручне додавання -> підключимо дефолтний shop, якщо треба
+        await ModuleRepo.enable(tenant["id"], "shop")
 
-    # модулі по продукту
-    await ModuleRepo.ensure_defaults(tenant["id"], product_key=product_key)
-
-    # webhook
+    # webhook tenant-а
     url = _tenant_webhook_url(tenant["id"], tenant["secret"])
     tenant_bot = Bot(token=token)
     try:
@@ -65,7 +73,6 @@ async def add_bot(user_id: int, token: str, name: str = "Bot", product_key: str 
         await tenant_bot.session.close()
 
     return {"id": tenant["id"], "name": name, "status": tenant["status"], "product_key": product_key}
-
 
 async def pause_bot(user_id: int, bot_id: str) -> bool:
     row = await TenantRepo.get_token_secret_for_owner(user_id, bot_id)
