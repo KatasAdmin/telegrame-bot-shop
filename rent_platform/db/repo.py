@@ -12,8 +12,9 @@ class TenantRepo:
     async def get_by_id(tenant_id: str) -> dict | None:
         q = """
         SELECT id, owner_user_id, bot_token, secret, status, created_ts,
-                plan_key, paid_until_ts, paused_reason,
-                display_name
+               plan_key, paid_until_ts, paused_reason,
+               display_name,
+               product_key, warned_24h_ts, warned_3h_ts
         FROM tenants
         WHERE id = :id
         """
@@ -22,9 +23,19 @@ class TenantRepo:
     @staticmethod
     async def list_by_owner(owner_user_id: int) -> list[dict[str, Any]]:
         q = """
-        SELECT id, bot_token, secret, status, created_ts,
-               plan_key, paid_until_ts, paused_reason,
-               display_name
+        SELECT
+            id,
+            bot_token,
+            secret,
+            status,
+            created_ts,
+            plan_key,
+            paid_until_ts,
+            paused_reason,
+            display_name,
+            product_key,
+            warned_24h_ts,
+            warned_3h_ts
         FROM tenants
         WHERE owner_user_id = :uid
         ORDER BY created_ts DESC
@@ -40,23 +51,41 @@ class TenantRepo:
                 "plan_key": r.get("plan_key") or "free",
                 "paid_until_ts": int(r.get("paid_until_ts") or 0),
                 "paused_reason": r.get("paused_reason"),
+                "product_key": r.get("product_key"),
+                "warned_24h_ts": int(r.get("warned_24h_ts") or 0),
+                "warned_3h_ts": int(r.get("warned_3h_ts") or 0),
             }
             for r in rows
         ]
 
     @staticmethod
-    async def create(owner_user_id: int, bot_token: str) -> dict[str, Any]:
+    async def create(owner_user_id: int, bot_token: str, display_name: str = "Bot") -> dict[str, Any]:
         tenant_id = secrets.token_hex(4)
         secret = secrets.token_urlsafe(24)
         created_ts = int(time.time())
 
         q = """
-        INSERT INTO tenants (id, owner_user_id, bot_token, secret, status, created_ts, plan_key, paid_until_ts)
-        VALUES (:id, :uid, :token, :secret, 'active', :ts, 'free', 0)
+        INSERT INTO tenants (
+            id, owner_user_id, bot_token, secret, status, created_ts,
+            plan_key, paid_until_ts,
+            display_name
+        )
+        VALUES (
+            :id, :uid, :token, :secret, 'active', :ts,
+            'free', 0,
+            :dn
+        )
         """
         await db_execute(
             q,
-            {"id": tenant_id, "uid": owner_user_id, "token": bot_token, "secret": secret, "ts": created_ts},
+            {
+                "id": tenant_id,
+                "uid": owner_user_id,
+                "token": bot_token,
+                "secret": secret,
+                "ts": created_ts,
+                "dn": (display_name or "Bot").strip()[:128],
+            },
         )
 
         return {
@@ -68,12 +97,20 @@ class TenantRepo:
             "plan_key": "free",
             "paid_until_ts": 0,
             "paused_reason": None,
+            "display_name": (display_name or "Bot").strip()[:128],
+            "product_key": None,
+            "warned_24h_ts": 0,
+            "warned_3h_ts": 0,
         }
 
     @staticmethod
     async def get_token_secret_for_owner(owner_user_id: int, tenant_id: str) -> dict | None:
         q = """
-        SELECT id, bot_token, secret, status, plan_key, paid_until_ts, paused_reason
+        SELECT
+            id, bot_token, secret,
+            status, plan_key, paid_until_ts, paused_reason,
+            display_name,
+            product_key, warned_24h_ts, warned_3h_ts
         FROM tenants
         WHERE id = :id AND owner_user_id = :uid
         """
@@ -107,8 +144,8 @@ class TenantRepo:
         SET secret = :sec
         WHERE id = :id AND owner_user_id = :uid
         """
-        ok = await db_execute(q, {"sec": new_secret, "id": tenant_id, "uid": owner_user_id})
-        if ok is None:
+        res = await db_execute(q, {"sec": new_secret, "id": tenant_id, "uid": owner_user_id})
+        if res is None:
             row = await TenantRepo.get_token_secret_for_owner(owner_user_id, tenant_id)
             return new_secret if row else None
         return new_secret
@@ -128,6 +165,68 @@ class TenantRepo:
             return int(res) > 0
         except Exception:
             return True
+
+    @staticmethod
+    async def set_display_name(owner_user_id: int, tenant_id: str, display_name: str) -> bool:
+        q = """
+        UPDATE tenants
+        SET display_name = :dn
+        WHERE id = :id AND owner_user_id = :uid
+        """
+        res = await db_execute(
+            q,
+            {"dn": (display_name or "Bot").strip()[:128], "id": tenant_id, "uid": owner_user_id},
+        )
+        if res is None:
+            row = await TenantRepo.get_token_secret_for_owner(owner_user_id, tenant_id)
+            return bool(row)
+        try:
+            return int(res) > 0
+        except Exception:
+            return True
+
+    @staticmethod
+    async def set_product_key(owner_user_id: int, tenant_id: str, product_key: str | None) -> bool:
+        q = """
+        UPDATE tenants
+        SET product_key = :pk
+        WHERE id = :id AND owner_user_id = :uid
+        """
+        res = await db_execute(q, {"pk": product_key, "id": tenant_id, "uid": owner_user_id})
+        return res is None or int(res) > 0
+
+    @staticmethod
+    async def set_warned(owner_user_id: int, tenant_id: str, kind: str, ts: int) -> bool:
+        if kind not in ("24h", "3h"):
+            return False
+        col = "warned_24h_ts" if kind == "24h" else "warned_3h_ts"
+        q = f"""
+        UPDATE tenants
+        SET {col} = :ts
+        WHERE id = :id AND owner_user_id = :uid
+        """
+        res = await db_execute(q, {"ts": int(ts), "id": tenant_id, "uid": owner_user_id})
+        return res is None or int(res) > 0
+
+    @staticmethod
+    async def trial_used(owner_user_id: int, product_key: str) -> bool:
+        q = """
+        SELECT 1
+        FROM tenant_trial_usage
+        WHERE owner_user_id = :uid AND product_key = :pk
+        """
+        row = await db_fetch_one(q, {"uid": owner_user_id, "pk": product_key})
+        return bool(row)
+
+    @staticmethod
+    async def mark_trial_used(owner_user_id: int, product_key: str, first_used_ts: int) -> None:
+        q = """
+        INSERT INTO tenant_trial_usage (owner_user_id, product_key, first_used_ts)
+        VALUES (:uid, :pk, :ts)
+        ON CONFLICT (owner_user_id, product_key)
+        DO NOTHING
+        """
+        await db_execute(q, {"uid": owner_user_id, "pk": product_key, "ts": int(first_used_ts)})
 
 
 class ModuleRepo:
@@ -228,7 +327,14 @@ class TenantIntegrationRepo:
         ORDER BY provider
         """
         rows = await db_fetch_all(q, {"tid": tenant_id})
-        return [{"provider": r["provider"], "enabled": bool(r["enabled"]), "updated_ts": int(r.get("updated_ts") or 0)} for r in rows]
+        return [
+            {
+                "provider": r["provider"],
+                "enabled": bool(r["enabled"]),
+                "updated_ts": int(r.get("updated_ts") or 0),
+            }
+            for r in rows
+        ]
 
     @staticmethod
     async def get(tenant_id: str, provider: str) -> dict | None:
@@ -248,19 +354,3 @@ class TenantIntegrationRepo:
         DO UPDATE SET enabled = EXCLUDED.enabled, updated_ts = EXCLUDED.updated_ts
         """
         await db_execute(q, {"tid": tenant_id, "p": provider, "en": bool(enabled), "ts": int(time.time())})
-    
-    @staticmethod
-    async def set_display_name(owner_user_id: int, tenant_id: str, display_name: str) -> bool:
-        q = """
-        UPDATE tenants
-        SET display_name = :dn
-        WHERE id = :id AND owner_user_id = :uid
-        """
-        res = await db_execute(q, {"dn": display_name.strip()[:128], "id": tenant_id, "uid": owner_user_id})
-        if res is None:
-            row = await TenantRepo.get_token_secret_for_owner(owner_user_id, tenant_id)
-            return bool(row)
-        try:
-            return int(res) > 0
-        except Exception:
-            return True
