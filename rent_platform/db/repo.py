@@ -1,4 +1,3 @@
-# rent_platform/db/repo.py
 from __future__ import annotations
 
 import secrets
@@ -32,9 +31,9 @@ class TenantRepo:
         return [
             {
                 "id": r["id"],
-                "name": "Bot",  # пізніше додамо поле name
-                "token": r["bot_token"],  # ⚠️ у UI не показуємо
-                "secret": r["secret"],    # ⚠️ у UI не показуємо
+                "name": "Bot",
+                "token": r["bot_token"],   # ⚠️ у UI не показуємо
+                "secret": r["secret"],     # ⚠️ у UI не показуємо
                 "status": r["status"],
                 "plan_key": r.get("plan_key") or "free",
                 "paid_until_ts": int(r.get("paid_until_ts") or 0),
@@ -50,8 +49,8 @@ class TenantRepo:
         created_ts = int(time.time())
 
         q = """
-        INSERT INTO tenants (id, owner_user_id, bot_token, secret, status, created_ts, plan_key, paid_until_ts, paused_reason)
-        VALUES (:id, :uid, :token, :secret, 'active', :ts, 'free', 0, NULL)
+        INSERT INTO tenants (id, owner_user_id, bot_token, secret, status, created_ts, plan_key, paid_until_ts)
+        VALUES (:id, :uid, :token, :secret, 'active', :ts, 'free', 0)
         """
         await db_execute(
             q,
@@ -106,8 +105,8 @@ class TenantRepo:
         SET secret = :sec
         WHERE id = :id AND owner_user_id = :uid
         """
-        res = await db_execute(q, {"sec": new_secret, "id": tenant_id, "uid": owner_user_id})
-        if res is None:
+        ok = await db_execute(q, {"sec": new_secret, "id": tenant_id, "uid": owner_user_id})
+        if ok is None:
             row = await TenantRepo.get_token_secret_for_owner(owner_user_id, tenant_id)
             return new_secret if row else None
         return new_secret
@@ -142,17 +141,6 @@ class ModuleRepo:
         return [r["module_key"] for r in rows]
 
     @staticmethod
-    async def list_all(tenant_id: str) -> list[dict]:
-        q = """
-        SELECT module_key, enabled
-        FROM tenant_modules
-        WHERE tenant_id = :tid
-        ORDER BY module_key
-        """
-        rows = await db_fetch_all(q, {"tid": tenant_id})
-        return [{"module_key": r["module_key"], "enabled": bool(r["enabled"])} for r in rows]
-
-    @staticmethod
     async def enable(tenant_id: str, module_key: str) -> None:
         q = """
         INSERT INTO tenant_modules (tenant_id, module_key, enabled)
@@ -175,3 +163,86 @@ class ModuleRepo:
     async def ensure_defaults(tenant_id: str) -> None:
         await ModuleRepo.enable(tenant_id, "core")
         await ModuleRepo.enable(tenant_id, "shop")
+
+    @staticmethod
+    async def list_all(tenant_id: str) -> list[dict]:
+        q = """
+        SELECT module_key, enabled
+        FROM tenant_modules
+        WHERE tenant_id = :tid
+        ORDER BY module_key
+        """
+        rows = await db_fetch_all(q, {"tid": tenant_id})
+        return [{"module_key": r["module_key"], "enabled": bool(r["enabled"])} for r in rows]
+
+
+class TenantSecretRepo:
+    @staticmethod
+    async def list_keys(tenant_id: str) -> list[str]:
+        q = """
+        SELECT secret_key
+        FROM tenant_secrets
+        WHERE tenant_id = :tid
+        ORDER BY secret_key
+        """
+        rows = await db_fetch_all(q, {"tid": tenant_id})
+        return [r["secret_key"] for r in rows]
+
+    @staticmethod
+    async def get(tenant_id: str, secret_key: str) -> dict | None:
+        q = """
+        SELECT tenant_id, secret_key, secret_value, updated_ts
+        FROM tenant_secrets
+        WHERE tenant_id = :tid AND secret_key = :k
+        """
+        return await db_fetch_one(q, {"tid": tenant_id, "k": secret_key})
+
+    @staticmethod
+    async def upsert(tenant_id: str, secret_key: str, secret_value: str) -> None:
+        q = """
+        INSERT INTO tenant_secrets (tenant_id, secret_key, secret_value, updated_ts)
+        VALUES (:tid, :k, :v, :ts)
+        ON CONFLICT (tenant_id, secret_key)
+        DO UPDATE SET secret_value = EXCLUDED.secret_value, updated_ts = EXCLUDED.updated_ts
+        """
+        await db_execute(q, {"tid": tenant_id, "k": secret_key, "v": secret_value, "ts": int(time.time())})
+
+    @staticmethod
+    async def delete(tenant_id: str, secret_key: str) -> None:
+        q = """
+        DELETE FROM tenant_secrets
+        WHERE tenant_id = :tid AND secret_key = :k
+        """
+        await db_execute(q, {"tid": tenant_id, "k": secret_key})
+
+
+class TenantIntegrationRepo:
+    @staticmethod
+    async def list_all(tenant_id: str) -> list[dict]:
+        q = """
+        SELECT provider, enabled, updated_ts
+        FROM tenant_integrations
+        WHERE tenant_id = :tid
+        ORDER BY provider
+        """
+        rows = await db_fetch_all(q, {"tid": tenant_id})
+        return [{"provider": r["provider"], "enabled": bool(r["enabled"]), "updated_ts": int(r.get("updated_ts") or 0)} for r in rows]
+
+    @staticmethod
+    async def get(tenant_id: str, provider: str) -> dict | None:
+        q = """
+        SELECT provider, enabled, updated_ts
+        FROM tenant_integrations
+        WHERE tenant_id = :tid AND provider = :p
+        """
+        return await db_fetch_one(q, {"tid": tenant_id, "p": provider})
+
+    @staticmethod
+    async def set_enabled(tenant_id: str, provider: str, enabled: bool) -> None:
+        q = """
+        INSERT INTO tenant_integrations (tenant_id, provider, enabled, updated_ts)
+        VALUES (:tid, :p, :en, :ts)
+        ON CONFLICT (tenant_id, provider)
+        DO UPDATE SET enabled = EXCLUDED.enabled, updated_ts = EXCLUDED.updated_ts
+        """
+        await db_execute(q, {"tid": tenant_id, "p": provider, "en": bool(enabled), "ts": int(time.time())})
