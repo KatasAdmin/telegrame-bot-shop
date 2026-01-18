@@ -1,6 +1,9 @@
+# rent_platform/platform/handlers/start.py
 from __future__ import annotations
 
 import logging
+import time
+from datetime import datetime
 
 from aiogram import Router, F
 from aiogram.filters import CommandStart
@@ -26,14 +29,18 @@ from rent_platform.platform.keyboards import (
     BTN_HELP,
 )
 from rent_platform.platform.storage import (
+    # my bots
     list_bots,
     add_bot,
     delete_bot,
     pause_bot,
     resume_bot,
+    # marketplace
     list_bot_modules,
     enable_module,
     disable_module,
+    # cabinet
+    get_cabinet,
 )
 
 log = logging.getLogger(__name__)
@@ -66,7 +73,9 @@ async def cmd_start(message: Message) -> None:
     await _send_main_menu(message)
 
 
-# ===== Reply-кнопки (текст) =====
+# ======================================================================
+# Reply-кнопки (текст)
+# ======================================================================
 
 @router.message(F.text == BTN_MARKETPLACE)
 async def marketplace_text(message: Message) -> None:
@@ -75,16 +84,7 @@ async def marketplace_text(message: Message) -> None:
 
 @router.message(F.text == BTN_CABINET)
 async def cabinet_text(message: Message) -> None:
-    await message.answer(
-        "👤 *Кабінет*\n\n"
-        "Тут буде:\n"
-        "• тариф і дата завершення\n"
-        "• рахунок на оплату / історія оплат\n"
-        "• баланс / бонуси (пізніше)\n\n"
-        "Поки що заглушка 🙂",
-        parse_mode="Markdown",
-        reply_markup=back_to_menu_kb(),
-    )
+    await _render_cabinet(message)
 
 
 @router.message(F.text == BTN_PARTNERS)
@@ -111,7 +111,9 @@ async def support_text(message: Message) -> None:
     )
 
 
-# ===== Callback (inline) =====
+# ======================================================================
+# Callback (inline)
+# ======================================================================
 
 @router.callback_query(F.data == "pl:menu")
 async def cb_menu(call: CallbackQuery) -> None:
@@ -130,11 +132,7 @@ async def cb_marketplace(call: CallbackQuery) -> None:
 @router.callback_query(F.data == "pl:cabinet")
 async def cb_cabinet(call: CallbackQuery) -> None:
     if call.message:
-        await call.message.answer(
-            "👤 *Кабінет*\n\n(заглушка, далі — тариф/рахунки/оплата)",
-            parse_mode="Markdown",
-            reply_markup=back_to_menu_kb(),
-        )
+        await _render_cabinet(call.message)
     await call.answer()
 
 
@@ -181,7 +179,76 @@ async def cb_partners_sub(call: CallbackQuery) -> None:
     await call.answer()
 
 
-# ===== Marketplace (модулі) =====
+# ======================================================================
+# Кабінет
+# ======================================================================
+
+def _fmt_ts(ts: int) -> str:
+    if not ts:
+        return "—"
+    # локально без таймзон — ок для MVP (потім зробимо TZ)
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+
+
+async def _render_cabinet(message: Message) -> None:
+    user_id = message.from_user.id
+    data = await get_cabinet(user_id)
+
+    now = int(data.get("now") or time.time())
+    bots = data.get("bots") or []
+
+    if not bots:
+        await message.answer(
+            "👤 *Кабінет*\n\n"
+            "Поки що в тебе немає підключених ботів.\n"
+            "Перейди в **Мої боти** і додай токен.\n\n"
+            "_Далі тут буде: тариф/оплата/рахунки/бонуси._",
+            parse_mode="Markdown",
+            reply_markup=back_to_menu_kb(),
+        )
+        return
+
+    lines = [
+        "👤 *Кабінет*",
+        "",
+        f"🕒 Зараз: `{_fmt_ts(now)}`",
+        "",
+        "*Твої боти і статуси:*",
+    ]
+
+    for i, b in enumerate(bots, 1):
+        st = (b.get("status") or "active").lower()
+        plan = (b.get("plan_key") or "free")
+        paid_until = int(b.get("paid_until_ts") or 0)
+        expired = bool(b.get("expired"))
+        paused_reason = b.get("paused_reason")
+
+        badge = "✅ active" if st == "active" else ("⏸ paused" if st == "paused" else ("🗑 deleted" if st == "deleted" else st))
+        pay_str = _fmt_ts(paid_until)
+        pay_note = " ⚠️ *прострочено*" if expired else ""
+
+        extra = ""
+        if paused_reason:
+            extra = f" (reason: `{paused_reason}`)"
+
+        lines.append(
+            f"{i}) **{b.get('name','Bot')}** — {badge}{extra}\n"
+            f"   • plan: `{plan}`\n"
+            f"   • paid_until: `{pay_str}`{pay_note}\n"
+            f"   • id: `{b['id']}`"
+        )
+
+    lines += [
+        "",
+        "_Далі додамо: оплату/плани, авто-паузу при 0 балансі, рахунки та історію платежів._",
+    ]
+
+    await message.answer("\n".join(lines), parse_mode="Markdown", reply_markup=back_to_menu_kb())
+
+
+# ======================================================================
+# Marketplace (модулі)
+# ======================================================================
 
 async def _render_marketplace_pick_bot(message: Message) -> None:
     user_id = message.from_user.id
@@ -248,7 +315,6 @@ async def cb_marketplace_toggle(call: CallbackQuery) -> None:
         await call.answer()
         return
 
-    # формат: pl:mp:tg:<bot_id>:<module_key>
     payload = call.data.split("pl:mp:tg:", 1)[1]
     try:
         bot_id, module_key = payload.split(":", 1)
@@ -258,7 +324,6 @@ async def cb_marketplace_toggle(call: CallbackQuery) -> None:
 
     user_id = call.from_user.id
 
-    # дізнаємось поточний стан
     info = await list_bot_modules(user_id, bot_id)
     if not info:
         await call.message.answer("⚠️ Не знайшов бота або нема доступу.")
@@ -271,17 +336,11 @@ async def cb_marketplace_toggle(call: CallbackQuery) -> None:
         return
 
     modules = info["modules"]
-    current = None
-    for m in modules:
-        if m["key"] == module_key:
-            current = m
-            break
-
+    current = next((m for m in modules if m["key"] == module_key), None)
     if not current:
         await call.answer("Невідомий модуль")
         return
 
-    # toggle
     if current["enabled"]:
         ok = await disable_module(user_id, bot_id, module_key)
         if not ok:
@@ -295,7 +354,6 @@ async def cb_marketplace_toggle(call: CallbackQuery) -> None:
         else:
             await call.answer("Увімкнув ✅")
 
-    # перерендеримо екран бота
     new_info = await list_bot_modules(user_id, bot_id)
     if new_info and call.message:
         new_modules = new_info["modules"]
@@ -312,7 +370,9 @@ async def cb_marketplace_toggle(call: CallbackQuery) -> None:
         )
 
 
-# ===== My Bots =====
+# ======================================================================
+# My Bots
+# ======================================================================
 
 class MyBotsFlow(StatesGroup):
     waiting_token = State()
