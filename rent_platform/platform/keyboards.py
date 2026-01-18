@@ -271,3 +271,35 @@ def marketplace_buy_kb(product_key: str) -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="pl:marketplace"))
     kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
     return kb.as_markup()
+
+def marketplace_products_kb(items: list[dict]) -> InlineKeyboardMarkup:
+    """
+    items: [{"key","title","short","rate_per_min_uah"}]
+    callback: pl:prod:<product_key>
+    """
+    kb = InlineKeyboardBuilder()
+    for it in items:
+        kb.row(
+            InlineKeyboardButton(
+                text=it["title"],
+                callback_data=f"pl:prod:{it['key']}",
+            )
+        )
+    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
+    return kb.as_markup()
+
+
+def marketplace_product_kb(product_key: str) -> InlineKeyboardMarkup:
+    """
+    Кнопки під карткою продукту
+    """
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text="✅ Купити (створити копію)", callback_data=f"pl:buy:{product_key}")
+    )
+    kb.row(
+        InlineKeyboardButton(text="⬅️ До маркетплейсу", callback_data="pl:marketplace"),
+        InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"),
+        width=2,
+    )
+    return kb.as_markup()
