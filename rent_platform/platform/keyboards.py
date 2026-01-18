@@ -9,7 +9,7 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
-# === Тексти кнопок (одним місцем, щоб потім легко міняти/локалізувати) ===
+# === Тексти кнопок (одним місцем) ===
 BTN_MARKETPLACE = "🧩 Маркетплейс"
 BTN_MY_BOTS = "🤖 Мої боти"
 BTN_CABINET = "👤 Кабінет"
@@ -109,10 +109,6 @@ def my_bots_kb() -> InlineKeyboardMarkup:
 def my_bots_list_kb(items: list[dict]) -> InlineKeyboardMarkup:
     """
     items: [{"id": "...", "name": "...", "status": "active|paused|deleted"}]
-    Робимо “керування” по кожному боту:
-    - active: pause + delete
-    - paused: resume + delete
-    - deleted: noop (тільки напис)
     """
     kb = InlineKeyboardBuilder()
 
@@ -121,8 +117,13 @@ def my_bots_list_kb(items: list[dict]) -> InlineKeyboardMarkup:
         name = it.get("name") or "Bot"
         st = (it.get("status") or "active").lower()
 
-        # 1) Заголовок-рядок (не тиснеться, просто "noop")
-        badge = "✅ active" if st == "active" else ("⏸ paused" if st == "paused" else ("🗑 deleted" if st == "deleted" else st))
+        badge = (
+            "✅ active" if st == "active"
+            else "⏸ paused" if st == "paused"
+            else "🗑 deleted" if st == "deleted"
+            else st
+        )
+
         kb.row(
             InlineKeyboardButton(
                 text=f"🤖 {name} — {badge}",
@@ -130,7 +131,6 @@ def my_bots_list_kb(items: list[dict]) -> InlineKeyboardMarkup:
             )
         )
 
-        # 2) Кнопки дій
         if st == "active":
             kb.row(
                 InlineKeyboardButton(text="⏸ Пауза", callback_data=f"pl:my_bots:pause:{bot_id}"),
@@ -144,10 +144,57 @@ def my_bots_list_kb(items: list[dict]) -> InlineKeyboardMarkup:
                 width=2,
             )
         else:
-            # deleted або інший статус — не даємо зайвих дій
             kb.row(
                 InlineKeyboardButton(text="🙂 (недоступно)", callback_data=f"pl:my_bots:noop:{bot_id}")
             )
 
     kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="pl:my_bots"), width=1)
+    return kb.as_markup()
+
+
+# === Marketplace (модулі) ===
+
+def marketplace_bots_kb(items: list[dict]) -> InlineKeyboardMarkup:
+    """
+    Список ботів для входу в маркетплейс (обрати бота і керувати модулями).
+    callback: pl:mp:bot:<bot_id>
+    """
+    kb = InlineKeyboardBuilder()
+    for it in items:
+        bot_id = it["id"]
+        name = it.get("name") or "Bot"
+        st = (it.get("status") or "active").lower()
+        badge = "✅" if st == "active" else ("⏸" if st == "paused" else "🗑")
+        kb.row(InlineKeyboardButton(text=f"{badge} {name} (id: {bot_id})", callback_data=f"pl:mp:bot:{bot_id}"))
+    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
+    return kb.as_markup()
+
+
+def marketplace_modules_kb(bot_id: str, modules: list[dict]) -> InlineKeyboardMarkup:
+    """
+    modules: [{"key","title","enabled",...}]
+    callback toggle: pl:mp:tg:<bot_id>:<module_key>
+    """
+    kb = InlineKeyboardBuilder()
+
+    for m in modules:
+        key = m["key"]
+        title = m.get("title") or key
+        enabled = bool(m.get("enabled"))
+
+        # одна кнопка-тумблер
+        btn_text = f"{'✅' if enabled else '➕'} {title}"
+        kb.row(
+            InlineKeyboardButton(
+                text=btn_text,
+                callback_data=f"pl:mp:tg:{bot_id}:{key}",
+            )
+        )
+
+    kb.row(
+        InlineKeyboardButton(text="🔄 Оновити", callback_data=f"pl:mp:bot:{bot_id}"),
+        InlineKeyboardButton(text="⬅️ До ботів", callback_data="pl:marketplace"),
+        width=2,
+    )
+    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
     return kb.as_markup()
