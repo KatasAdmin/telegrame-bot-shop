@@ -6,8 +6,9 @@ from aiogram.types import (
     KeyboardButton,
     ReplyKeyboardMarkup,
 )
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # === Тексти кнопок (одним місцем) ===
 BTN_MARKETPLACE = "🧩 Маркетплейс"
@@ -196,5 +197,13 @@ def marketplace_modules_kb(bot_id: str, modules: list[dict]) -> InlineKeyboardMa
         InlineKeyboardButton(text="⬅️ До ботів", callback_data="pl:marketplace"),
         width=2,
     )
+    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
+    return kb.as_markup()
+
+#===== Гроші/ Оплати/ Крипта / Інше
+
+def cabinet_pay_kb(bot_id: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="💳 Оплатити (1 міс)", callback_data=f"pl:pay:{bot_id}:1"))
     kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
     return kb.as_markup()
