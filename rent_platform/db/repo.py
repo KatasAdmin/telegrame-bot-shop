@@ -1,3 +1,4 @@
+# rent_platform/db/repo.py
 from __future__ import annotations
 
 import secrets
@@ -78,7 +79,12 @@ class TenantRepo:
         return await db_fetch_one(q, {"id": tenant_id, "uid": owner_user_id})
 
     @staticmethod
-    async def set_status(owner_user_id: int, tenant_id: str, status: str, paused_reason: str | None = None) -> bool:
+    async def set_status(
+        owner_user_id: int,
+        tenant_id: str,
+        status: str,
+        paused_reason: str | None = None,
+    ) -> bool:
         q = """
         UPDATE tenants
         SET status = :st, paused_reason = :pr
@@ -105,14 +111,19 @@ class TenantRepo:
         SET secret = :sec
         WHERE id = :id AND owner_user_id = :uid
         """
-        ok = await db_execute(q, {"sec": new_secret, "id": tenant_id, "uid": owner_user_id})
-        if ok is None:
+        res = await db_execute(q, {"sec": new_secret, "id": tenant_id, "uid": owner_user_id})
+        if res is None:
             row = await TenantRepo.get_token_secret_for_owner(owner_user_id, tenant_id)
             return new_secret if row else None
         return new_secret
 
     @staticmethod
-    async def set_paid_until(owner_user_id: int, tenant_id: str, paid_until_ts: int, plan_key: str = "basic") -> bool:
+    async def set_paid_until(
+        owner_user_id: int,
+        tenant_id: str,
+        paid_until_ts: int,
+        plan_key: str = "basic",
+    ) -> bool:
         q = """
         UPDATE tenants
         SET paid_until_ts = :p, plan_key = :plan
@@ -141,6 +152,17 @@ class ModuleRepo:
         return [r["module_key"] for r in rows]
 
     @staticmethod
+    async def list_all(tenant_id: str) -> list[dict]:
+        q = """
+        SELECT module_key, enabled
+        FROM tenant_modules
+        WHERE tenant_id = :tid
+        ORDER BY module_key
+        """
+        rows = await db_fetch_all(q, {"tid": tenant_id})
+        return [{"module_key": r["module_key"], "enabled": bool(r["enabled"])} for r in rows]
+
+    @staticmethod
     async def enable(tenant_id: str, module_key: str) -> None:
         q = """
         INSERT INTO tenant_modules (tenant_id, module_key, enabled)
@@ -161,16 +183,6 @@ class ModuleRepo:
 
     @staticmethod
     async def ensure_defaults(tenant_id: str) -> None:
+        # мінімум: core + shop
         await ModuleRepo.enable(tenant_id, "core")
         await ModuleRepo.enable(tenant_id, "shop")
-
-        @staticmethod
-    async def list_all(tenant_id: str) -> list[dict]:
-        q = """
-        SELECT module_key, enabled
-        FROM tenant_modules
-        WHERE tenant_id = :tid
-        ORDER BY module_key
-        """
-        rows = await db_fetch_all(q, {"tid": tenant_id})
-        return [{"module_key": r["module_key"], "enabled": bool(r["enabled"])} for r in rows]
