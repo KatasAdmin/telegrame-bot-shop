@@ -7,6 +7,9 @@ import time
 from fastapi import FastAPI, Request, HTTPException
 from aiogram import Bot, Dispatcher
 from aiogram.types import Update
+import asyncio
+
+from rent_platform.core.billing import billing_loop
 
 from rent_platform.config import settings
 from rent_platform.core.modules import init_modules
