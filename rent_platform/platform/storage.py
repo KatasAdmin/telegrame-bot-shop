@@ -1,6 +1,9 @@
 # rent_platform/platform/storage.py
 from __future__ import annotations
 
+import time
+from typing import Any
+
 from aiogram import Bot
 
 from rent_platform.config import settings
@@ -13,9 +16,12 @@ def _tenant_webhook_url(tenant_id: str, secret: str) -> str:
     return f"{base}{prefix}/{tenant_id}/{secret}"
 
 
-# ===== My bots =====
+# ======================================================================
+# My Bots
+# ======================================================================
 
 async def list_bots(user_id: int) -> list[dict]:
+    # repo вже повертає status/plan_key/paid_until_ts/paused_reason (як ти оновив)
     return await TenantRepo.list_by_owner(user_id)
 
 
@@ -107,7 +113,53 @@ async def delete_bot(user_id: int, bot_id: str) -> bool:
     return True
 
 
-# ===== Marketplace (модулі) =====
+# ======================================================================
+# Cabinet
+# ======================================================================
+
+async def get_cabinet(user_id: int) -> dict[str, Any]:
+    """
+    Кабінет — агрегує інфу по всім ботам юзера.
+    Тут поки що без оплат, але вже показуємо:
+    - статуси
+    - план
+    - paid_until_ts
+    - expired (прострочка)
+    - paused_reason
+    """
+    now = int(time.time())
+    bots = await TenantRepo.list_by_owner(user_id)
+
+    # нормалізуємо + рахуємо expired
+    out = []
+    for b in bots:
+        st = (b.get("status") or "active").lower()
+        paid_until = int(b.get("paid_until_ts") or 0)
+
+        # expired має сенс тільки якщо бот активний/paused і є paid_until
+        expired = False
+        if st in ("active", "paused") and paid_until and paid_until < now:
+            expired = True
+
+        out.append(
+            {
+                "id": b["id"],
+                "name": b.get("name") or "Bot",
+                "status": st,
+                "plan_key": b.get("plan_key") or "free",
+                "paid_until_ts": paid_until,
+                "paused_reason": b.get("paused_reason"),
+                "expired": expired,
+            }
+        )
+
+    return {"now": now, "bots": out}
+
+
+# ======================================================================
+# Marketplace (modules)
+# ======================================================================
+
 # Поки що "каталог" хардкодом. Далі підтягнемо з modules/*/manifest.py автоматом.
 MODULE_CATALOG: dict[str, dict] = {
     "core": {
