@@ -183,13 +183,6 @@ async def cb_partners_sub(call: CallbackQuery) -> None:
 # Кабінет
 # ======================================================================
 
-def _fmt_ts(ts: int) -> str:
-    if not ts:
-        return "—"
-    # локально без таймзон — ок для MVP (потім зробимо TZ)
-    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
-
-
 async def _render_cabinet(message: Message) -> None:
     user_id = message.from_user.id
     data = await get_cabinet(user_id)
@@ -198,22 +191,21 @@ async def _render_cabinet(message: Message) -> None:
     bots = data.get("bots") or []
 
     if not bots:
-        await message.answer(
-            "👤 *Кабінет*\n\n"
+        text = (
+            "👤 Кабінет\n\n"
             "Поки що в тебе немає підключених ботів.\n"
-            "Перейди в **Мої боти** і додай токен.\n\n"
-            "_Далі тут буде: тариф/оплата/рахунки/бонуси._",
-            parse_mode="Markdown",
-            reply_markup=back_to_menu_kb(),
+            "Перейди в «Мої боти» і додай токен.\n\n"
+            "Далі тут буде: тариф/оплата/рахунки/бонуси."
         )
+        await message.answer(text, reply_markup=back_to_menu_kb())
         return
 
     lines = [
-        "👤 *Кабінет*",
+        "👤 Кабінет",
         "",
-        f"🕒 Зараз: `{_fmt_ts(now)}`",
+        f"🕒 Зараз: {_fmt_ts(now)}",
         "",
-        "*Твої боти і статуси:*",
+        "Твої боти і статуси:",
     ]
 
     for i, b in enumerate(bots, 1):
@@ -225,26 +217,23 @@ async def _render_cabinet(message: Message) -> None:
 
         badge = "✅ active" if st == "active" else ("⏸ paused" if st == "paused" else ("🗑 deleted" if st == "deleted" else st))
         pay_str = _fmt_ts(paid_until)
-        pay_note = " ⚠️ *прострочено*" if expired else ""
-
-        extra = ""
-        if paused_reason:
-            extra = f" (reason: `{paused_reason}`)"
+        pay_note = " ⚠️ прострочено" if expired else ""
+        extra = f" (reason: {paused_reason})" if paused_reason else ""
 
         lines.append(
-            f"{i}) **{b.get('name','Bot')}** — {badge}{extra}\n"
-            f"   • plan: `{plan}`\n"
-            f"   • paid_until: `{pay_str}`{pay_note}\n"
-            f"   • id: `{b['id']}`"
+            f"{i}) {b.get('name','Bot')} — {badge}{extra}\n"
+            f"   • plan: {plan}\n"
+            f"   • paid_until: {pay_str}{pay_note}\n"
+            f"   • id: {b['id']}"
         )
 
     lines += [
         "",
-        "_Далі додамо: оплату/плани, авто-паузу при 0 балансі, рахунки та історію платежів._",
+        "Далі додамо: оплату/плани, авто-паузу при 0 балансі, рахунки та історію платежів.",
     ]
 
-    await message.answer("\n".join(lines), parse_mode="Markdown", reply_markup=back_to_menu_kb())
-
+    # ❗️ВАЖЛИВО: без parse_mode
+    await message.answer("\n".join(lines), reply_markup=back_to_menu_kb())
 
 # ======================================================================
 # Marketplace (модулі)
