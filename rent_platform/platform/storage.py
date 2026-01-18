@@ -167,29 +167,21 @@ async def get_marketplace_product(product_key: str) -> dict[str, Any] | None:
         "rate_per_min_uah": meta.get("rate_per_min_uah", 0),
     }
 
-async def buy_product(user_id: int, product_key: str) -> dict | None:
+async def buy_product(user_id: int, product_key: str) -> dict[str, Any] | None:
     """
-    MVP-покупка:
-    створюємо tenant (бот-інстанс) і прив’язуємо product_key в plan_key (тимчасово)
-    потім plan_key замінимо на окреме поле product_key.
+    BUY (режим 2): поки НЕ створюємо tenant, бо нам потрібен реальний BotFather token.
+    Повертаємо мету продукту — а створення tenant робимо в handler flow після введення токена.
     """
     meta = PRODUCT_CATALOG.get(product_key)
     if not meta:
         return None
 
-    # ⚠️ Тут ПОКИ що ми створюємо tenant без реального токена,
-    # бо “орендований бот” — це твій runtime, не BotFather token.
-    # В MVP просто створимо запис і покажемо в “Мої боти”.
-    tenant = await TenantRepo.create(owner_user_id=user_id, bot_token="__RENTED_RUNTIME__")
-
-    # використовуємо plan_key як product_key тимчасово (щоб не робити міграцію прямо зараз)
-    await TenantRepo.set_plan_key(user_id, tenant["id"], product_key)  # якщо нема — скажеш, дам repo метод
-
-    # дефолтні модулі/налаштування лишаємо як є (core тощо)
-    await ModuleRepo.ensure_defaults(tenant["id"])
-
-    return {"id": tenant["id"], "name": meta["title"], "status": tenant["status"], "product_key": product_key}
-
+    return {
+        "product_key": product_key,
+        "title": meta["title"],
+        "desc": meta["desc"],
+        "rate_per_min_uah": meta.get("rate_per_min_uah", 0),
+    }
 
 # ======================================================================
 # Cabinet
