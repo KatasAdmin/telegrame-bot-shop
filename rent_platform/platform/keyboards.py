@@ -88,12 +88,14 @@ def about_inline_kb() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-# === My bots ===
+# ======================================================================
+# My bots
+# ======================================================================
 
 def my_bots_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(
-        InlineKeyboardButton(text="➕ Додати бота", callback_data="pl:my_bots:add"),
+        InlineKeyboardButton(text="➕ Підключити свій бот (токен)", callback_data="pl:my_bots:add"),
         InlineKeyboardButton(text="🔄 Оновити", callback_data="pl:my_bots:refresh"),
         width=2,
     )
@@ -149,73 +151,34 @@ def my_bots_list_kb(items: list[dict]) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-# === Marketplace (модулі) ===
-
-def marketplace_bots_kb(items: list[dict]) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    for it in items:
-        bot_id = it["id"]
-        name = it.get("name") or "Bot"
-        st = (it.get("status") or "active").lower()
-        badge = "✅" if st == "active" else ("⏸" if st == "paused" else "🗑")
-        kb.row(InlineKeyboardButton(text=f"{badge} {name} (id: {bot_id})", callback_data=f"pl:mp:bot:{bot_id}"))
-    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
-    return kb.as_markup()
-
-
-def marketplace_modules_kb(bot_id: str, modules: list[dict]) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-
-    for m in modules:
-        key = m["key"]
-        title = m.get("title") or key
-        enabled = bool(m.get("enabled"))
-
-        btn_text = f"{'✅' if enabled else '➕'} {title}"
-        kb.row(
-            InlineKeyboardButton(
-                text=btn_text,
-                callback_data=f"pl:mp:tg:{bot_id}:{key}",
-            )
-        )
-
-    kb.row(
-        InlineKeyboardButton(text="🔄 Оновити", callback_data=f"pl:mp:bot:{bot_id}"),
-        InlineKeyboardButton(text="⬅️ До ботів", callback_data="pl:marketplace"),
-        width=2,
-    )
-    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
-    return kb.as_markup()
-
+# ======================================================================
+# Marketplace (products)
+# Працюємо ТІЛЬКИ по mkp-flow:
+#   pl:mkp:open:<product_key>
+#   pl:mkp:buy:<product_key>
+# ======================================================================
 
 def marketplace_products_kb(items: list[dict]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for it in items:
-        kb.row(
-            InlineKeyboardButton(
-                text=f"{it['title']}",
-                callback_data=f"pl:mkp:open:{it['key']}",
-            )
-        )
-        kb.row(
-            InlineKeyboardButton(
-                text=f"⚡ {it.get('rate_per_min_uah', 0)} грн/хв",
-                callback_data=f"pl:mkp:open:{it['key']}",
-            )
-        )
+        key = it["key"]
+        title = it.get("title") or key
+        kb.row(InlineKeyboardButton(text=title, callback_data=f"pl:mkp:open:{key}"))
     kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
     return kb.as_markup()
 
 
 def marketplace_buy_kb(product_key: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="🛍 Купити з балансу", callback_data=f"pl:mkp:buy:{product_key}"))
-    kb.row(InlineKeyboardButton(text="💳 Купити банком (скоро)", callback_data="pl:noop"))
-    kb.row(InlineKeyboardButton(text="🪙 Купити криптою (скоро)", callback_data="pl:noop"))
+    kb.row(InlineKeyboardButton(text="✅ Купити (створити копію)", callback_data=f"pl:mkp:buy:{product_key}"))
     kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="pl:marketplace"))
     kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
     return kb.as_markup()
-# === Cabinet pay ===
+
+
+# ======================================================================
+# Cabinet pay
+# ======================================================================
 
 def cabinet_pay_kb(bot_id: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
@@ -224,7 +187,9 @@ def cabinet_pay_kb(bot_id: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-# === Config (tenant keys) ===
+# ======================================================================
+# Config (tenant keys)
+# ======================================================================
 
 def config_kb(bot_id: str, providers: list[dict]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
@@ -253,53 +218,4 @@ def config_kb(bot_id: str, providers: list[dict]) -> InlineKeyboardMarkup:
         width=2,
     )
     kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
-    return kb.as_markup()
-
-def marketplace_products_kb(items: list[dict]) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    for it in items:
-        key = it["key"]
-        title = it.get("title") or key
-        kb.row(InlineKeyboardButton(text=title, callback_data=f"pl:mkp:open:{key}"))
-    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
-    return kb.as_markup()
-
-
-def marketplace_buy_kb(product_key: str) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="✅ Купити (створити копію)", callback_data=f"pl:mkp:buy:{product_key}"))
-    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="pl:marketplace"))
-    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
-    return kb.as_markup()
-
-def marketplace_products_kb(items: list[dict]) -> InlineKeyboardMarkup:
-    """
-    items: [{"key","title","short","rate_per_min_uah"}]
-    callback: pl:prod:<product_key>
-    """
-    kb = InlineKeyboardBuilder()
-    for it in items:
-        kb.row(
-            InlineKeyboardButton(
-                text=it["title"],
-                callback_data=f"pl:prod:{it['key']}",
-            )
-        )
-    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
-    return kb.as_markup()
-
-
-def marketplace_product_kb(product_key: str) -> InlineKeyboardMarkup:
-    """
-    Кнопки під карткою продукту
-    """
-    kb = InlineKeyboardBuilder()
-    kb.row(
-        InlineKeyboardButton(text="✅ Купити (створити копію)", callback_data=f"pl:buy:{product_key}")
-    )
-    kb.row(
-        InlineKeyboardButton(text="⬅️ До маркетплейсу", callback_data="pl:marketplace"),
-        InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"),
-        width=2,
-    )
     return kb.as_markup()
