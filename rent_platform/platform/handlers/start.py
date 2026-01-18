@@ -272,16 +272,7 @@ async def my_bots_receive_token(message: Message, state: FSMContext) -> None:
         return
 
     user_id = message.from_user.id
-    item = await add_bot(user_id, token=token, name="Bot")
-
-    # ✅ ставимо webhook tenant-боту
-    from rent_platform.core.tenant_ctx import get_tenant, ensure_tenant_webhook
-    tenant = get_tenant(item["id"])
-    if tenant:
-        try:
-            await ensure_tenant_webhook(tenant)
-        except Exception as e:
-            await message.answer(f"⚠️ Бота додав, але webhook не вдалось виставити.\nПомилка: {e}")
+    await add_bot(user_id, token=token, name="Bot")  # ✅ webhook ставиться всередині storage.add_bot
 
     await state.clear()
     await message.answer("✅ Додав. Тепер це буде твоїм “орендованим/підключеним ботом” у платформі.")
