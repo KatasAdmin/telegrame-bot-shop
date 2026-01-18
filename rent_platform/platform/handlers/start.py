@@ -24,12 +24,7 @@ from rent_platform.platform.keyboards import (
     BTN_PARTNERS,
     BTN_HELP,
 )
-from rent_platform.platform.storage import (
-    list_bots,
-    add_bot,
-    delete_bot,
-    pause_bot,
-    resume_bot,
+from rent_platform.platform.storage import list_bots, add_bot, delete_bot, pause_bot, resume_bot
 )
 
 log = logging.getLogger(__name__)
