@@ -487,7 +487,6 @@ async def mkp_receive_token(message: Message, state: FSMContext) -> None:
     p = await get_marketplace_product(product_key)
     nice_name = (p["title"] if p else f"Product: {product_key}")
     tenant = await add_bot(message.from_user.id, token=token, name=nice_name, product_key=product_key)
-
     await state.clear()
 
     await message.answer(
