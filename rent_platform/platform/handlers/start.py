@@ -230,6 +230,16 @@ def _fmt_ts(ts: int) -> str:
     return datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d %H:%M")
 
 
+def _md_escape(text: str) -> str:
+    # safe for Markdown (не V2)
+    return (
+        str(text)
+        .replace("_", "\\_")
+        .replace("*", "\\*")
+        .replace("`", "\\`")
+        .replace("[", "\\[")
+    )
+
 async def _render_cabinet(message: Message) -> None:
     user_id = message.from_user.id
     data = await get_cabinet(user_id)
@@ -277,7 +287,7 @@ async def _render_cabinet(message: Message) -> None:
     for b in bots:
         if b.get("expired"):
             await message.answer(
-                f"⚠️ Бот `{b['id']}` прострочений. Щоб продовжити — натисни оплату 👇",
+                f"⚠️ Бот `{_md_escape(b['id'])}` прострочений. Щоб продовжити — натисни оплату 👇",
                 parse_mode="Markdown",
                 reply_markup=cabinet_pay_kb(b["id"]),
             )
@@ -305,7 +315,7 @@ async def cb_pay(call: CallbackQuery) -> None:
 
     await call.message.answer(
         f"💳 *Оплата*\n\n"
-        f"Бот: `{bot_id}`\n"
+        f"Бот: `{_md_escape(bot_id)}`\n"
         f"Період: *{months} міс*\n"
         f"Сума: *{invoice['amount_uah']} грн*\n\n"
         f"Посилання на оплату:\n{invoice['pay_url']}\n\n"
