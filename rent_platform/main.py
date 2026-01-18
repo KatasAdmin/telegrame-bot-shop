@@ -1,6 +1,7 @@
 # rent_platform/main.py
 from __future__ import annotations
 
+import time
 import logging
 from fastapi import FastAPI, Request, HTTPException
 from aiogram import Bot, Dispatcher
@@ -115,17 +116,37 @@ async def tenant_webhook(bot_id: str, secret: str, req: Request):
     if tenant["secret"] != secret:
         raise HTTPException(status_code=403, detail="bad secret")
 
-    # ✅ SaaS gate: paused/deleted — не обробляємо взагалі
     st = (tenant.get("status") or "active").lower()
-    if st == "paused":
-        raise HTTPException(status_code=403, detail="tenant paused")
+
+    # deleted/paused — не приймаємо апдейти взагалі
     if st == "deleted":
         raise HTTPException(status_code=410, detail="tenant deleted")
+    if st == "paused":
+        # 200 щоб Telegram не ретраїв, але модулі не викликаємо
+        return {"ok": True}
+
+    # ===== billing gate (MVP) =====
+    now = int(time.time())
+    plan = (tenant.get("plan_key") or "free").lower()
+    paid_until = int(tenant.get("paid_until_ts") or 0)
+
+    # якщо платний план і дата оплати задана — перевіряємо прострочку
+    if plan != "free" and paid_until and paid_until < now:
+        # авто-пауза
+        try:
+            await TenantRepo.set_status(
+                owner_user_id=int(tenant["owner_user_id"]),
+                tenant_id=bot_id,
+                status="paused",
+                paused_reason="billing",
+            )
+        except Exception:
+            pass
+        return {"ok": True}
 
     tenant_bot = _get_tenant_bot(bot_id, tenant["bot_token"])
 
     enabled = await ModuleRepo.list_enabled(bot_id)
-
     for module_key in enabled:
         handler = get_module(module_key)
         if not handler:
