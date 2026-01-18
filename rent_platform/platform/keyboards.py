@@ -8,6 +8,8 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+
+# === Тексти кнопок ===
 BTN_MARKETPLACE = "🧩 Маркетплейс"
 BTN_MY_BOTS = "🤖 Мої боти"
 BTN_CABINET = "👤 Кабінет"
@@ -45,10 +47,7 @@ def main_menu_inline_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=BTN_PARTNERS, callback_data="pl:partners"),
         width=2,
     )
-    kb.row(
-        InlineKeyboardButton(text=BTN_HELP, callback_data="pl:support"),
-        width=1,
-    )
+    kb.row(InlineKeyboardButton(text=BTN_HELP, callback_data="pl:support"), width=1)
     return kb.as_markup()
 
 
@@ -90,7 +89,7 @@ def about_inline_kb() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-# ===== My bots =====
+# === My bots ===
 
 def my_bots_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
@@ -99,17 +98,13 @@ def my_bots_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="🔄 Оновити", callback_data="pl:my_bots:refresh"),
         width=2,
     )
-    kb.row(
-        InlineKeyboardButton(text="⚙️ Налаштування (скоро)", callback_data="pl:my_bots:settings_stub"),
-        width=1,
-    )
     kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"), width=1)
     return kb.as_markup()
 
 
 def my_bots_list_kb(items: list[dict]) -> InlineKeyboardMarkup:
     """
-    items: [{"id": "...", "name": "...", "status": "active|paused|deleted"}]
+    items: [{"id": "...", "name": "...", "status": "..."}]
     """
     kb = InlineKeyboardBuilder()
 
@@ -118,33 +113,24 @@ def my_bots_list_kb(items: list[dict]) -> InlineKeyboardMarkup:
         name = it.get("name") or "Bot"
         status = (it.get("status") or "active").lower()
 
-        # рядок заголовок
+        # 1) рядок: назва + статус
         kb.row(
             InlineKeyboardButton(
                 text=f"🤖 {name} • {status}",
-                callback_data=f"pl:my_bots:noop:{bot_id}",
-            )
+                callback_data=f"pl:my_bots:open:{bot_id}",
+            ),
+            width=1,
         )
 
-        # рядок дій
+        # 2) рядок: дії
+        actions = InlineKeyboardBuilder()
         if status == "active":
-            kb.row(
-                InlineKeyboardButton(text="⏸ Пауза", callback_data=f"pl:my_bots:pause:{bot_id}"),
-                InlineKeyboardButton(text="🗑 Видалити", callback_data=f"pl:my_bots:del:{bot_id}"),
-                width=2,
-            )
+            actions.add(InlineKeyboardButton(text="⏸ Пауза", callback_data=f"pl:my_bots:pause:{bot_id}"))
         elif status == "paused":
-            kb.row(
-                InlineKeyboardButton(text="▶️ Відновити", callback_data=f"pl:my_bots:resume:{bot_id}"),
-                InlineKeyboardButton(text="🗑 Видалити", callback_data=f"pl:my_bots:del:{bot_id}"),
-                width=2,
-            )
-        else:
-            # deleted/expired etc.
-            kb.row(
-                InlineKeyboardButton(text="🗑 Видалено", callback_data=f"pl:my_bots:noop:{bot_id}"),
-                width=1,
-            )
+            actions.add(InlineKeyboardButton(text="▶️ Відновити", callback_data=f"pl:my_bots:resume:{bot_id}"))
+
+        actions.add(InlineKeyboardButton(text="🗑 Видалити", callback_data=f"pl:my_bots:del:{bot_id}"))
+        kb.row(*actions.buttons, width=2)
 
     kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="pl:my_bots"), width=1)
     return kb.as_markup()
