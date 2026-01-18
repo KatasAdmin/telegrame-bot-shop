@@ -268,6 +268,24 @@ class ModuleRepo:
         """
         rows = await db_fetch_all(q, {"tid": tenant_id})
         return [r["module_key"] for r in rows]
+    
+        @staticmethod
+        async def ensure_defaults(tenant_id: str, product_key: str | None = None) -> None:
+            """
+            Вмикаємо базові модулі для tenant-а.
+            core — завжди.
+            product_key — якщо оренда через маркетплейс, то увімкнути модуль продукту (module_key == product_key).
+            """
+        # core завжди
+            await ModuleRepo.enable(tenant_id, "core")
+
+        # продукт (якщо є)
+            if product_key:
+                await ModuleRepo.enable(tenant_id, product_key)
+                return
+
+        # fallback (якщо tenant створили "вручну" без продукту)
+            await ModuleRepo.enable(tenant_id, "shop")
 
     @staticmethod
     async def enable(tenant_id: str, module_key: str) -> None:
