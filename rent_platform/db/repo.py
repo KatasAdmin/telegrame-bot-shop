@@ -13,8 +13,7 @@ class TenantRepo:
         q = """
         SELECT id, owner_user_id, bot_token, secret, status, created_ts,
                plan_key, paid_until_ts, paused_reason,
-               display_name,
-               product_key, warned_24h_ts, warned_3h_ts
+               display_name, product_key, warned_24h_ts, warned_3h_ts
         FROM tenants
         WHERE id = :id
         """
@@ -59,33 +58,18 @@ class TenantRepo:
         ]
 
     @staticmethod
-    async def create(owner_user_id: int, bot_token: str, display_name: str = "Bot") -> dict[str, Any]:
+    async def create(owner_user_id: int, bot_token: str) -> dict[str, Any]:
         tenant_id = secrets.token_hex(4)
         secret = secrets.token_urlsafe(24)
         created_ts = int(time.time())
 
         q = """
-        INSERT INTO tenants (
-            id, owner_user_id, bot_token, secret, status, created_ts,
-            plan_key, paid_until_ts,
-            display_name
-        )
-        VALUES (
-            :id, :uid, :token, :secret, 'active', :ts,
-            'free', 0,
-            :dn
-        )
+        INSERT INTO tenants (id, owner_user_id, bot_token, secret, status, created_ts, plan_key, paid_until_ts)
+        VALUES (:id, :uid, :token, :secret, 'active', :ts, 'free', 0)
         """
         await db_execute(
             q,
-            {
-                "id": tenant_id,
-                "uid": owner_user_id,
-                "token": bot_token,
-                "secret": secret,
-                "ts": created_ts,
-                "dn": (display_name or "Bot").strip()[:128],
-            },
+            {"id": tenant_id, "uid": owner_user_id, "token": bot_token, "secret": secret, "ts": created_ts},
         )
 
         return {
@@ -97,7 +81,7 @@ class TenantRepo:
             "plan_key": "free",
             "paid_until_ts": 0,
             "paused_reason": None,
-            "display_name": (display_name or "Bot").strip()[:128],
+            "display_name": "Bot",
             "product_key": None,
             "warned_24h_ts": 0,
             "warned_3h_ts": 0,
@@ -106,11 +90,8 @@ class TenantRepo:
     @staticmethod
     async def get_token_secret_for_owner(owner_user_id: int, tenant_id: str) -> dict | None:
         q = """
-        SELECT
-            id, bot_token, secret,
-            status, plan_key, paid_until_ts, paused_reason,
-            display_name,
-            product_key, warned_24h_ts, warned_3h_ts
+        SELECT id, bot_token, secret, status, plan_key, paid_until_ts, paused_reason,
+               display_name, product_key, warned_24h_ts, warned_3h_ts
         FROM tenants
         WHERE id = :id AND owner_user_id = :uid
         """
@@ -177,13 +158,7 @@ class TenantRepo:
             q,
             {"dn": (display_name or "Bot").strip()[:128], "id": tenant_id, "uid": owner_user_id},
         )
-        if res is None:
-            row = await TenantRepo.get_token_secret_for_owner(owner_user_id, tenant_id)
-            return bool(row)
-        try:
-            return int(res) > 0
-        except Exception:
-            return True
+        return res is None or int(res) > 0
 
     @staticmethod
     async def set_product_key(owner_user_id: int, tenant_id: str, product_key: str | None) -> bool:
@@ -197,8 +172,6 @@ class TenantRepo:
 
     @staticmethod
     async def set_warned(owner_user_id: int, tenant_id: str, kind: str, ts: int) -> bool:
-        if kind not in ("24h", "3h"):
-            return False
         col = "warned_24h_ts" if kind == "24h" else "warned_3h_ts"
         q = f"""
         UPDATE tenants
@@ -328,11 +301,7 @@ class TenantIntegrationRepo:
         """
         rows = await db_fetch_all(q, {"tid": tenant_id})
         return [
-            {
-                "provider": r["provider"],
-                "enabled": bool(r["enabled"]),
-                "updated_ts": int(r.get("updated_ts") or 0),
-            }
+            {"provider": r["provider"], "enabled": bool(r["enabled"]), "updated_ts": int(r.get("updated_ts") or 0)}
             for r in rows
         ]
 
