@@ -163,3 +163,14 @@ class ModuleRepo:
     async def ensure_defaults(tenant_id: str) -> None:
         await ModuleRepo.enable(tenant_id, "core")
         await ModuleRepo.enable(tenant_id, "shop")
+
+        @staticmethod
+    async def list_all(tenant_id: str) -> list[dict]:
+        q = """
+        SELECT module_key, enabled
+        FROM tenant_modules
+        WHERE tenant_id = :tid
+        ORDER BY module_key
+        """
+        rows = await db_fetch_all(q, {"tid": tenant_id})
+        return [{"module_key": r["module_key"], "enabled": bool(r["enabled"])} for r in rows]
