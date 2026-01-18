@@ -1,3 +1,4 @@
+# rent_platform/platform/storage.py
 from __future__ import annotations
 
 from aiogram import Bot
@@ -44,7 +45,8 @@ async def pause_bot(user_id: int, bot_id: str) -> bool:
     if not row:
         return False
 
-    ok = await TenantRepo.set_status(user_id, bot_id, "paused")
+    # ✅ paused_reason = manual
+    ok = await TenantRepo.set_status(user_id, bot_id, "paused", paused_reason="manual")
     if not ok:
         return False
 
@@ -63,7 +65,8 @@ async def resume_bot(user_id: int, bot_id: str) -> bool:
     if not row:
         return False
 
-    ok = await TenantRepo.set_status(user_id, bot_id, "active")
+    # ✅ повертаємо в active + чистимо paused_reason
+    ok = await TenantRepo.set_status(user_id, bot_id, "active", paused_reason=None)
     if not ok:
         return False
 
@@ -129,7 +132,6 @@ async def list_bot_modules(user_id: int, bot_id: str) -> dict | None:
     current = await ModuleRepo.list_all(bot_id)
     enabled = {x["module_key"] for x in current if x["enabled"]}
 
-    # нормалізуємо до каталогу
     result = []
     for key, meta in MODULE_CATALOG.items():
         result.append(
