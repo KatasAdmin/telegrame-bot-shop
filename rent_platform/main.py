@@ -46,6 +46,7 @@ async def on_startup():
     init_tenants()
     init_modules()
     log.info("Tenant prefix: %s", settings.TENANT_WEBHOOK_PREFIX)
+
     webhook_full = settings.WEBHOOK_URL.rstrip("/") + settings.WEBHOOK_PATH
 
     if _webhook_inited:
@@ -72,10 +73,8 @@ async def on_startup():
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    # platform bot session
     await platform_bot.session.close()
 
-    # tenant bot sessions
     for bot in _TENANT_BOTS.values():
         try:
             await bot.session.close()
@@ -83,7 +82,6 @@ async def on_shutdown():
             pass
     _TENANT_BOTS.clear()
 
-    # db engine dispose (якщо є)
     try:
         from rent_platform.db.session import engine
         await engine.dispose()
@@ -117,10 +115,12 @@ async def tenant_webhook(bot_id: str, secret: str, req: Request):
     if tenant["secret"] != secret:
         raise HTTPException(status_code=403, detail="bad secret")
 
-    # 🔒 ВАЖЛИВО: якщо бот на паузі / видалений / не оплачений
-    if tenant.get("status") != "active":
-        # Telegram отримає 200 і не буде ретраїв
-        return {"ok": True}
+    # ✅ SaaS gate: paused/deleted — не обробляємо взагалі
+    st = (tenant.get("status") or "active").lower()
+    if st == "paused":
+        raise HTTPException(status_code=403, detail="tenant paused")
+    if st == "deleted":
+        raise HTTPException(status_code=410, detail="tenant deleted")
 
     tenant_bot = _get_tenant_bot(bot_id, tenant["bot_token"])
 
