@@ -13,6 +13,7 @@ from rent_platform.db.repo import (
     TenantSecretRepo,
     TenantIntegrationRepo,
 )
+from rent_platform.products.catalog import PRODUCT_CATALOG
 
 
 def _tenant_webhook_url(tenant_id: str, secret: str) -> str:
@@ -39,26 +40,19 @@ async def list_bots(user_id: int) -> list[dict]:
 
 
 async def add_bot(user_id: int, token: str, name: str = "Bot", product_key: str | None = None) -> dict:
-    """
-    Створює tenant-а (орендований бот) і одразу виставляє webhook на tenant endpoint.
-    product_key: якщо tenant створено з маркетплейсу — зберігаємо який саме продукт купили.
-    """
     tenant = await TenantRepo.create(owner_user_id=user_id, bot_token=token)
 
     # display name
     await TenantRepo.set_display_name(user_id, tenant["id"], name)
 
-    # привʼязка продукту (важливо для tenant modules)
+    # product key (який продукт орендований)
     if product_key:
         await TenantRepo.set_product_key(user_id, tenant["id"], product_key)
 
-    # дефолтні модулі
-    await ModuleRepo.ensure_defaults(tenant["id"])
+    # модулі по продукту
+    await ModuleRepo.ensure_defaults(tenant["id"], product_key=product_key)
 
-    # модуль під конкретний продукт
-    if product_key == "shop_bot":
-        await ModuleRepo.enable(tenant["id"], "shop_bot")
-
+    # webhook
     url = _tenant_webhook_url(tenant["id"], tenant["secret"])
     tenant_bot = Bot(token=token)
     try:
@@ -138,27 +132,6 @@ async def delete_bot(user_id: int, bot_id: str) -> bool:
 # Marketplace (продукти)
 # ======================================================================
 
-# Манекен-продукт (перший “товар” в маркетплейсі)
-PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
-    "shop_bot": {
-        "title": "🛒 Luna Shop Bot",
-        "short": "Магазин-бот: товари, кошик, замовлення (MVP)",
-        "desc": (
-            "🛒 *Luna Shop Bot*\n\n"
-            "Це готовий бот-магазин, який ти береш в оренду і налаштовуєш під себе.\n\n"
-            "*Що вміє (MVP):*\n"
-            "• Каталог / категорії / товари\n"
-            "• Кошик + оформлення\n"
-            "• Замовлення + статуси\n\n"
-            "*Оплати (режим 2):*\n"
-            "Ти додаєш свої ключі Mono/Privat/CryptoBot — гроші йдуть тобі.\n\n"
-            "_Критичні ключі платформи сховані._"
-        ),
-        "rate_per_min_uah": 0.02,
-    },
-}
-
-
 async def list_marketplace_products() -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for key, meta in PRODUCT_CATALOG.items():
@@ -186,14 +159,9 @@ async def get_marketplace_product(product_key: str) -> dict[str, Any] | None:
 
 
 async def buy_product(user_id: int, product_key: str) -> dict[str, Any] | None:
-    """
-    BUY (режим 2): поки НЕ створюємо tenant, бо нам потрібен реальний BotFather token.
-    Повертаємо мету продукту — а створення tenant робимо в handler flow після введення токена.
-    """
     meta = PRODUCT_CATALOG.get(product_key)
     if not meta:
         return None
-
     return {
         "product_key": product_key,
         "title": meta["title"],
@@ -224,6 +192,7 @@ async def get_cabinet(user_id: int) -> dict[str, Any]:
                 "plan_key": plan,
                 "paid_until_ts": paid_until,
                 "paused_reason": it.get("paused_reason"),
+                "product_key": it.get("product_key"),
                 "expired": expired,
             }
         )
@@ -251,9 +220,24 @@ async def create_payment_link(user_id: int, bot_id: str, months: int = 1) -> dic
 # ======================================================================
 
 SUPPORTED_PROVIDERS: dict[str, dict[str, Any]] = {
-    "mono": {"title": "🏦 Mono", "secrets": [("mono.token", "Mono API token")]},
-    "privat": {"title": "🏦 Privat", "secrets": [("privat.token", "Privat API token")]},
-    "cryptobot": {"title": "🪙 CryptoBot", "secrets": [("cryptobot.token", "CryptoBot token")]},
+    "mono": {
+        "title": "🏦 Mono",
+        "secrets": [
+            ("mono.token", "Mono API token"),
+        ],
+    },
+    "privat": {
+        "title": "🏦 Privat",
+        "secrets": [
+            ("privat.token", "Privat API token"),
+        ],
+    },
+    "cryptobot": {
+        "title": "🪙 CryptoBot",
+        "secrets": [
+            ("cryptobot.token", "CryptoBot token"),
+        ],
+    },
 }
 
 
