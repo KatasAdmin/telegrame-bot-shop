@@ -1,44 +1,39 @@
+# rent_platform/modules/shop_bot.py
 from __future__ import annotations
 
-from aiogram.types import Update
+import logging
+from typing import Any
 
-from rent_platform.core.registry import register_module
+from aiogram import Bot
+
+log = logging.getLogger(__name__)
 
 
-@register_module("shop_bot")
-async def shop_bot_module(tenant: dict, raw_update: dict, bot) -> bool:
-    # працюємо тільки для купленого продукту Luna Shop
-    if tenant.get("product_key") != "shop_bot":
+async def handle_update(tenant: dict, update: dict, bot: Bot) -> bool:
+    """
+    Демка продукту shop_bot.
+    Поки просто відповідає на /start та текст "ping".
+    Повертає True якщо апдейт оброблено.
+    """
+    try:
+        msg = (update.get("message") or {})
+        text = (msg.get("text") or "").strip()
+        chat = msg.get("chat") or {}
+        chat_id = chat.get("id")
+
+        if not chat_id:
+            return False
+
+        if text == "/start":
+            await bot.send_message(chat_id, "🛒 Це Shop Bot (demo). Пиши: ping")
+            return True
+
+        if text.lower() == "ping":
+            await bot.send_message(chat_id, "pong ✅")
+            return True
+
         return False
 
-    upd = Update.model_validate(raw_update)
-
-    if upd.message and upd.message.text:
-        chat_id = upd.message.chat.id
-        text = (upd.message.text or "").strip().lower()
-
-        if text in ("/start", "старт", "меню"):
-            await bot.send_message(
-                chat_id,
-                "🛒 *Luna Shop Bot*\n\n"
-                "Це демо-магазин (MVP). Команди:\n"
-                "• /catalog — каталог\n"
-                "• /cart — кошик\n"
-                "• /help — підтримка\n",
-                parse_mode="Markdown",
-            )
-            return True
-
-        if text == "/catalog":
-            await bot.send_message(chat_id, "📦 Каталог (демо):\n1) Товар А — 100 грн\n2) Товар B — 200 грн")
-            return True
-
-        if text == "/cart":
-            await bot.send_message(chat_id, "🧺 Кошик порожній (демо).")
-            return True
-
-        if text == "/help":
-            await bot.send_message(chat_id, "🆘 Підтримка (демо): Напиши, що треба.")
-            return True
-
-    return False
+    except Exception as e:
+        log.exception("shop_bot handle_update failed: %s", e)
+        return False
