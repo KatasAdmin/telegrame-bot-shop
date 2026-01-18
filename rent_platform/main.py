@@ -1,8 +1,9 @@
 # rent_platform/main.py
 from __future__ import annotations
 
-import time
 import logging
+import time
+
 from fastapi import FastAPI, Request, HTTPException
 from aiogram import Bot, Dispatcher
 from aiogram.types import Update
@@ -13,6 +14,9 @@ from rent_platform.core.tenant_ctx import init_tenants
 from rent_platform.db.repo import TenantRepo, ModuleRepo
 from rent_platform.core.registry import get_module
 
+# ✅ напряму в БД (щоб НЕ ламати repo методами з owner_user_id)
+from rent_platform.db.session import db_execute
+
 log = logging.getLogger(__name__)
 
 app = FastAPI()
@@ -21,7 +25,7 @@ app = FastAPI()
 platform_bot = Bot(token=settings.BOT_TOKEN)
 dp = Dispatcher()
 
-from rent_platform.platform.handlers.start import router as start_router
+from rent_platform.platform.handlers.start import router as start_router  # noqa: E402
 dp.include_router(start_router)
 
 _webhook_inited = False
@@ -39,6 +43,67 @@ def _get_tenant_bot(tenant_id: str, token: str) -> Bot:
     return bot
 
 
+async def _system_set_status(tenant_id: str, status: str, paused_reason: str | None) -> None:
+    """
+    Системне оновлення статусу без owner_user_id.
+    Використовуємо тут, бо в tenant webhook нема user_id.
+    """
+    q = """
+    UPDATE tenants
+    SET status = :st, paused_reason = :pr
+    WHERE id = :id
+    """
+    await db_execute(q, {"st": status, "pr": paused_reason, "id": tenant_id})
+
+
+async def _maybe_apply_billing_pause(tenant: dict) -> tuple[bool, str | None]:
+    """
+    Повертає (blocked, reason_text)
+    blocked=True означає: цей tenant зараз НЕ обробляємо (200 OK).
+    """
+    now = int(time.time())
+    st = (tenant.get("status") or "active").lower()
+    pr = tenant.get("paused_reason")
+
+    # deleted — завжди блокуємо (і краще 410)
+    if st == "deleted":
+        return True, "deleted"
+
+    paid_until = int(tenant.get("paid_until_ts") or 0)
+    expired = paid_until > 0 and paid_until <= now
+
+    # Якщо прострочено — авто-пауза billing (але manual не чіпаємо)
+    if expired:
+        # якщо вже paused billing — просто блокуємо
+        if st == "paused" and pr == "billing":
+            return True, "billing"
+
+        # якщо manual paused — залишаємо як є і блокуємо
+        if st == "paused" and pr == "manual":
+            return True, "manual"
+
+        # якщо active (або інше) — ставимо paused billing
+        if st != "paused":
+            await _system_set_status(tenant["id"], "paused", "billing")
+            # локально теж оновимо, щоб нижче не було сюрпризів
+            tenant["status"] = "paused"
+            tenant["paused_reason"] = "billing"
+        return True, "billing"
+
+    # Якщо НЕ прострочено, але раніше було paused billing — авто-resume
+    if st == "paused" and pr == "billing":
+        await _system_set_status(tenant["id"], "active", None)
+        tenant["status"] = "active"
+        tenant["paused_reason"] = None
+        return False, None
+
+    # manual pause лишається manual pause
+    if st == "paused":
+        return True, pr or "paused"
+
+    return False, None
+
+
 @app.on_event("startup")
 async def on_startup():
     global _webhook_inited
@@ -46,7 +111,8 @@ async def on_startup():
 
     init_tenants()
     init_modules()
-    log.info("Tenant prefix: %s", settings.TENANT_WEBHOOK_PREFIX)
+
+    log.info("Префикс арендатора: %s", settings.TENANT_WEBHOOK_PREFIX)
 
     webhook_full = settings.WEBHOOK_URL.rstrip("/") + settings.WEBHOOK_PATH
 
@@ -57,7 +123,7 @@ async def on_startup():
     try:
         info = await platform_bot.get_webhook_info()
         if (info.url or "").strip() == webhook_full:
-            log.info("Webhook already correct: %s", webhook_full)
+            log.info("Webhook уже корректен: %s", webhook_full)
             _webhook_inited = True
             return
     except Exception as e:
@@ -74,8 +140,10 @@ async def on_startup():
 
 @app.on_event("shutdown")
 async def on_shutdown():
+    # platform bot session
     await platform_bot.session.close()
 
+    # tenant bot sessions
     for bot in _TENANT_BOTS.values():
         try:
             await bot.session.close()
@@ -83,6 +151,7 @@ async def on_shutdown():
             pass
     _TENANT_BOTS.clear()
 
+    # db engine dispose (якщо є)
     try:
         from rent_platform.db.session import engine
         await engine.dispose()
@@ -95,16 +164,26 @@ async def root():
     return {"ok": True, "service": "rent_platform"}
 
 
-# ===== Platform webhook =====
+# =========================================================
+# Platform webhook (керує меню платформи)
+# =========================================================
 @app.post(settings.WEBHOOK_PATH)
 async def telegram_webhook(req: Request):
     data = await req.json()
     update = Update.model_validate(data)
-    await dp.feed_update(platform_bot, update)
+
+    try:
+        await dp.feed_update(platform_bot, update)
+    except Exception as e:
+        # щоб Telegram не спамив ретраями — повертаємо 200
+        log.exception("platform feed_update failed: %s", e)
+
     return {"ok": True}
 
 
-# ===== Tenant webhook =====
+# =========================================================
+# Tenant webhook (апдейти орендованих ботів)
+# =========================================================
 @app.post(f"{settings.TENANT_WEBHOOK_PREFIX}" + "/{bot_id}/{secret}")
 async def tenant_webhook(bot_id: str, secret: str, req: Request):
     data = await req.json()
@@ -113,37 +192,22 @@ async def tenant_webhook(bot_id: str, secret: str, req: Request):
     if not tenant:
         raise HTTPException(status_code=404, detail="tenant not found")
 
-    if tenant["secret"] != secret:
+    # секрет — щоб старі URL помирали після rotate_secret
+    if tenant.get("secret") != secret:
         raise HTTPException(status_code=403, detail="bad secret")
 
+    # 1) deleted → 410
     st = (tenant.get("status") or "active").lower()
-
-    # deleted/paused — не приймаємо апдейти взагалі
     if st == "deleted":
         raise HTTPException(status_code=410, detail="tenant deleted")
-    if st == "paused":
-        # 200 щоб Telegram не ретраїв, але модулі не викликаємо
-        return {"ok": True}
 
-    # ===== billing gate (MVP) =====
-    now = int(time.time())
-    plan = (tenant.get("plan_key") or "free").lower()
-    paid_until = int(tenant.get("paid_until_ts") or 0)
+    # 2) Billing auto-pause / auto-resume
+    blocked, reason = await _maybe_apply_billing_pause(tenant)
+    if blocked:
+        # paused/manual/billing — просто 200, без ретраїв
+        return {"ok": True, "blocked": True, "reason": reason}
 
-    # якщо платний план і дата оплати задана — перевіряємо прострочку
-    if plan != "free" and paid_until and paid_until < now:
-        # авто-пауза
-        try:
-            await TenantRepo.set_status(
-                owner_user_id=int(tenant["owner_user_id"]),
-                tenant_id=bot_id,
-                status="paused",
-                paused_reason="billing",
-            )
-        except Exception:
-            pass
-        return {"ok": True}
-
+    # 3) Якщо активний — проганяємо по модулях
     tenant_bot = _get_tenant_bot(bot_id, tenant["bot_token"])
 
     enabled = await ModuleRepo.list_enabled(bot_id)
@@ -151,7 +215,11 @@ async def tenant_webhook(bot_id: str, secret: str, req: Request):
         handler = get_module(module_key)
         if not handler:
             continue
-        handled = await handler(tenant, data, tenant_bot)
+        try:
+            handled = await handler(tenant, data, tenant_bot)
+        except Exception as e:
+            log.exception("tenant module failed tenant=%s module=%s err=%s", bot_id, module_key, e)
+            handled = False
         if handled:
             break
 
