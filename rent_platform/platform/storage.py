@@ -233,3 +233,23 @@ async def get_cabinet(user_id: int) -> dict[str, Any]:
         )
 
     return {"now": now, "bots": bots}
+
+
+async def create_payment_link(user_id: int, bot_id: str, months: int = 1) -> dict | None:
+    """
+    MVP-заглушка: повертає посилання на оплату.
+    Потім тут буде інтеграція LiqPay/WayForPay/Mono і запис invoice в БД.
+    """
+    row = await TenantRepo.get_token_secret_for_owner(user_id, bot_id)
+    if not row:
+        return None
+
+    # приклад: 100 грн/міс
+    amount_uah = 100 * months
+    return {
+        "bot_id": bot_id,
+        "months": months,
+        "amount_uah": amount_uah,
+        "pay_url": f"https://example.com/pay?bot_id={bot_id}&m={months}&a={amount_uah}",
+        "created_ts": int(time.time()),
+    }
