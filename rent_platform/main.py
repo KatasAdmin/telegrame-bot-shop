@@ -45,7 +45,7 @@ async def on_startup():
 
     init_tenants()
     init_modules()
-
+    log.info("Tenant prefix: %s", settings.TENANT_WEBHOOK_PREFIX)
     webhook_full = settings.WEBHOOK_URL.rstrip("/") + settings.WEBHOOK_PATH
 
     if _webhook_inited:
