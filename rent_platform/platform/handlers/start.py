@@ -5,31 +5,35 @@ import logging
 import time
 from datetime import datetime
 
-from rent_platform.platform.storage import create_payment_link
-from rent_platform.platform.keyboards import cabinet_pay_kb
 from aiogram import Router, F
 from aiogram.filters import CommandStart
 from aiogram.types import Message, CallbackQuery
-
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
 from rent_platform.platform.keyboards import (
-    my_bots_kb,
-    my_bots_list_kb,
-    marketplace_bots_kb,
-    marketplace_modules_kb,
+    # menus
     main_menu_kb,
     main_menu_inline_kb,
     back_to_menu_kb,
     partners_inline_kb,
     about_inline_kb,
+    # buttons (reply texts)
     BTN_MARKETPLACE,
     BTN_MY_BOTS,
     BTN_CABINET,
     BTN_PARTNERS,
     BTN_HELP,
+    # my bots
+    my_bots_kb,
+    my_bots_list_kb,
+    # marketplace
+    marketplace_bots_kb,
+    marketplace_modules_kb,
+    # payments
+    cabinet_pay_kb,
 )
+
 from rent_platform.platform.storage import (
     # my bots
     list_bots,
@@ -43,6 +47,8 @@ from rent_platform.platform.storage import (
     disable_module,
     # cabinet
     get_cabinet,
+    # payments
+    create_payment_link,
 )
 
 log = logging.getLogger(__name__)
@@ -90,7 +96,10 @@ async def cabinet_text(message: Message) -> None:
         await _render_cabinet(message)
     except Exception as e:
         log.exception("cabinet failed: %s", e)
-        await message.answer("⚠️ Кабінет тимчасово впав. Я вже бачу помилку в логах 🙂", reply_markup=back_to_menu_kb())
+        await message.answer(
+            "⚠️ Кабінет тимчасово впав. Я вже бачу помилку в логах 🙂",
+            reply_markup=back_to_menu_kb(),
+        )
 
 
 @router.message(F.text == BTN_PARTNERS)
@@ -145,6 +154,7 @@ async def cb_cabinet(call: CallbackQuery) -> None:
             await call.message.answer("⚠️ Кабінет тимчасово впав.", reply_markup=back_to_menu_kb())
     await call.answer()
 
+
 @router.callback_query(F.data == "pl:partners")
 async def cb_partners(call: CallbackQuery) -> None:
     if call.message:
@@ -197,6 +207,7 @@ def _fmt_ts(ts: int) -> str:
         return "—"
     return datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d %H:%M")
 
+
 async def _render_cabinet(message: Message) -> None:
     user_id = message.from_user.id
     data = await get_cabinet(user_id)
@@ -222,6 +233,8 @@ async def _render_cabinet(message: Message) -> None:
         "Твої боти і статуси:",
     ]
 
+    expired_bots: list[str] = []
+
     for i, b in enumerate(bots, 1):
         st = (b.get("status") or "active").lower()
         plan = (b.get("plan_key") or "free")
@@ -229,7 +242,13 @@ async def _render_cabinet(message: Message) -> None:
         expired = bool(b.get("expired"))
         paused_reason = b.get("paused_reason")
 
-        badge = "✅ active" if st == "active" else ("⏸ paused" if st == "paused" else ("🗑 deleted" if st == "deleted" else st))
+        badge = (
+            "✅ active" if st == "active"
+            else "⏸ paused" if st == "paused"
+            else "🗑 deleted" if st == "deleted"
+            else st
+        )
+
         pay_str = _fmt_ts(paid_until)
         pay_note = " ⚠️ прострочено" if expired else ""
         extra = f" (reason: {paused_reason})" if paused_reason else ""
@@ -241,13 +260,27 @@ async def _render_cabinet(message: Message) -> None:
             f"   • id: {b['id']}"
         )
 
+        # ⬇️ збираємо прострочені — щоб показати кнопки оплати нижче окремими повідомленнями
+        if expired and st != "deleted":
+            expired_bots.append(b["id"])
+
     lines += [
         "",
         "Далі додамо: оплату/плани, авто-паузу при 0 балансі, рахунки та історію платежів.",
     ]
 
-    # ❗️ВАЖЛИВО: без parse_mode
+    # ❗️без parse_mode (щоб не ловити Markdown entity errors)
     await message.answer("\n".join(lines), reply_markup=back_to_menu_kb())
+
+    # Окремими повідомленнями даємо оплату для кожного простроченого
+    for bot_id in expired_bots:
+        await message.answer(
+            f"⚠️ Бот `{bot_id}` прострочений.\n"
+            f"Щоб продовжити — натисни оплату 👇",
+            parse_mode="Markdown",
+            reply_markup=cabinet_pay_kb(bot_id),
+        )
+
 
 # ======================================================================
 # Marketplace (модулі)
@@ -312,39 +345,6 @@ async def cb_marketplace_bot(call: CallbackQuery) -> None:
     await call.answer()
 
 
-@router.callback_query(F.data.startswith("pl:pay:"))
-async def cb_pay(call: CallbackQuery) -> None:
-    if not call.message:
-        await call.answer()
-        return
-
-    payload = call.data.split("pl:pay:", 1)[1]
-    try:
-        bot_id, months_s = payload.split(":", 1)
-        months = int(months_s)
-    except Exception:
-        await call.answer("⚠️ Bad payload")
-        return
-
-    user_id = call.from_user.id
-    invoice = await create_payment_link(user_id, bot_id, months=months)
-    if not invoice:
-        await call.answer("Нема доступу або не знайдено", show_alert=True)
-        return
-
-    await call.message.answer(
-        f"💳 *Оплата*\n\n"
-        f"Бот: `{bot_id}`\n"
-        f"Період: *{months} міс*\n"
-        f"Сума: *{invoice['amount_uah']} грн*\n\n"
-        f"Посилання на оплату:\n{invoice['pay_url']}\n\n"
-        f"_Після оплати бот автоматично оживе (auto-resume)._",
-        parse_mode="Markdown",
-        reply_markup=back_to_menu_kb(),
-    )
-    await call.answer("Створив інвойс ✅")
-
-
 @router.callback_query(F.data.startswith("pl:mp:tg:"))
 async def cb_marketplace_toggle(call: CallbackQuery) -> None:
     if not call.message:
@@ -390,6 +390,7 @@ async def cb_marketplace_toggle(call: CallbackQuery) -> None:
         else:
             await call.answer("Увімкнув ✅")
 
+    # перерендеримо екран бота
     new_info = await list_bot_modules(user_id, bot_id)
     if new_info and call.message:
         new_modules = new_info["modules"]
@@ -404,6 +405,44 @@ async def cb_marketplace_toggle(call: CallbackQuery) -> None:
             parse_mode="Markdown",
             reply_markup=marketplace_modules_kb(bot_id, new_modules),
         )
+    await call.answer()
+
+
+# ======================================================================
+# Оплата (callback)
+# ======================================================================
+
+@router.callback_query(F.data.startswith("pl:pay:"))
+async def cb_pay(call: CallbackQuery) -> None:
+    if not call.message:
+        await call.answer()
+        return
+
+    payload = call.data.split("pl:pay:", 1)[1]
+    try:
+        bot_id, months_s = payload.split(":", 1)
+        months = int(months_s)
+    except Exception:
+        await call.answer("⚠️ Bad payload")
+        return
+
+    user_id = call.from_user.id
+    invoice = await create_payment_link(user_id, bot_id, months=months)
+    if not invoice:
+        await call.answer("Нема доступу або не знайдено", show_alert=True)
+        return
+
+    await call.message.answer(
+        f"💳 *Оплата*\n\n"
+        f"Бот: `{bot_id}`\n"
+        f"Період: *{months} міс*\n"
+        f"Сума: *{invoice['amount_uah']} грн*\n\n"
+        f"Посилання на оплату:\n{invoice['pay_url']}\n\n"
+        f"_Після оплати бот автоматично оживе (auto-resume)._",
+        parse_mode="Markdown",
+        reply_markup=back_to_menu_kb(),
+    )
+    await call.answer("Створив інвойс ✅")
 
 
 # ======================================================================
