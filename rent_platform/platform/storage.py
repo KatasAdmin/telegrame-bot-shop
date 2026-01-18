@@ -39,12 +39,10 @@ async def pause_bot(user_id: int, bot_id: str) -> bool:
     if not row:
         return False
 
-    # 1) статус paused
     ok = await TenantRepo.set_status(user_id, bot_id, "paused")
     if not ok:
         return False
 
-    # 2) знімаємо webhook (щоб Telegram не шле апдейти)
     tenant_bot = Bot(token=row["bot_token"])
     try:
         await tenant_bot.delete_webhook(drop_pending_updates=True)
@@ -59,12 +57,10 @@ async def resume_bot(user_id: int, bot_id: str) -> bool:
     if not row:
         return False
 
-    # 1) статус active
     ok = await TenantRepo.set_status(user_id, bot_id, "active")
     if not ok:
         return False
 
-    # 2) повертаємо webhook назад
     url = _tenant_webhook_url(bot_id, row["secret"])
     tenant_bot = Bot(token=row["bot_token"])
     try:
@@ -80,15 +76,16 @@ async def resume_bot(user_id: int, bot_id: str) -> bool:
 
 
 async def delete_bot(user_id: int, bot_id: str) -> bool:
-    # ✅ soft delete + deleteWebhook
     row = await TenantRepo.get_token_secret_for_owner(user_id, bot_id)
     if not row:
         return False
 
-    ok = await TenantRepo.delete(owner_user_id=user_id, tenant_id=bot_id)
+    # ✅ soft delete
+    ok = await TenantRepo.soft_delete(owner_user_id=user_id, tenant_id=bot_id)
     if not ok:
         return False
 
+    # ✅ зняти webhook, щоб Telegram перестав слати апдейти
     tenant_bot = Bot(token=row["bot_token"])
     try:
         await tenant_bot.delete_webhook(drop_pending_updates=True)
