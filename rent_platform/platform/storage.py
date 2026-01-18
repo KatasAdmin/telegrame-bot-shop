@@ -10,6 +10,9 @@ from rent_platform.config import settings
 from rent_platform.db.repo import TenantRepo, ModuleRepo
 
 
+ALLOWED_UPDATES = ["message", "callback_query"]
+
+
 def _tenant_webhook_url(tenant_id: str, secret: str) -> str:
     base = settings.WEBHOOK_URL.rstrip("/")
     prefix = settings.TENANT_WEBHOOK_PREFIX.rstrip("/")
@@ -37,7 +40,7 @@ async def add_bot(user_id: int, token: str, name: str = "Bot") -> dict:
         await tenant_bot.set_webhook(
             url,
             drop_pending_updates=False,
-            allowed_updates=["message", "callback_query"],
+            allowed_updates=ALLOWED_UPDATES,
         )
     finally:
         await tenant_bot.session.close()
@@ -50,7 +53,7 @@ async def pause_bot(user_id: int, bot_id: str) -> bool:
     if not row:
         return False
 
-    # ✅ paused_reason = manual
+    # paused_reason = manual
     ok = await TenantRepo.set_status(user_id, bot_id, "paused", paused_reason="manual")
     if not ok:
         return False
@@ -70,7 +73,7 @@ async def resume_bot(user_id: int, bot_id: str) -> bool:
     if not row:
         return False
 
-    # ✅ повертаємо в active + чистимо paused_reason
+    # повертаємо в active + чистимо paused_reason
     ok = await TenantRepo.set_status(user_id, bot_id, "active", paused_reason=None)
     if not ok:
         return False
@@ -81,7 +84,7 @@ async def resume_bot(user_id: int, bot_id: str) -> bool:
         await tenant_bot.set_webhook(
             url,
             drop_pending_updates=False,
-            allowed_updates=["message", "callback_query"],
+            allowed_updates=ALLOWED_UPDATES,
         )
     finally:
         await tenant_bot.session.close()
@@ -116,8 +119,6 @@ async def delete_bot(user_id: int, bot_id: str) -> bool:
 # Marketplace (модулі)
 # ======================================================================
 
-# Поки що каталог хардкодом.
-# Потім підтягнемо автоматом з modules/*/manifest.py.
 MODULE_CATALOG: dict[str, dict[str, Any]] = {
     "core": {
         "title": "🧠 Core",
@@ -192,19 +193,27 @@ async def disable_module(user_id: int, bot_id: str, module_key: str) -> bool:
 # Cabinet
 # ======================================================================
 
+def _safe_int(v: Any, default: int = 0) -> int:
+    try:
+        if v is None:
+            return default
+        return int(v)
+    except Exception:
+        return default
+
+
 async def get_cabinet(user_id: int) -> dict[str, Any]:
     """
-    Повертає дані для Кабінету:
     {
-      "now": 123,
+      "now": int,
       "bots": [
          {
-           "id": "...",
-           "name": "Bot",
+           "id": str,
+           "name": str,
            "status": "active|paused|deleted",
-           "plan_key": "free|basic|...",
-           "paid_until_ts": 0|int,
-           "paused_reason": "manual|billing|...",
+           "plan_key": str,
+           "paid_until_ts": int,
+           "paused_reason": str|None,
            "expired": bool
          }, ...
       ]
@@ -216,7 +225,7 @@ async def get_cabinet(user_id: int) -> dict[str, Any]:
     bots: list[dict[str, Any]] = []
     for it in items:
         plan = (it.get("plan_key") or "free")
-        paid_until = int(it.get("paid_until_ts") or 0)
+        paid_until = _safe_int(it.get("paid_until_ts"), 0)
 
         expired = bool(paid_until and paid_until < now)
 
@@ -235,6 +244,10 @@ async def get_cabinet(user_id: int) -> dict[str, Any]:
     return {"now": now, "bots": bots}
 
 
+# ======================================================================
+# Payments (MVP stub)
+# ======================================================================
+
 async def create_payment_link(user_id: int, bot_id: str, months: int = 1) -> dict | None:
     """
     MVP-заглушка: повертає посилання на оплату.
@@ -244,8 +257,16 @@ async def create_payment_link(user_id: int, bot_id: str, months: int = 1) -> dic
     if not row:
         return None
 
+    # мінімальний захист від дурних значень
+    months = int(months or 1)
+    if months < 1:
+        months = 1
+    if months > 24:
+        months = 24
+
     # приклад: 100 грн/міс
     amount_uah = 100 * months
+
     return {
         "bot_id": bot_id,
         "months": months,
