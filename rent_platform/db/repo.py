@@ -1,218 +1,177 @@
-# rent_platform/platform/storage.py
+# rent_platform/db/repo.py
 from __future__ import annotations
 
+import secrets
 import time
 from typing import Any
 
-from aiogram import Bot
-
-from rent_platform.config import settings
-from rent_platform.db.repo import TenantRepo, ModuleRepo
+from rent_platform.db.session import db_fetch_one, db_fetch_all, db_execute
 
 
-def _tenant_webhook_url(tenant_id: str, secret: str) -> str:
-    base = settings.WEBHOOK_URL.rstrip("/")
-    prefix = settings.TENANT_WEBHOOK_PREFIX.rstrip("/")
-    return f"{base}{prefix}/{tenant_id}/{secret}"
+class TenantRepo:
+    @staticmethod
+    async def get_by_id(tenant_id: str) -> dict | None:
+        q = """
+        SELECT id, owner_user_id, bot_token, secret, status, created_ts,
+               plan_key, paid_until_ts, paused_reason
+        FROM tenants
+        WHERE id = :id
+        """
+        return await db_fetch_one(q, {"id": tenant_id})
 
-
-# ======================================================================
-# Кабінет (read-only на старті)
-# ======================================================================
-
-async def get_cabinet(user_id: int) -> dict[str, Any]:
-    """
-    Повертає дані для екрану "Кабінет":
-    - список ботів користувача
-    - чи протермінена оплата
-    - план/paid_until/paused_reason
-    """
-    bots = await TenantRepo.list_by_owner(user_id)
-    now = int(time.time())
-
-    result: list[dict[str, Any]] = []
-    for b in bots:
-        paid_until = int(b.get("paid_until_ts") or 0)
-        result.append(
+    @staticmethod
+    async def list_by_owner(owner_user_id: int) -> list[dict[str, Any]]:
+        q = """
+        SELECT id, bot_token, secret, status, created_ts,
+               plan_key, paid_until_ts, paused_reason
+        FROM tenants
+        WHERE owner_user_id = :uid
+        ORDER BY created_ts DESC
+        """
+        rows = await db_fetch_all(q, {"uid": owner_user_id})
+        return [
             {
-                "id": b["id"],
-                "name": b.get("name", "Bot"),
-                "status": (b.get("status") or "active"),
-                "plan_key": (b.get("plan_key") or "free"),
-                "paid_until_ts": paid_until,
-                "expired": (paid_until > 0 and paid_until < now),
-                "paused_reason": b.get("paused_reason"),
+                "id": r["id"],
+                "name": "Bot",  # пізніше додамо поле name
+                "token": r["bot_token"],  # ⚠️ у UI не показуємо
+                "secret": r["secret"],    # ⚠️ у UI не показуємо
+                "status": r["status"],
+                "plan_key": r.get("plan_key") or "free",
+                "paid_until_ts": int(r.get("paid_until_ts") or 0),
+                "paused_reason": r.get("paused_reason"),
             }
+            for r in rows
+        ]
+
+    @staticmethod
+    async def create(owner_user_id: int, bot_token: str) -> dict[str, Any]:
+        tenant_id = secrets.token_hex(4)
+        secret = secrets.token_urlsafe(24)
+        created_ts = int(time.time())
+
+        q = """
+        INSERT INTO tenants (id, owner_user_id, bot_token, secret, status, created_ts, plan_key, paid_until_ts, paused_reason)
+        VALUES (:id, :uid, :token, :secret, 'active', :ts, 'free', 0, NULL)
+        """
+        await db_execute(
+            q,
+            {"id": tenant_id, "uid": owner_user_id, "token": bot_token, "secret": secret, "ts": created_ts},
         )
 
-    return {"now": now, "bots": result}
+        return {
+            "id": tenant_id,
+            "owner_user_id": owner_user_id,
+            "bot_token": bot_token,
+            "secret": secret,
+            "status": "active",
+            "plan_key": "free",
+            "paid_until_ts": 0,
+            "paused_reason": None,
+        }
+
+    @staticmethod
+    async def get_token_secret_for_owner(owner_user_id: int, tenant_id: str) -> dict | None:
+        q = """
+        SELECT id, bot_token, secret, status, plan_key, paid_until_ts, paused_reason
+        FROM tenants
+        WHERE id = :id AND owner_user_id = :uid
+        """
+        return await db_fetch_one(q, {"id": tenant_id, "uid": owner_user_id})
+
+    @staticmethod
+    async def set_status(owner_user_id: int, tenant_id: str, status: str, paused_reason: str | None = None) -> bool:
+        q = """
+        UPDATE tenants
+        SET status = :st, paused_reason = :pr
+        WHERE id = :id AND owner_user_id = :uid
+        """
+        res = await db_execute(q, {"st": status, "pr": paused_reason, "id": tenant_id, "uid": owner_user_id})
+        if res is None:
+            exists = await TenantRepo.get_token_secret_for_owner(owner_user_id, tenant_id)
+            return bool(exists)
+        try:
+            return int(res) > 0
+        except Exception:
+            return True
+
+    @staticmethod
+    async def soft_delete(owner_user_id: int, tenant_id: str) -> bool:
+        return await TenantRepo.set_status(owner_user_id, tenant_id, "deleted", paused_reason="manual")
+
+    @staticmethod
+    async def rotate_secret(owner_user_id: int, tenant_id: str) -> str | None:
+        new_secret = secrets.token_urlsafe(24)
+        q = """
+        UPDATE tenants
+        SET secret = :sec
+        WHERE id = :id AND owner_user_id = :uid
+        """
+        res = await db_execute(q, {"sec": new_secret, "id": tenant_id, "uid": owner_user_id})
+        if res is None:
+            row = await TenantRepo.get_token_secret_for_owner(owner_user_id, tenant_id)
+            return new_secret if row else None
+        return new_secret
+
+    @staticmethod
+    async def set_paid_until(owner_user_id: int, tenant_id: str, paid_until_ts: int, plan_key: str = "basic") -> bool:
+        q = """
+        UPDATE tenants
+        SET paid_until_ts = :p, plan_key = :plan
+        WHERE id = :id AND owner_user_id = :uid
+        """
+        res = await db_execute(q, {"p": int(paid_until_ts), "plan": plan_key, "id": tenant_id, "uid": owner_user_id})
+        if res is None:
+            row = await TenantRepo.get_token_secret_for_owner(owner_user_id, tenant_id)
+            return bool(row)
+        try:
+            return int(res) > 0
+        except Exception:
+            return True
 
 
-# ======================================================================
-# My bots
-# ======================================================================
+class ModuleRepo:
+    @staticmethod
+    async def list_enabled(tenant_id: str) -> list[str]:
+        q = """
+        SELECT module_key
+        FROM tenant_modules
+        WHERE tenant_id = :tid AND enabled = true
+        ORDER BY module_key
+        """
+        rows = await db_fetch_all(q, {"tid": tenant_id})
+        return [r["module_key"] for r in rows]
 
-async def list_bots(user_id: int) -> list[dict]:
-    return await TenantRepo.list_by_owner(user_id)
+    @staticmethod
+    async def list_all(tenant_id: str) -> list[dict]:
+        q = """
+        SELECT module_key, enabled
+        FROM tenant_modules
+        WHERE tenant_id = :tid
+        ORDER BY module_key
+        """
+        rows = await db_fetch_all(q, {"tid": tenant_id})
+        return [{"module_key": r["module_key"], "enabled": bool(r["enabled"])} for r in rows]
 
+    @staticmethod
+    async def enable(tenant_id: str, module_key: str) -> None:
+        q = """
+        INSERT INTO tenant_modules (tenant_id, module_key, enabled)
+        VALUES (:tid, :mk, true)
+        ON CONFLICT (tenant_id, module_key)
+        DO UPDATE SET enabled = true
+        """
+        await db_execute(q, {"tid": tenant_id, "mk": module_key})
 
-async def add_bot(user_id: int, token: str, name: str = "Bot") -> dict:
-    tenant = await TenantRepo.create(owner_user_id=user_id, bot_token=token)
+    @staticmethod
+    async def disable(tenant_id: str, module_key: str) -> None:
+        q = """
+        UPDATE tenant_modules
+        SET enabled = false
+        WHERE tenant_id = :tid AND module_key = :mk
+        """
+        await db_execute(q, {"tid": tenant_id, "mk": module_key})
 
-    # дефолтні модулі
-    await ModuleRepo.ensure_defaults(tenant["id"])
-
-    # виставляємо tenant webhook
-    url = _tenant_webhook_url(tenant["id"], tenant["secret"])
-    tenant_bot = Bot(token=token)
-    try:
-        await tenant_bot.set_webhook(
-            url,
-            drop_pending_updates=False,
-            allowed_updates=["message", "callback_query"],
-        )
-    finally:
-        await tenant_bot.session.close()
-
-    return {"id": tenant["id"], "name": name, "status": tenant["status"]}
-
-
-async def pause_bot(user_id: int, bot_id: str) -> bool:
-    row = await TenantRepo.get_token_secret_for_owner(user_id, bot_id)
-    if not row:
-        return False
-
-    # ✅ paused_reason = manual
-    ok = await TenantRepo.set_status(user_id, bot_id, "paused", paused_reason="manual")
-    if not ok:
-        return False
-
-    # знімаємо webhook, щоб Telegram перестав слати апдейти
-    tenant_bot = Bot(token=row["bot_token"])
-    try:
-        await tenant_bot.delete_webhook(drop_pending_updates=True)
-    finally:
-        await tenant_bot.session.close()
-
-    return True
-
-
-async def resume_bot(user_id: int, bot_id: str) -> bool:
-    row = await TenantRepo.get_token_secret_for_owner(user_id, bot_id)
-    if not row:
-        return False
-
-    # ✅ повертаємо в active + чистимо paused_reason
-    ok = await TenantRepo.set_status(user_id, bot_id, "active", paused_reason=None)
-    if not ok:
-        return False
-
-    url = _tenant_webhook_url(bot_id, row["secret"])
-    tenant_bot = Bot(token=row["bot_token"])
-    try:
-        await tenant_bot.set_webhook(
-            url,
-            drop_pending_updates=False,
-            allowed_updates=["message", "callback_query"],
-        )
-    finally:
-        await tenant_bot.session.close()
-
-    return True
-
-
-async def delete_bot(user_id: int, bot_id: str) -> bool:
-    row = await TenantRepo.get_token_secret_for_owner(user_id, bot_id)
-    if not row:
-        return False
-
-    # 1) soft delete
-    ok = await TenantRepo.soft_delete(user_id, bot_id)
-    if not ok:
-        return False
-
-    # 2) rotate secret (щоб старі /tg/t/... URL точно померли)
-    await TenantRepo.rotate_secret(user_id, bot_id)
-
-    # 3) знімаємо webhook (щоб Telegram взагалі перестав слати апдейти)
-    tenant_bot = Bot(token=row["bot_token"])
-    try:
-        await tenant_bot.delete_webhook(drop_pending_updates=True)
-    finally:
-        await tenant_bot.session.close()
-
-    return True
-
-
-# ======================================================================
-# Marketplace (модулі)
-# ======================================================================
-# Поки що "каталог" хардкодом. Далі підтягнемо з modules/*/manifest.py автоматом.
-MODULE_CATALOG: dict[str, dict] = {
-    "core": {
-        "title": "🧠 Core",
-        "desc": "Базові команди /start, системні штуки",
-        "price_month": 0,
-    },
-    "shop": {
-        "title": "🛒 Shop",
-        "desc": "Магазин: товари/замовлення (MVP)",
-        "price_month": 100,
-    },
-}
-
-
-async def list_bot_modules(user_id: int, bot_id: str) -> dict | None:
-    # перевіряємо власника
-    row = await TenantRepo.get_token_secret_for_owner(user_id, bot_id)
-    if not row:
-        return None
-
-    current = await ModuleRepo.list_all(bot_id)
-    enabled = {x["module_key"] for x in current if x["enabled"]}
-
-    result = []
-    for key, meta in MODULE_CATALOG.items():
-        result.append(
-            {
-                "key": key,
-                "title": meta["title"],
-                "desc": meta["desc"],
-                "price_month": meta["price_month"],
-                "enabled": key in enabled,
-            }
-        )
-
-    return {"bot_id": bot_id, "status": row.get("status"), "modules": result}
-
-
-async def enable_module(user_id: int, bot_id: str, module_key: str) -> bool:
-    if module_key not in MODULE_CATALOG:
-        return False
-
-    row = await TenantRepo.get_token_secret_for_owner(user_id, bot_id)
-    if not row:
-        return False
-
-    # якщо бот видалений — нічого не робимо
-    if (row.get("status") or "").lower() == "deleted":
-        return False
-
-    await ModuleRepo.enable(bot_id, module_key)
-    return True
-
-
-async def disable_module(user_id: int, bot_id: str, module_key: str) -> bool:
-    if module_key not in MODULE_CATALOG:
-        return False
-
-    row = await TenantRepo.get_token_secret_for_owner(user_id, bot_id)
-    if not row:
-        return False
-
-    # core краще не вимикати, щоб не "вбити" /start
-    if module_key == "core":
-        return False
-
-    await ModuleRepo.disable(bot_id, module_key)
-    return True
+    @staticmethod
+    async def ensure_defaults(tenant_id: str) -> None:
+        await ModuleRepo.enable(tenant_id, "core")
+        await ModuleRepo.enable(tenant_id, "shop")
