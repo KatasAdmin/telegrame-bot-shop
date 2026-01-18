@@ -649,3 +649,12 @@ async def cfg_receive_secret(message: Message, state: FSMContext) -> None:
 
     await message.answer("✅ Зберіг.", reply_markup=back_to_menu_kb())
     await _render_config(message, bot_id)
+# ДОДАЙ В САМ КІНЕЦЬ rent_platform/platform/handlers/start.py
+
+@router.message(F.text)
+async def _debug_unhandled_text(message: Message) -> None:
+    log.warning("UNHANDLED TEXT: %r | chat=%s user=%s",
+                message.text,
+                getattr(getattr(message, "chat", None), "id", None),
+                getattr(getattr(message, "from_user", None), "id", None))
+    # можна не відповідати, щоб не спамити
