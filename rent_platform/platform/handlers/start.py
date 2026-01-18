@@ -299,3 +299,23 @@ async def cb_my_bots_delete(call: CallbackQuery) -> None:
         await call.message.answer("🗑 Видалив (soft) + webhook вимкнув." if ok else "⚠️ Не знайшов такого бота.")
         await _render_my_bots(call.message)
     await call.answer()
+
+@router.callback_query(F.data.startswith("pl:my_bots:pause:"))
+async def cb_my_bots_pause(call: CallbackQuery, state: FSMContext) -> None:
+    bot_id = call.data.split("pl:my_bots:pause:", 1)[1]
+    ok = await pause_bot(call.from_user.id, bot_id)
+    if call.message:
+        await call.message.answer("⏸ Поставив на паузу." if ok else "⚠️ Не вдалось поставити на паузу.")
+    await call.answer()
+    # оновимо список
+    await cb_my_bots(call, state)
+
+
+@router.callback_query(F.data.startswith("pl:my_bots:resume:"))
+async def cb_my_bots_resume(call: CallbackQuery, state: FSMContext) -> None:
+    bot_id = call.data.split("pl:my_bots:resume:", 1)[1]
+    ok = await resume_bot(call.from_user.id, bot_id)
+    if call.message:
+        await call.message.answer("▶️ Відновив роботу." if ok else "⚠️ Не вдалось відновити.")
+    await call.answer()
+    await cb_my_bots(call, state)
