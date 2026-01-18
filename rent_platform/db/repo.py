@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import secrets
 import time
 from typing import Any
@@ -29,6 +30,65 @@ class TenantRepo:
         WHERE id = :id
         """
         return await db_fetch_one(q, {"id": tenant_id})
+
+
+    @staticmethod
+    async def list_active_for_billing() -> list[dict[str, Any]]:
+        q = """
+        SELECT
+            id,
+            owner_user_id,
+            status,
+            paused_reason,
+            product_key,
+            rate_per_min_kop,
+            last_billed_ts,
+            warned_24h_ts,
+            warned_3h_ts
+        FROM tenants
+        WHERE status = 'active'
+          AND product_key IS NOT NULL
+        ORDER BY created_ts ASC
+        """
+        return await db_fetch_all(q, {})
+
+    @staticmethod
+    async def set_rate_and_last_billed(owner_user_id: int, tenant_id: str, rate_per_min_kop: int, last_billed_ts: int) -> bool:
+        q = """
+        UPDATE tenants
+        SET rate_per_min_kop = :r,
+            last_billed_ts = :lb
+        WHERE id = :id AND owner_user_id = :uid
+        """
+        res = await db_execute(q, {"r": int(rate_per_min_kop), "lb": int(last_billed_ts), "id": tenant_id, "uid": int(owner_user_id)})
+        if res is None:
+            row = await TenantRepo.get_token_secret_for_owner(owner_user_id, tenant_id)
+            return bool(row)
+        try:
+            return int(res) > 0
+        except Exception:
+            return True
+
+    @staticmethod
+    async def system_pause_billing(tenant_id: str) -> None:
+        q = """
+        UPDATE tenants
+        SET status = 'paused',
+            paused_reason = 'billing'
+        WHERE id = :id
+        """
+        await db_execute(q, {"id": tenant_id})
+
+    @staticmethod
+    async def system_resume_if_billing(tenant_id: str) -> None:
+        q = """
+        UPDATE tenants
+        SET status = 'active',
+            paused_reason = NULL
+        WHERE id = :id AND status='paused' AND paused_reason='billing'
+        """
+        await db_execute(q, {"id": tenant_id})
+
 
     @staticmethod
     async def list_by_owner(owner_user_id: int) -> list[dict[str, Any]]:
@@ -408,3 +468,65 @@ class TenantIntegrationRepo:
         DO UPDATE SET enabled = EXCLUDED.enabled, updated_ts = EXCLUDED.updated_ts
         """
         await db_execute(q, {"tid": tenant_id, "p": provider, "en": bool(enabled), "ts": int(time.time())})
+        
+class AccountRepo:
+    @staticmethod
+    async def ensure(owner_user_id: int) -> None:
+        q = """
+        INSERT INTO owner_accounts (owner_user_id, balance_kop, updated_ts)
+        VALUES (:uid, 0, :ts)
+        ON CONFLICT (owner_user_id) DO NOTHING
+        """
+        await db_execute(q, {"uid": int(owner_user_id), "ts": int(time.time())})
+
+    @staticmethod
+    async def get(owner_user_id: int) -> dict | None:
+        q = """
+        SELECT owner_user_id, balance_kop, updated_ts
+        FROM owner_accounts
+        WHERE owner_user_id = :uid
+        """
+        return await db_fetch_one(q, {"uid": int(owner_user_id)})
+
+    @staticmethod
+    async def add_balance(owner_user_id: int, delta_kop: int) -> None:
+        # delta_kop може бути + або -
+        await AccountRepo.ensure(owner_user_id)
+        q = """
+        UPDATE owner_accounts
+        SET balance_kop = balance_kop + :d,
+            updated_ts = :ts
+        WHERE owner_user_id = :uid
+        """
+        await db_execute(q, {"uid": int(owner_user_id), "d": int(delta_kop), "ts": int(time.time())})
+
+    @staticmethod
+    async def set_balance(owner_user_id: int, new_balance_kop: int) -> None:
+        await AccountRepo.ensure(owner_user_id)
+        q = """
+        UPDATE owner_accounts
+        SET balance_kop = :b,
+            updated_ts = :ts
+        WHERE owner_user_id = :uid
+        """
+        await db_execute(q, {"uid": int(owner_user_id), "b": int(new_balance_kop), "ts": int(time.time())})
+
+
+class LedgerRepo:
+    @staticmethod
+    async def add(owner_user_id: int, kind: str, amount_kop: int, tenant_id: str | None = None, meta: dict | None = None) -> None:
+        q = """
+        INSERT INTO billing_ledger (owner_user_id, tenant_id, kind, amount_kop, meta, created_ts)
+        VALUES (:uid, :tid, :k, :a, :m, :ts)
+        """
+        await db_execute(
+            q,
+            {
+                "uid": int(owner_user_id),
+                "tid": tenant_id,
+                "k": str(kind),
+                "a": int(amount_kop),
+                "m": json.dumps(meta or {}, ensure_ascii=False),
+                "ts": int(time.time()),
+            },
+        ) 
