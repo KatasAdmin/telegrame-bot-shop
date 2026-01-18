@@ -31,7 +31,7 @@ class TenantRepo:
         return [
             {
                 "id": r["id"],
-                "name": "Bot",
+                "name": r.get("display_name") or "Bot",
                 "token": r["bot_token"],   # ⚠️ у UI не показуємо
                 "secret": r["secret"],     # ⚠️ у UI не показуємо
                 "status": r["status"],
