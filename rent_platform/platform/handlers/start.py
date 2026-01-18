@@ -63,6 +63,10 @@ class ConfigFlow(StatesGroup):
     waiting_secret_value = State()
 
 
+class BuyFlow(StatesGroup):
+    waiting_token = State()
+
+
 class MarketplaceBuyFlow(StatesGroup):
     waiting_bot_token = State()
 
