@@ -254,3 +254,20 @@ def config_kb(bot_id: str, providers: list[dict]) -> InlineKeyboardMarkup:
     )
     kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
     return kb.as_markup()
+
+def marketplace_products_kb(items: list[dict]) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for it in items:
+        key = it["key"]
+        title = it.get("title") or key
+        kb.row(InlineKeyboardButton(text=title, callback_data=f"pl:mkp:open:{key}"))
+    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
+    return kb.as_markup()
+
+
+def marketplace_buy_kb(product_key: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="✅ Купити (створити копію)", callback_data=f"pl:mkp:buy:{product_key}"))
+    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="pl:marketplace"))
+    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
+    return kb.as_markup()
