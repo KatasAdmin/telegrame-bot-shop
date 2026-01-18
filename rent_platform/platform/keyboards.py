@@ -1,4 +1,3 @@
-# rent_platform/platform/keyboards.py
 from __future__ import annotations
 
 from aiogram.types import (
@@ -8,7 +7,6 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-
 
 # === Тексти кнопок (одним місцем) ===
 BTN_MARKETPLACE = "🧩 Маркетплейс"
@@ -108,9 +106,6 @@ def my_bots_kb() -> InlineKeyboardMarkup:
 
 
 def my_bots_list_kb(items: list[dict]) -> InlineKeyboardMarkup:
-    """
-    items: [{"id": "...", "name": "...", "status": "active|paused|deleted"}]
-    """
     kb = InlineKeyboardBuilder()
 
     for it in items:
@@ -132,17 +127,18 @@ def my_bots_list_kb(items: list[dict]) -> InlineKeyboardMarkup:
             )
         )
 
-        if st == "active":
+        if st in ("active", "paused"):
             kb.row(
-                InlineKeyboardButton(text="⏸ Пауза", callback_data=f"pl:my_bots:pause:{bot_id}"),
-                InlineKeyboardButton(text="🗑 Видалити", callback_data=f"pl:my_bots:del:{bot_id}"),
+                InlineKeyboardButton(text="⚙️ Конфіг", callback_data=f"pl:cfg:open:{bot_id}"),
+                InlineKeyboardButton(
+                    text=("⏸ Пауза" if st == "active" else "▶️ Відновити"),
+                    callback_data=(f"pl:my_bots:pause:{bot_id}" if st == "active" else f"pl:my_bots:resume:{bot_id}"),
+                ),
                 width=2,
             )
-        elif st == "paused":
             kb.row(
-                InlineKeyboardButton(text="▶️ Відновити", callback_data=f"pl:my_bots:resume:{bot_id}"),
                 InlineKeyboardButton(text="🗑 Видалити", callback_data=f"pl:my_bots:del:{bot_id}"),
-                width=2,
+                width=1,
             )
         else:
             kb.row(
@@ -156,10 +152,6 @@ def my_bots_list_kb(items: list[dict]) -> InlineKeyboardMarkup:
 # === Marketplace (модулі) ===
 
 def marketplace_bots_kb(items: list[dict]) -> InlineKeyboardMarkup:
-    """
-    Список ботів для входу в маркетплейс (обрати бота і керувати модулями).
-    callback: pl:mp:bot:<bot_id>
-    """
     kb = InlineKeyboardBuilder()
     for it in items:
         bot_id = it["id"]
@@ -172,16 +164,13 @@ def marketplace_bots_kb(items: list[dict]) -> InlineKeyboardMarkup:
 
 
 def marketplace_modules_kb(bot_id: str, modules: list[dict]) -> InlineKeyboardMarkup:
-    """
-    modules: [{"key","title","enabled",...}]
-    callback toggle: pl:mp:tg:<bot_id>:<module_key>
-    """
     kb = InlineKeyboardBuilder()
 
     for m in modules:
         key = m["key"]
         title = m.get("title") or key
         enabled = bool(m.get("enabled"))
+
         btn_text = f"{'✅' if enabled else '➕'} {title}"
         kb.row(
             InlineKeyboardButton(
@@ -199,10 +188,42 @@ def marketplace_modules_kb(bot_id: str, modules: list[dict]) -> InlineKeyboardMa
     return kb.as_markup()
 
 
-# === Гроші / оплата ===
+# === Cabinet pay ===
 
 def cabinet_pay_kb(bot_id: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="💳 Оплатити (1 міс)", callback_data=f"pl:pay:{bot_id}:1"))
+    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
+    return kb.as_markup()
+
+
+# === Config (tenant keys) ===
+
+def config_kb(bot_id: str, providers: list[dict]) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+
+    for p in providers:
+        prov = p["provider"]
+        title = p["title"]
+        enabled = bool(p["enabled"])
+        kb.row(
+            InlineKeyboardButton(
+                text=f"{'✅' if enabled else '➕'} {title}",
+                callback_data=f"pl:cfg:tg:{bot_id}:{prov}",
+            )
+        )
+        for s in p.get("secrets") or []:
+            kb.row(
+                InlineKeyboardButton(
+                    text=f"🔑 {s['label']}",
+                    callback_data=f"pl:cfg:set:{bot_id}:{s['key']}",
+                )
+            )
+
+    kb.row(
+        InlineKeyboardButton(text="🔄 Оновити", callback_data=f"pl:cfg:open:{bot_id}"),
+        InlineKeyboardButton(text="⬅️ До ботів", callback_data="pl:my_bots"),
+        width=2,
+    )
     kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
     return kb.as_markup()
