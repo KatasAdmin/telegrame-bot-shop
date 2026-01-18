@@ -29,7 +29,7 @@ class TenantRepo:
         return [
             {
                 "id": r["id"],
-                "name": "Bot",  # пізніше додамо поле name
+                "name": "Bot",            # пізніше додамо поле name
                 "token": r["bot_token"],  # ⚠️ у UI не показуємо
                 "secret": r["secret"],    # ⚠️ у UI не показуємо
                 "status": r["status"],
@@ -60,7 +60,6 @@ class TenantRepo:
             "status": "active",
         }
 
-    # ✅ потрібне для pause/resume/delete (щоб дістати токен/secret і переконатися що це власник)
     @staticmethod
     async def get_token_secret_for_owner(owner_user_id: int, tenant_id: str) -> dict | None:
         q = """
@@ -78,20 +77,37 @@ class TenantRepo:
         WHERE id = :id AND owner_user_id = :uid
         """
         res = await db_execute(q, {"st": status, "id": tenant_id, "uid": owner_user_id})
-        # db_execute у тебе може повертати rowcount або None.
-        # Якщо None — просто перевіримо, що tenant існує.
+
+        # db_execute може повертати rowcount або None (залежить від реалізації)
         if res is None:
             exists = await TenantRepo.get_token_secret_for_owner(owner_user_id, tenant_id)
             return bool(exists)
+
         try:
             return int(res) > 0
         except Exception:
             return True
 
-    # ✅ SOFT delete (нічого не видаляємо фізично)
     @staticmethod
     async def soft_delete(owner_user_id: int, tenant_id: str) -> bool:
         return await TenantRepo.set_status(owner_user_id, tenant_id, "deleted")
+
+    # ✅ rotate secret (щоб старі URL точно "вмерли")
+    @staticmethod
+    async def rotate_secret(owner_user_id: int, tenant_id: str) -> str | None:
+        # перевірка власника + існування
+        row = await TenantRepo.get_token_secret_for_owner(owner_user_id, tenant_id)
+        if not row:
+            return None
+
+        new_secret = secrets.token_urlsafe(24)
+        q = """
+        UPDATE tenants
+        SET secret = :sec
+        WHERE id = :id AND owner_user_id = :uid
+        """
+        await db_execute(q, {"sec": new_secret, "id": tenant_id, "uid": owner_user_id})
+        return new_secret
 
 
 class ModuleRepo:
@@ -105,6 +121,18 @@ class ModuleRepo:
         """
         rows = await db_fetch_all(q, {"tid": tenant_id})
         return [r["module_key"] for r in rows]
+
+    # ✅ повертає всі модулі тенанта (і enabled і disabled)
+    @staticmethod
+    async def list_all(tenant_id: str) -> list[dict[str, Any]]:
+        q = """
+        SELECT module_key, enabled
+        FROM tenant_modules
+        WHERE tenant_id = :tid
+        ORDER BY module_key
+        """
+        rows = await db_fetch_all(q, {"tid": tenant_id})
+        return [{"module_key": r["module_key"], "enabled": bool(r["enabled"])} for r in rows]
 
     @staticmethod
     async def enable(tenant_id: str, module_key: str) -> None:
@@ -127,5 +155,6 @@ class ModuleRepo:
 
     @staticmethod
     async def ensure_defaults(tenant_id: str) -> None:
+        # мінімум, щоб tenant відповідав хоч на /start і /shop
         await ModuleRepo.enable(tenant_id, "core")
         await ModuleRepo.enable(tenant_id, "shop")
