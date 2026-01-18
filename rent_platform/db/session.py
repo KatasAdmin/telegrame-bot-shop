@@ -6,7 +6,6 @@ from sqlalchemy import text
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 
-# Railway зазвичай дає postgresql://, але async драйвер хоче +asyncpg
 if DATABASE_URL.startswith("postgresql://"):
     ASYNC_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 elif DATABASE_URL.startswith("postgres://"):
@@ -28,3 +27,8 @@ async def db_fetch_all(query: str, params: dict) -> list[dict]:
     async with engine.connect() as conn:
         res = await conn.execute(text(query), params)
         return [dict(r) for r in res.mappings().all()]
+
+
+async def db_execute(query: str, params: dict) -> None:
+    async with engine.begin() as conn:  # транзакція
+        await conn.execute(text(query), params)
