@@ -61,6 +61,10 @@ class ConfigFlow(StatesGroup):
     waiting_secret_value = State()
 
 
+class MarketplaceBuyFlow(StatesGroup):
+    waiting_bot_token = State()
+
+
 def _label(message: Message) -> str:
     chat_id = message.chat.id if message.chat else None
     user_id = message.from_user.id if message.from_user else None
@@ -151,6 +155,57 @@ async def cb_marketplace(call: CallbackQuery) -> None:
     if call.message:
         await _render_marketplace_pick_bot(call.message)
     await call.answer()
+
+@router.callback_query(F.data.startswith("pl:mkp:open:"))
+async def cb_mkp_open(call: CallbackQuery) -> None:
+    if not call.message:
+        await call.answer()
+        return
+
+    product_key = call.data.split("pl:mkp:open:", 1)[1]
+    p = await get_marketplace_product(product_key)
+    if not p:
+        await call.answer("Не знайдено", show_alert=True)
+        return
+
+    text = (
+        f"{p['desc']}\n\n"
+        f"💸 *Тариф:* `{p.get('rate_per_min_uah', 0)}` грн/хв\n\n"
+        f"Натисни «Купити», і я попрошу токен (BotFather), щоб створити твою копію."
+    )
+
+    await call.message.answer(
+        text,
+        parse_mode="Markdown",
+        reply_markup=marketplace_buy_kb(product_key),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("pl:mkp:buy:"))
+async def cb_mkp_buy(call: CallbackQuery, state: FSMContext) -> None:
+    if not call.message:
+        await call.answer()
+        return
+
+    product_key = call.data.split("pl:mkp:buy:", 1)[1]
+    p = await buy_product(call.from_user.id, product_key)
+    if not p:
+        await call.answer("Не знайдено", show_alert=True)
+        return
+
+    await state.set_state(MarketplaceBuyFlow.waiting_bot_token)
+    await state.update_data(mkp_product_key=product_key)
+
+    await call.message.answer(
+        "✅ *Покупка: створення твоєї копії*\n\n"
+        "Встав *BotFather токен* бота, який буде працювати як твоя копія цього продукту.\n"
+        "Формат: `123456:AA...`\n\n"
+        "⚠️ Не кидай токен у публічні чати.",
+        parse_mode="Markdown",
+        reply_markup=back_to_menu_kb(),
+    )
+    await call.answer("Ок")
 
 
 @router.callback_query(F.data == "pl:cabinet")
@@ -332,6 +387,7 @@ async def cb_pay(call: CallbackQuery) -> None:
 
 async def _render_marketplace_pick_bot(message: Message) -> None:
     items = await list_marketplace_products()
+
     if not items:
         await message.answer(
             "🧩 *Маркетплейс*\n\nПоки що немає продуктів.",
@@ -340,12 +396,14 @@ async def _render_marketplace_pick_bot(message: Message) -> None:
         )
         return
 
+    lines = ["🧩 *Маркетплейс ботів*", "", "Обери продукт 👇"]
+    for it in items:
+        lines.append(f"• *{it['title']}* — {it.get('short','')}")
     await message.answer(
-        "🧩 *Маркетплейс*\n\nОбери продукт:",
+        "\n".join(lines),
         parse_mode="Markdown",
         reply_markup=marketplace_products_kb(items),
     )
-
 
 @router.callback_query(F.data.startswith("pl:mkp:open:"))
 async def cb_marketplace_open(call: CallbackQuery) -> None:
@@ -431,6 +489,30 @@ async def cb_my_bots_add(call: CallbackQuery, state: FSMContext) -> None:
         )
     await call.answer()
 
+
+@router.message(MarketplaceBuyFlow.waiting_bot_token, F.text)
+async def mkp_receive_token(message: Message, state: FSMContext) -> None:
+    token = (message.text or "").strip()
+    data = await state.get_data()
+    product_key = data.get("mkp_product_key")
+
+    if ":" not in token or len(token) < 20:
+        await message.answer("❌ Схоже на невалідний токен. Спробуй ще раз.")
+        return
+
+    # створюємо tenant нормально (з webhook), бо це реальний токен
+    tenant = await add_bot(message.from_user.id, token=token, name=f"Product: {product_key}")
+
+    await state.clear()
+
+    await message.answer(
+        f"✅ Готово! Твоя копія створена.\n\n"
+        f"ID: `{tenant['id']}`\n"
+        f"Продукт: `{product_key}`\n\n"
+        f"Тепер зайди в «Мої боти» → знайди бота → ⚙️ Конфіг (ключі оплат).",
+        parse_mode="Markdown",
+        reply_markup=back_to_menu_kb(),
+    )
 
 @router.message(MyBotsFlow.waiting_token, F.text)
 async def my_bots_receive_token(message: Message, state: FSMContext) -> None:
