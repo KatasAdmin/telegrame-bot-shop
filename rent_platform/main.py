@@ -3,13 +3,12 @@ from __future__ import annotations
 
 import logging
 import time
-
-from fastapi import FastAPI, Request, HTTPException
-from aiogram import Bot, Dispatcher
-from aiogram.types import Update
 import asyncio
 
 from rent_platform.core.billing import billing_loop
+from fastapi import FastAPI, Request, HTTPException
+from aiogram import Bot, Dispatcher
+from aiogram.types import Update
 
 from rent_platform.config import settings
 from rent_platform.core.modules import init_modules
@@ -36,7 +35,8 @@ _webhook_inited = False
 
 # ✅ кеш tenant Bot-ів (на процес)
 _TENANT_BOTS: dict[str, Bot] = {}
-
+_BILL_STOP = asyncio.Event()
+_BILL_TASK: asyncio.Task | None = None
 
 def _get_tenant_bot(tenant_id: str, token: str) -> Bot:
     bot = _TENANT_BOTS.get(tenant_id)
