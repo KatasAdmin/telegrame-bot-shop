@@ -12,28 +12,23 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
 from rent_platform.platform.keyboards import (
-    # menus
+    my_bots_kb,
+    my_bots_list_kb,
+    marketplace_bots_kb,
+    marketplace_modules_kb,
     main_menu_kb,
     main_menu_inline_kb,
     back_to_menu_kb,
     partners_inline_kb,
     about_inline_kb,
-    # buttons (reply texts)
+    cabinet_pay_kb,
+    config_kb,
     BTN_MARKETPLACE,
     BTN_MY_BOTS,
     BTN_CABINET,
     BTN_PARTNERS,
     BTN_HELP,
-    # my bots
-    my_bots_kb,
-    my_bots_list_kb,
-    # marketplace
-    marketplace_bots_kb,
-    marketplace_modules_kb,
-    # payments
-    cabinet_pay_kb,
 )
-
 from rent_platform.platform.storage import (
     # my bots
     list_bots,
@@ -47,12 +42,23 @@ from rent_platform.platform.storage import (
     disable_module,
     # cabinet
     get_cabinet,
-    # payments
     create_payment_link,
+    # config
+    get_bot_config,
+    toggle_integration,
+    set_bot_secret,
 )
 
 log = logging.getLogger(__name__)
 router = Router()
+
+
+class MyBotsFlow(StatesGroup):
+    waiting_token = State()
+
+
+class ConfigFlow(StatesGroup):
+    waiting_secret_value = State()
 
 
 def _label(message: Message) -> str:
@@ -96,10 +102,7 @@ async def cabinet_text(message: Message) -> None:
         await _render_cabinet(message)
     except Exception as e:
         log.exception("cabinet failed: %s", e)
-        await message.answer(
-            "⚠️ Кабінет тимчасово впав. Я вже бачу помилку в логах 🙂",
-            reply_markup=back_to_menu_kb(),
-        )
+        await message.answer("⚠️ Кабінет тимчасово впав.", reply_markup=back_to_menu_kb())
 
 
 @router.message(F.text == BTN_PARTNERS)
@@ -124,6 +127,12 @@ async def support_text(message: Message) -> None:
         parse_mode="Markdown",
         reply_markup=about_inline_kb(),
     )
+
+
+@router.message(F.text == BTN_MY_BOTS)
+async def my_bots_text(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await _render_my_bots(message)
 
 
 # ======================================================================
@@ -153,6 +162,19 @@ async def cb_cabinet(call: CallbackQuery) -> None:
             log.exception("cb_cabinet failed: %s", e)
             await call.message.answer("⚠️ Кабінет тимчасово впав.", reply_markup=back_to_menu_kb())
     await call.answer()
+
+
+@router.callback_query(F.data == "pl:my_bots")
+async def cb_my_bots(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    if call.message:
+        await _render_my_bots(call.message)
+    await call.answer()
+
+
+@router.callback_query(F.data == "pl:my_bots:refresh")
+async def cb_my_bots_refresh(call: CallbackQuery, state: FSMContext) -> None:
+    await cb_my_bots(call, state)
 
 
 @router.callback_query(F.data == "pl:partners")
@@ -185,10 +207,10 @@ async def cb_partners_sub(call: CallbackQuery) -> None:
 
     key = call.data.split("pl:partners:", 1)[1]
     mapping = {
-        "link": "🔗 *Моя реф-силка*\n\n(заглушка: далі згенеруємо рефкод і посилання)",
-        "stats": "📊 *Статистика*\n\n(заглушка: реєстрації/оплати/комісія)",
-        "payouts": "💸 *Виплати*\n\n(заглушка: реквізити/історія/статус)",
-        "rules": "📜 *Правила*\n\n(заглушка: умови партнерки)",
+        "link": "🔗 *Моя реф-силка*\n\n(заглушка)",
+        "stats": "📊 *Статистика*\n\n(заглушка)",
+        "payouts": "💸 *Виплати*\n\n(заглушка)",
+        "rules": "📜 *Правила*\n\n(заглушка)",
     }
     await call.message.answer(
         mapping.get(key, "Пункт у розробці."),
@@ -216,13 +238,10 @@ async def _render_cabinet(message: Message) -> None:
     bots = data.get("bots") or []
 
     if not bots:
-        text = (
-            "👤 Кабінет\n\n"
-            "Поки що в тебе немає підключених ботів.\n"
-            "Перейди в «Мої боти» і додай токен.\n\n"
-            "Далі тут буде: тариф/оплата/рахунки/бонуси."
+        await message.answer(
+            "👤 Кабінет\n\nПоки що немає підключених ботів.\nЙди в «Мої боти» і додай токен.",
+            reply_markup=back_to_menu_kb(),
         )
-        await message.answer(text, reply_markup=back_to_menu_kb())
         return
 
     lines = [
@@ -233,8 +252,6 @@ async def _render_cabinet(message: Message) -> None:
         "Твої боти і статуси:",
     ]
 
-    expired_bots: list[str] = []
-
     for i, b in enumerate(bots, 1):
         st = (b.get("status") or "active").lower()
         plan = (b.get("plan_key") or "free")
@@ -242,13 +259,7 @@ async def _render_cabinet(message: Message) -> None:
         expired = bool(b.get("expired"))
         paused_reason = b.get("paused_reason")
 
-        badge = (
-            "✅ active" if st == "active"
-            else "⏸ paused" if st == "paused"
-            else "🗑 deleted" if st == "deleted"
-            else st
-        )
-
+        badge = "✅ active" if st == "active" else ("⏸ paused" if st == "paused" else ("🗑 deleted" if st == "deleted" else st))
         pay_str = _fmt_ts(paid_until)
         pay_note = " ⚠️ прострочено" if expired else ""
         extra = f" (reason: {paused_reason})" if paused_reason else ""
@@ -260,26 +271,49 @@ async def _render_cabinet(message: Message) -> None:
             f"   • id: {b['id']}"
         )
 
-        # ⬇️ збираємо прострочені — щоб показати кнопки оплати нижче окремими повідомленнями
-        if expired and st != "deleted":
-            expired_bots.append(b["id"])
-
-    lines += [
-        "",
-        "Далі додамо: оплату/плани, авто-паузу при 0 балансі, рахунки та історію платежів.",
-    ]
-
-    # ❗️без parse_mode (щоб не ловити Markdown entity errors)
     await message.answer("\n".join(lines), reply_markup=back_to_menu_kb())
 
-    # Окремими повідомленнями даємо оплату для кожного простроченого
-    for bot_id in expired_bots:
-        await message.answer(
-            f"⚠️ Бот `{bot_id}` прострочений.\n"
-            f"Щоб продовжити — натисни оплату 👇",
-            parse_mode="Markdown",
-            reply_markup=cabinet_pay_kb(bot_id),
-        )
+    # Якщо прострочено — показуємо кнопку оплатити (MVP)
+    for b in bots:
+        if b.get("expired"):
+            await message.answer(
+                f"⚠️ Бот `{b['id']}` прострочений. Щоб продовжити — натисни оплату 👇",
+                parse_mode="Markdown",
+                reply_markup=cabinet_pay_kb(b["id"]),
+            )
+
+
+@router.callback_query(F.data.startswith("pl:pay:"))
+async def cb_pay(call: CallbackQuery) -> None:
+    if not call.message:
+        await call.answer()
+        return
+
+    payload = call.data.split("pl:pay:", 1)[1]
+    try:
+        bot_id, months_s = payload.split(":", 1)
+        months = int(months_s)
+    except Exception:
+        await call.answer("⚠️ Bad payload")
+        return
+
+    user_id = call.from_user.id
+    invoice = await create_payment_link(user_id, bot_id, months=months)
+    if not invoice:
+        await call.answer("Нема доступу або не знайдено", show_alert=True)
+        return
+
+    await call.message.answer(
+        f"💳 *Оплата*\n\n"
+        f"Бот: `{bot_id}`\n"
+        f"Період: *{months} міс*\n"
+        f"Сума: *{invoice['amount_uah']} грн*\n\n"
+        f"Посилання на оплату:\n{invoice['pay_url']}\n\n"
+        f"_Після оплати зробимо авто-активацію (пізніше)._",
+        parse_mode="Markdown",
+        reply_markup=back_to_menu_kb(),
+    )
+    await call.answer("Створив інвойс ✅")
 
 
 # ======================================================================
@@ -292,17 +326,14 @@ async def _render_marketplace_pick_bot(message: Message) -> None:
 
     if not items:
         await message.answer(
-            "🧩 *Маркетплейс*\n\n"
-            "Спочатку додай хоча б одного бота в розділі **Мої боти**.\n"
-            "Після цього тут зʼявиться керування модулями 🙂",
+            "🧩 *Маркетплейс*\n\nСпочатку додай хоча б одного бота в «Мої боти».",
             parse_mode="Markdown",
             reply_markup=back_to_menu_kb(),
         )
         return
 
     await message.answer(
-        "🧩 *Маркетплейс модулів*\n\n"
-        "Обери бота, щоб підключати/вимикати модулі:",
+        "🧩 *Маркетплейс модулів*\n\nОбери бота, щоб підключати/вимикати модулі:",
         parse_mode="Markdown",
         reply_markup=marketplace_bots_kb(items),
     )
@@ -325,7 +356,7 @@ async def cb_marketplace_bot(call: CallbackQuery) -> None:
 
     st = (data.get("status") or "active").lower()
     if st == "deleted":
-        await call.message.answer("🗑 Цей бот видалений (soft). Керування модулями недоступне.")
+        await call.message.answer("🗑 Цей бот видалений (soft).")
         await call.answer()
         return
 
@@ -333,9 +364,6 @@ async def cb_marketplace_bot(call: CallbackQuery) -> None:
     lines = [f"🧩 *Модулі для бота* `{bot_id}`", ""]
     for m in modules:
         lines.append(f"• {'✅' if m['enabled'] else '➕'} *{m['title']}* — {m['desc']}")
-
-    if st == "paused":
-        lines += ["", "⏸ Бот на паузі. Модулі можна налаштовувати, але апдейти не приходять, поки не відновиш."]
 
     await call.message.answer(
         "\n".join(lines),
@@ -366,11 +394,6 @@ async def cb_marketplace_toggle(call: CallbackQuery) -> None:
         await call.answer()
         return
 
-    st = (info.get("status") or "active").lower()
-    if st == "deleted":
-        await call.answer("Бот видалений")
-        return
-
     modules = info["modules"]
     current = next((m for m in modules if m["key"] == module_key), None)
     if not current:
@@ -379,79 +402,15 @@ async def cb_marketplace_toggle(call: CallbackQuery) -> None:
 
     if current["enabled"]:
         ok = await disable_module(user_id, bot_id, module_key)
-        if not ok:
-            await call.answer("Не можна вимкнути", show_alert=True)
-        else:
-            await call.answer("Вимкнув ✅")
+        await call.answer("Вимкнув ✅" if ok else "Не можна вимкнути", show_alert=not ok)
     else:
         ok = await enable_module(user_id, bot_id, module_key)
-        if not ok:
-            await call.answer("Не можна увімкнути", show_alert=True)
-        else:
-            await call.answer("Увімкнув ✅")
-
-    # перерендеримо екран бота
-    new_info = await list_bot_modules(user_id, bot_id)
-    if new_info and call.message:
-        new_modules = new_info["modules"]
-        lines = [f"🧩 *Модулі для бота* `{bot_id}`", ""]
-        for m in new_modules:
-            lines.append(f"• {'✅' if m['enabled'] else '➕'} *{m['title']}* — {m['desc']}")
-        if st == "paused":
-            lines += ["", "⏸ Бот на паузі. Модулі можна налаштовувати."]
-
-        await call.message.answer(
-            "\n".join(lines),
-            parse_mode="Markdown",
-            reply_markup=marketplace_modules_kb(bot_id, new_modules),
-        )
-    await call.answer()
-
-
-# ======================================================================
-# Оплата (callback)
-# ======================================================================
-
-@router.callback_query(F.data.startswith("pl:pay:"))
-async def cb_pay(call: CallbackQuery) -> None:
-    if not call.message:
-        await call.answer()
-        return
-
-    payload = call.data.split("pl:pay:", 1)[1]
-    try:
-        bot_id, months_s = payload.split(":", 1)
-        months = int(months_s)
-    except Exception:
-        await call.answer("⚠️ Bad payload")
-        return
-
-    user_id = call.from_user.id
-    invoice = await create_payment_link(user_id, bot_id, months=months)
-    if not invoice:
-        await call.answer("Нема доступу або не знайдено", show_alert=True)
-        return
-
-    await call.message.answer(
-        f"💳 *Оплата*\n\n"
-        f"Бот: `{bot_id}`\n"
-        f"Період: *{months} міс*\n"
-        f"Сума: *{invoice['amount_uah']} грн*\n\n"
-        f"Посилання на оплату:\n{invoice['pay_url']}\n\n"
-        f"_Після оплати бот автоматично оживе (auto-resume)._",
-        parse_mode="Markdown",
-        reply_markup=back_to_menu_kb(),
-    )
-    await call.answer("Створив інвойс ✅")
+        await call.answer("Увімкнув ✅" if ok else "Не можна увімкнути", show_alert=not ok)
 
 
 # ======================================================================
 # My Bots
 # ======================================================================
-
-class MyBotsFlow(StatesGroup):
-    waiting_token = State()
-
 
 def _status_badge(st: str | None) -> str:
     st = (st or "active").lower()
@@ -470,10 +429,7 @@ async def _render_my_bots(message: Message) -> None:
 
     if not items:
         await message.answer(
-            "🤖 *Мої боти*\n\n"
-            "Поки порожньо.\n"
-            "Натисни **➕ Додати бота** і встав токен.\n\n"
-            "_Пізніше тут буде: статус оренди, модулі, конфігурація._",
+            "🤖 *Мої боти*\n\nПоки порожньо.\nНатисни **➕ Додати бота** і встав токен.",
             parse_mode="Markdown",
             reply_markup=my_bots_kb(),
         )
@@ -487,33 +443,12 @@ async def _render_my_bots(message: Message) -> None:
     await message.answer("⚙️ Керування ботами:", reply_markup=my_bots_list_kb(items))
 
 
-@router.message(F.text == BTN_MY_BOTS)
-async def my_bots_text(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    await _render_my_bots(message)
-
-
-@router.callback_query(F.data == "pl:my_bots")
-async def cb_my_bots(call: CallbackQuery, state: FSMContext) -> None:
-    await state.clear()
-    if call.message:
-        await _render_my_bots(call.message)
-    await call.answer()
-
-
-@router.callback_query(F.data == "pl:my_bots:refresh")
-async def cb_my_bots_refresh(call: CallbackQuery, state: FSMContext) -> None:
-    await cb_my_bots(call, state)
-
-
 @router.callback_query(F.data == "pl:my_bots:add")
 async def cb_my_bots_add(call: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(MyBotsFlow.waiting_token)
     if call.message:
         await call.message.answer(
-            "➕ *Додати бота*\n\n"
-            "Встав токен бота (формат як у BotFather: `123456:AA...`).\n\n"
-            "❗️Не кидай токен у публічні чати.",
+            "➕ *Додати бота*\n\nВстав токен бота (BotFather: `123456:AA...`).",
             parse_mode="Markdown",
         )
     await call.answer()
@@ -524,14 +459,14 @@ async def my_bots_receive_token(message: Message, state: FSMContext) -> None:
     token = (message.text or "").strip()
 
     if ":" not in token or len(token) < 20:
-        await message.answer("❌ Схоже на невалідний токен. Спробуй ще раз (має бути `числа:букви...`).")
+        await message.answer("❌ Схоже на невалідний токен. Спробуй ще раз.")
         return
 
     user_id = message.from_user.id
     await add_bot(user_id, token=token, name="Bot")
 
     await state.clear()
-    await message.answer("✅ Додав. Тепер це буде твоїм “орендованим/підключеним ботом” у платформі.")
+    await message.answer("✅ Додав.")
     await _render_my_bots(message)
 
 
@@ -545,7 +480,7 @@ async def cb_my_bots_pause(call: CallbackQuery) -> None:
     bot_id = call.data.split("pl:my_bots:pause:", 1)[1]
     ok = await pause_bot(call.from_user.id, bot_id)
     if call.message:
-        await call.message.answer("⏸ Поставив на паузу." if ok else "⚠️ Не вийшло (не знайдено/нема доступу).")
+        await call.message.answer("⏸ Поставив на паузу." if ok else "⚠️ Не вийшло.")
         await _render_my_bots(call.message)
     await call.answer()
 
@@ -555,7 +490,7 @@ async def cb_my_bots_resume(call: CallbackQuery) -> None:
     bot_id = call.data.split("pl:my_bots:resume:", 1)[1]
     ok = await resume_bot(call.from_user.id, bot_id)
     if call.message:
-        await call.message.answer("▶️ Відновив." if ok else "⚠️ Не вийшло (не знайдено/нема доступу).")
+        await call.message.answer("▶️ Відновив." if ok else "⚠️ Не вийшло.")
         await _render_my_bots(call.message)
     await call.answer()
 
@@ -565,6 +500,107 @@ async def cb_my_bots_delete(call: CallbackQuery) -> None:
     bot_id = call.data.split("pl:my_bots:del:", 1)[1]
     ok = await delete_bot(call.from_user.id, bot_id)
     if call.message:
-        await call.message.answer("🗑 Видалив (soft) + webhook вимкнув." if ok else "⚠️ Не знайшов такого бота.")
+        await call.message.answer("🗑 Видалив (soft)." if ok else "⚠️ Не знайшов такого бота.")
         await _render_my_bots(call.message)
     await call.answer()
+
+
+# ======================================================================
+# Config (tenant keys)
+# ======================================================================
+
+async def _render_config(message: Message, bot_id: str) -> None:
+    data = await get_bot_config(message.from_user.id, bot_id)
+    if not data:
+        await message.answer("⚠️ Не знайшов бота або нема доступу.", reply_markup=back_to_menu_kb())
+        return
+
+    providers = data["providers"]
+
+    lines = [f"⚙️ *Конфіг бота* `{bot_id}`", ""]
+    for p in providers:
+        lines.append(f"{'✅' if p['enabled'] else '➕'} *{p['title']}*")
+        for s in p.get("secrets") or []:
+            lines.append(f"   • `{s['key']}` = {s['value_masked']}")
+
+    await message.answer(
+        "\n".join(lines),
+        parse_mode="Markdown",
+        reply_markup=config_kb(bot_id, providers),
+    )
+
+
+@router.callback_query(F.data.startswith("pl:cfg:open:"))
+async def cb_cfg_open(call: CallbackQuery) -> None:
+    if call.message:
+        bot_id = call.data.split("pl:cfg:open:", 1)[1]
+        await _render_config(call.message, bot_id)
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("pl:cfg:tg:"))
+async def cb_cfg_toggle(call: CallbackQuery) -> None:
+    if not call.message:
+        await call.answer()
+        return
+
+    payload = call.data.split("pl:cfg:tg:", 1)[1]
+    try:
+        bot_id, provider = payload.split(":", 1)
+    except ValueError:
+        await call.answer("⚠️ Bad payload")
+        return
+
+    ok = await toggle_integration(call.from_user.id, bot_id, provider)
+    await call.answer("Ок ✅" if ok else "Не можна", show_alert=not ok)
+
+    if ok:
+        await _render_config(call.message, bot_id)
+
+
+@router.callback_query(F.data.startswith("pl:cfg:set:"))
+async def cb_cfg_set(call: CallbackQuery, state: FSMContext) -> None:
+    if not call.message:
+        await call.answer()
+        return
+
+    payload = call.data.split("pl:cfg:set:", 1)[1]
+    try:
+        bot_id, secret_key = payload.split(":", 1)
+    except ValueError:
+        await call.answer("⚠️ Bad payload")
+        return
+
+    await state.set_state(ConfigFlow.waiting_secret_value)
+    await state.update_data(cfg_bot_id=bot_id, cfg_secret_key=secret_key)
+
+    await call.message.answer(
+        f"🔑 Встав значення для `{secret_key}`.\n\n"
+        f"⚠️ Не кидай це в публічні чати.",
+        parse_mode="Markdown",
+        reply_markup=back_to_menu_kb(),
+    )
+    await call.answer()
+
+
+@router.message(ConfigFlow.waiting_secret_value, F.text)
+async def cfg_receive_secret(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    bot_id = data.get("cfg_bot_id")
+    secret_key = data.get("cfg_secret_key")
+    value = (message.text or "").strip()
+
+    if not bot_id or not secret_key:
+        await state.clear()
+        await message.answer("⚠️ Стан зламався, спробуй ще раз.", reply_markup=back_to_menu_kb())
+        return
+
+    ok = await set_bot_secret(message.from_user.id, bot_id, secret_key, value)
+    await state.clear()
+
+    if not ok:
+        await message.answer("⚠️ Не вийшло зберегти (нема доступу або ключ не дозволений).", reply_markup=back_to_menu_kb())
+        return
+
+    await message.answer("✅ Зберіг.", reply_markup=back_to_menu_kb())
+    await _render_config(message, bot_id)
