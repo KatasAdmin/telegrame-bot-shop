@@ -5,6 +5,8 @@ import logging
 import time
 from datetime import datetime
 
+from rent_platform.platform.storage import create_payment_link
+from rent_platform.platform.keyboards import cabinet_pay_kb
 from aiogram import Router, F
 from aiogram.filters import CommandStart
 from aiogram.types import Message, CallbackQuery
@@ -308,6 +310,39 @@ async def cb_marketplace_bot(call: CallbackQuery) -> None:
         reply_markup=marketplace_modules_kb(bot_id, modules),
     )
     await call.answer()
+
+
+@router.callback_query(F.data.startswith("pl:pay:"))
+async def cb_pay(call: CallbackQuery) -> None:
+    if not call.message:
+        await call.answer()
+        return
+
+    payload = call.data.split("pl:pay:", 1)[1]
+    try:
+        bot_id, months_s = payload.split(":", 1)
+        months = int(months_s)
+    except Exception:
+        await call.answer("⚠️ Bad payload")
+        return
+
+    user_id = call.from_user.id
+    invoice = await create_payment_link(user_id, bot_id, months=months)
+    if not invoice:
+        await call.answer("Нема доступу або не знайдено", show_alert=True)
+        return
+
+    await call.message.answer(
+        f"💳 *Оплата*\n\n"
+        f"Бот: `{bot_id}`\n"
+        f"Період: *{months} міс*\n"
+        f"Сума: *{invoice['amount_uah']} грн*\n\n"
+        f"Посилання на оплату:\n{invoice['pay_url']}\n\n"
+        f"_Після оплати бот автоматично оживе (auto-resume)._",
+        parse_mode="Markdown",
+        reply_markup=back_to_menu_kb(),
+    )
+    await call.answer("Створив інвойс ✅")
 
 
 @router.callback_query(F.data.startswith("pl:mp:tg:"))
