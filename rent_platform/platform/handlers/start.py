@@ -14,8 +14,8 @@ from aiogram.fsm.context import FSMContext
 from rent_platform.platform.keyboards import (
     my_bots_kb,
     my_bots_list_kb,
-    marketplace_bots_kb,
-    marketplace_modules_kb,
+    marketplace_products_kb,
+    marketplace_buy_kb,
     main_menu_kb,
     main_menu_inline_kb,
     back_to_menu_kb,
@@ -36,10 +36,10 @@ from rent_platform.platform.storage import (
     delete_bot,
     pause_bot,
     resume_bot,
-    # marketplace
-    list_bot_modules,
-    enable_module,
-    disable_module,
+    # marketplace (products)
+    list_marketplace_products,
+    get_marketplace_product,
+    buy_product,
     # cabinet
     get_cabinet,
     create_payment_link,
@@ -327,97 +327,65 @@ async def cb_pay(call: CallbackQuery) -> None:
 
 
 # ======================================================================
-# Marketplace (модулі)
+# Marketplace (продукти)
 # ======================================================================
 
 async def _render_marketplace_pick_bot(message: Message) -> None:
-    user_id = message.from_user.id
-    items = await list_bots(user_id)
-
+    items = await list_marketplace_products()
     if not items:
         await message.answer(
-            "🧩 *Маркетплейс*\n\nСпочатку додай хоча б одного бота в «Мої боти».",
+            "🧩 *Маркетплейс*\n\nПоки що немає продуктів.",
             parse_mode="Markdown",
             reply_markup=back_to_menu_kb(),
         )
         return
 
     await message.answer(
-        "🧩 *Маркетплейс модулів*\n\nОбери бота, щоб підключати/вимикати модулі:",
+        "🧩 *Маркетплейс*\n\nОбери продукт:",
         parse_mode="Markdown",
-        reply_markup=marketplace_bots_kb(items),
+        reply_markup=marketplace_products_kb(items),
     )
 
 
-@router.callback_query(F.data.startswith("pl:mp:bot:"))
-async def cb_marketplace_bot(call: CallbackQuery) -> None:
+@router.callback_query(F.data.startswith("pl:mkp:open:"))
+async def cb_marketplace_open(call: CallbackQuery) -> None:
     if not call.message:
         await call.answer()
         return
 
-    bot_id = call.data.split("pl:mp:bot:", 1)[1]
-    user_id = call.from_user.id
-
-    data = await list_bot_modules(user_id, bot_id)
-    if not data:
-        await call.message.answer("⚠️ Не знайшов бота або нема доступу.")
-        await call.answer()
+    product_key = call.data.split("pl:mkp:open:", 1)[1]
+    meta = await get_marketplace_product(product_key)
+    if not meta:
+        await call.answer("Не знайдено", show_alert=True)
         return
-
-    st = (data.get("status") or "active").lower()
-    if st == "deleted":
-        await call.message.answer("🗑 Цей бот видалений (soft).")
-        await call.answer()
-        return
-
-    modules = data["modules"]
-    lines = [f"🧩 *Модулі для бота* `{bot_id}`", ""]
-    for m in modules:
-        lines.append(f"• {'✅' if m['enabled'] else '➕'} *{m['title']}* — {m['desc']}")
 
     await call.message.answer(
-        "\n".join(lines),
+        meta["desc"] + f"\n\n⚡ Тариф: *{meta.get('rate_per_min_uah', 0)} грн/хв*",
         parse_mode="Markdown",
-        reply_markup=marketplace_modules_kb(bot_id, modules),
+        reply_markup=marketplace_buy_kb(product_key),
     )
     await call.answer()
 
 
-@router.callback_query(F.data.startswith("pl:mp:tg:"))
-async def cb_marketplace_toggle(call: CallbackQuery) -> None:
+@router.callback_query(F.data.startswith("pl:mkp:buy:"))
+async def cb_marketplace_buy(call: CallbackQuery) -> None:
     if not call.message:
         await call.answer()
         return
 
-    payload = call.data.split("pl:mp:tg:", 1)[1]
-    try:
-        bot_id, module_key = payload.split(":", 1)
-    except ValueError:
-        await call.answer("⚠️ Bad payload")
-        return
-
+    product_key = call.data.split("pl:mkp:buy:", 1)[1]
     user_id = call.from_user.id
 
-    info = await list_bot_modules(user_id, bot_id)
-    if not info:
-        await call.message.answer("⚠️ Не знайшов бота або нема доступу.")
-        await call.answer()
+    res = await buy_product(user_id, product_key)
+    if not res:
+        await call.answer("Не вийшло", show_alert=True)
         return
 
-    modules = info["modules"]
-    current = next((m for m in modules if m["key"] == module_key), None)
-    if not current:
-        await call.answer("Невідомий модуль")
-        return
-
-    if current["enabled"]:
-        ok = await disable_module(user_id, bot_id, module_key)
-        await call.answer("Вимкнув ✅" if ok else "Не можна вимкнути", show_alert=not ok)
-    else:
-        ok = await enable_module(user_id, bot_id, module_key)
-        await call.answer("Увімкнув ✅" if ok else "Не можна увімкнути", show_alert=not ok)
-
-
+    await call.message.answer(
+        "✅ Куплено!\n\nТепер продукт з’явився в «Мої боти».\nТам відкриєш «⚙️ Конфіг» і вставиш свої ключі оплат.",
+        reply_markup=back_to_menu_kb(),
+    )
+    await call.answer("Готово ✅")
 # ======================================================================
 # My Bots
 # ======================================================================
