@@ -1,4 +1,3 @@
-# rent_platform/platform/handlers/start.py
 from __future__ import annotations
 
 import logging
@@ -13,6 +12,8 @@ from aiogram.fsm.context import FSMContext
 from rent_platform.platform.keyboards import (
     my_bots_kb,
     my_bots_list_kb,
+    marketplace_bots_kb,
+    marketplace_modules_kb,
     main_menu_kb,
     main_menu_inline_kb,
     back_to_menu_kb,
@@ -30,6 +31,9 @@ from rent_platform.platform.storage import (
     delete_bot,
     pause_bot,
     resume_bot,
+    list_bot_modules,
+    enable_module,
+    disable_module,
 )
 
 log = logging.getLogger(__name__)
@@ -66,13 +70,7 @@ async def cmd_start(message: Message) -> None:
 
 @router.message(F.text == BTN_MARKETPLACE)
 async def marketplace_text(message: Message) -> None:
-    await message.answer(
-        "🧩 *Маркетплейс*\n\n"
-        "Тут буде каталог модулів (shop / invest / …), підключення та керування.\n"
-        "Поки що заглушка — далі зробимо список і «підключити».",
-        parse_mode="Markdown",
-        reply_markup=back_to_menu_kb(),
-    )
+    await _render_marketplace_pick_bot(message)
 
 
 @router.message(F.text == BTN_CABINET)
@@ -118,19 +116,14 @@ async def support_text(message: Message) -> None:
 @router.callback_query(F.data == "pl:menu")
 async def cb_menu(call: CallbackQuery) -> None:
     if call.message:
-        await call.message.answer("⬇️ Меню", reply_markup=main_menu_kb(is_admin=False))
-        await call.message.answer("Швидкі кнопки:", reply_markup=main_menu_inline_kb())
+        await _send_main_menu(call.message)
     await call.answer()
 
 
 @router.callback_query(F.data == "pl:marketplace")
 async def cb_marketplace(call: CallbackQuery) -> None:
     if call.message:
-        await call.message.answer(
-            "🧩 *Маркетплейс*\n\n(заглушка, далі зробимо список модулів)",
-            parse_mode="Markdown",
-            reply_markup=back_to_menu_kb(),
-        )
+        await _render_marketplace_pick_bot(call.message)
     await call.answer()
 
 
@@ -186,6 +179,137 @@ async def cb_partners_sub(call: CallbackQuery) -> None:
         reply_markup=partners_inline_kb(),
     )
     await call.answer()
+
+
+# ===== Marketplace (модулі) =====
+
+async def _render_marketplace_pick_bot(message: Message) -> None:
+    user_id = message.from_user.id
+    items = await list_bots(user_id)
+
+    if not items:
+        await message.answer(
+            "🧩 *Маркетплейс*\n\n"
+            "Спочатку додай хоча б одного бота в розділі **Мої боти**.\n"
+            "Після цього тут зʼявиться керування модулями 🙂",
+            parse_mode="Markdown",
+            reply_markup=back_to_menu_kb(),
+        )
+        return
+
+    await message.answer(
+        "🧩 *Маркетплейс модулів*\n\n"
+        "Обери бота, щоб підключати/вимикати модулі:",
+        parse_mode="Markdown",
+        reply_markup=marketplace_bots_kb(items),
+    )
+
+
+@router.callback_query(F.data.startswith("pl:mp:bot:"))
+async def cb_marketplace_bot(call: CallbackQuery) -> None:
+    if not call.message:
+        await call.answer()
+        return
+
+    bot_id = call.data.split("pl:mp:bot:", 1)[1]
+    user_id = call.from_user.id
+
+    data = await list_bot_modules(user_id, bot_id)
+    if not data:
+        await call.message.answer("⚠️ Не знайшов бота або нема доступу.")
+        await call.answer()
+        return
+
+    st = (data.get("status") or "active").lower()
+    if st == "deleted":
+        await call.message.answer("🗑 Цей бот видалений (soft). Керування модулями недоступне.")
+        await call.answer()
+        return
+
+    modules = data["modules"]
+    lines = [f"🧩 *Модулі для бота* `{bot_id}`", ""]
+    for m in modules:
+        lines.append(f"• {'✅' if m['enabled'] else '➕'} *{m['title']}* — {m['desc']}")
+
+    if st == "paused":
+        lines += ["", "⏸ Бот на паузі. Модулі можна налаштовувати, але апдейти не приходять, поки не відновиш."]
+
+    await call.message.answer(
+        "\n".join(lines),
+        parse_mode="Markdown",
+        reply_markup=marketplace_modules_kb(bot_id, modules),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("pl:mp:tg:"))
+async def cb_marketplace_toggle(call: CallbackQuery) -> None:
+    if not call.message:
+        await call.answer()
+        return
+
+    # формат: pl:mp:tg:<bot_id>:<module_key>
+    payload = call.data.split("pl:mp:tg:", 1)[1]
+    try:
+        bot_id, module_key = payload.split(":", 1)
+    except ValueError:
+        await call.answer("⚠️ Bad payload")
+        return
+
+    user_id = call.from_user.id
+
+    # дізнаємось поточний стан
+    info = await list_bot_modules(user_id, bot_id)
+    if not info:
+        await call.message.answer("⚠️ Не знайшов бота або нема доступу.")
+        await call.answer()
+        return
+
+    st = (info.get("status") or "active").lower()
+    if st == "deleted":
+        await call.answer("Бот видалений")
+        return
+
+    modules = info["modules"]
+    current = None
+    for m in modules:
+        if m["key"] == module_key:
+            current = m
+            break
+
+    if not current:
+        await call.answer("Невідомий модуль")
+        return
+
+    # toggle
+    if current["enabled"]:
+        ok = await disable_module(user_id, bot_id, module_key)
+        if not ok:
+            await call.answer("Не можна вимкнути", show_alert=True)
+        else:
+            await call.answer("Вимкнув ✅")
+    else:
+        ok = await enable_module(user_id, bot_id, module_key)
+        if not ok:
+            await call.answer("Не можна увімкнути", show_alert=True)
+        else:
+            await call.answer("Увімкнув ✅")
+
+    # перерендеримо екран бота
+    new_info = await list_bot_modules(user_id, bot_id)
+    if new_info and call.message:
+        new_modules = new_info["modules"]
+        lines = [f"🧩 *Модулі для бота* `{bot_id}`", ""]
+        for m in new_modules:
+            lines.append(f"• {'✅' if m['enabled'] else '➕'} *{m['title']}* — {m['desc']}")
+        if st == "paused":
+            lines += ["", "⏸ Бот на паузі. Модулі можна налаштовувати."]
+
+        await call.message.answer(
+            "\n".join(lines),
+            parse_mode="Markdown",
+            reply_markup=marketplace_modules_kb(bot_id, new_modules),
+        )
 
 
 # ===== My Bots =====
@@ -274,6 +398,11 @@ async def my_bots_receive_token(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer("✅ Додав. Тепер це буде твоїм “орендованим/підключеним ботом” у платформі.")
     await _render_my_bots(message)
+
+
+@router.callback_query(F.data.startswith("pl:my_bots:noop:"))
+async def cb_my_bots_noop(call: CallbackQuery) -> None:
+    await call.answer("🙂")
 
 
 @router.callback_query(F.data.startswith("pl:my_bots:pause:"))
