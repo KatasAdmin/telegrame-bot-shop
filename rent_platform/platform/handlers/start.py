@@ -24,7 +24,12 @@ from rent_platform.platform.keyboards import (
     BTN_PARTNERS,
     BTN_HELP,
 )
-from rent_platform.platform.storage import list_bots, add_bot, delete_bot, pause_bot, resume_bot
+from rent_platform.platform.storage import (
+    list_bots,
+    add_bot,
+    delete_bot,
+    pause_bot,
+    resume_bot,
 )
 
 log = logging.getLogger(__name__)
@@ -162,8 +167,6 @@ async def cb_support(call: CallbackQuery) -> None:
     await call.answer()
 
 
-# --- Partners sub-callbacks (заглушки) ---
-
 @router.callback_query(F.data.startswith("pl:partners:"))
 async def cb_partners_sub(call: CallbackQuery) -> None:
     if not call.message:
@@ -191,6 +194,17 @@ class MyBotsFlow(StatesGroup):
     waiting_token = State()
 
 
+def _status_badge(st: str | None) -> str:
+    st = (st or "active").lower()
+    if st == "active":
+        return "✅ active"
+    if st == "paused":
+        return "⏸ paused"
+    if st == "deleted":
+        return "🗑 deleted"
+    return f"⚪️ {st}"
+
+
 async def _render_my_bots(message: Message) -> None:
     user_id = message.from_user.id
     items = await list_bots(user_id)
@@ -206,13 +220,11 @@ async def _render_my_bots(message: Message) -> None:
         )
         return
 
-    # короткий текст + окремо список керування
-    await message.answer(
-        "🤖 *Мої боти*\n\n"
-        "Нижче — керування (пауза/відновити/видалити).",
-        parse_mode="Markdown",
-        reply_markup=my_bots_kb(),
-    )
+    lines = ["🤖 *Мої боти*"]
+    for i, it in enumerate(items, 1):
+        lines.append(f"{i}) **{it.get('name','Bot')}** — {_status_badge(it.get('status'))}  (id: `{it['id']}`)")
+
+    await message.answer("\n".join(lines), parse_mode="Markdown", reply_markup=my_bots_kb())
     await message.answer("⚙️ Керування ботами:", reply_markup=my_bots_list_kb(items))
 
 
@@ -257,18 +269,11 @@ async def my_bots_receive_token(message: Message, state: FSMContext) -> None:
         return
 
     user_id = message.from_user.id
-    await add_bot(user_id, token=token, name="Bot")  # webhook ставиться всередині storage.add_bot
+    await add_bot(user_id, token=token, name="Bot")
 
     await state.clear()
     await message.answer("✅ Додав. Тепер це буде твоїм “орендованим/підключеним ботом” у платформі.")
     await _render_my_bots(message)
-
-
-# --- My bots actions ---
-
-@router.callback_query(F.data.startswith("pl:my_bots:noop:"))
-async def cb_my_bots_noop(call: CallbackQuery) -> None:
-    await call.answer("🙂")
 
 
 @router.callback_query(F.data.startswith("pl:my_bots:pause:"))
@@ -299,23 +304,3 @@ async def cb_my_bots_delete(call: CallbackQuery) -> None:
         await call.message.answer("🗑 Видалив (soft) + webhook вимкнув." if ok else "⚠️ Не знайшов такого бота.")
         await _render_my_bots(call.message)
     await call.answer()
-
-@router.callback_query(F.data.startswith("pl:my_bots:pause:"))
-async def cb_my_bots_pause(call: CallbackQuery, state: FSMContext) -> None:
-    bot_id = call.data.split("pl:my_bots:pause:", 1)[1]
-    ok = await pause_bot(call.from_user.id, bot_id)
-    if call.message:
-        await call.message.answer("⏸ Поставив на паузу." if ok else "⚠️ Не вдалось поставити на паузу.")
-    await call.answer()
-    # оновимо список
-    await cb_my_bots(call, state)
-
-
-@router.callback_query(F.data.startswith("pl:my_bots:resume:"))
-async def cb_my_bots_resume(call: CallbackQuery, state: FSMContext) -> None:
-    bot_id = call.data.split("pl:my_bots:resume:", 1)[1]
-    ok = await resume_bot(call.from_user.id, bot_id)
-    if call.message:
-        await call.message.answer("▶️ Відновив роботу." if ok else "⚠️ Не вдалось відновити.")
-    await call.answer()
-    await cb_my_bots(call, state)
