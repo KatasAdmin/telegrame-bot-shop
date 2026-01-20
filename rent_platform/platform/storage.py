@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import logging
 import time
+import logging
 from typing import Any
 
 from aiogram import Bot
@@ -40,6 +40,10 @@ def _uah_to_kop(amount_uah: int) -> int:
     return max(0, int(amount_uah) * 100)
 
 
+def _kop_to_uah_str(kop: int) -> str:
+    return f"{int(kop) / 100:.2f}"
+
+
 # ======================================================================
 # My bots
 # ======================================================================
@@ -49,10 +53,16 @@ async def list_bots(user_id: int) -> list[dict]:
 
 
 async def add_bot(user_id: int, token: str, name: str = "Bot", product_key: str | None = None) -> dict:
+    """
+    Створює tenant (орендованого бота), вмикає базові модулі та модуль продукту,
+    ставить webhook на tenant-url.
+    """
     tenant = await TenantRepo.create(owner_user_id=user_id, bot_token=token)
 
+    # ім'я в UI
     await TenantRepo.set_display_name(user_id, tenant["id"], name)
 
+    # ✅ базові модулі
     await ModuleRepo.enable(tenant["id"], "core")
 
     if product_key:
@@ -61,6 +71,7 @@ async def add_bot(user_id: int, token: str, name: str = "Bot", product_key: str 
     else:
         await ModuleRepo.enable(tenant["id"], "shop")
 
+    # webhook tenant-а
     url = _tenant_webhook_url(tenant["id"], tenant["secret"])
     tenant_bot = Bot(token=token)
     try:
@@ -210,8 +221,7 @@ async def get_cabinet(user_id: int) -> dict[str, Any]:
             }
         )
 
-    ledger = await LedgerRepo.list_last(user_id, limit=10)
-    return {"now": now, "balance_kop": balance_kop, "bots": bots, "ledger": ledger}}
+    return {"now": now, "balance_kop": balance_kop, "bots": bots}
 
 
 async def create_payment_link(user_id: int, bot_id: str, months: int = 1) -> dict | None:
@@ -229,11 +239,8 @@ async def create_payment_link(user_id: int, bot_id: str, months: int = 1) -> dic
     }
 
 
-# ======================================================================
-# TopUp (баланс)
-# ======================================================================
-
 async def create_topup_invoice(user_id: int, amount_uah: int, provider: str) -> dict | None:
+    # validations
     amount_uah = int(amount_uah)
     if amount_uah < 10:
         return None
@@ -241,6 +248,8 @@ async def create_topup_invoice(user_id: int, amount_uah: int, provider: str) -> 
         return None
 
     amount_kop = _uah_to_kop(amount_uah)
+
+    # pay_url stub (later: real provider invoice URL)
     pay_url = f"https://example.com/topup?u={user_id}&a={amount_uah}&p={provider}"
 
     inv = await InvoiceRepo.create(
@@ -267,7 +276,9 @@ async def create_topup_invoice(user_id: int, amount_uah: int, provider: str) -> 
 
 
 async def confirm_topup_paid_test(user_id: int, invoice_id: int) -> dict | None:
-    inv = await InvoiceRepo.get_for_owner(user_id, int(invoice_id))
+    invoice_id = int(invoice_id)
+
+    inv = await InvoiceRepo.get_for_owner(user_id, invoice_id)
     log.info("TOPUP confirm requested: uid=%s invoice_id=%s inv=%s", user_id, invoice_id, inv)
 
     if not inv:
@@ -275,39 +286,33 @@ async def confirm_topup_paid_test(user_id: int, invoice_id: int) -> dict | None:
 
     status = (inv.get("status") or "").lower()
     if status != "pending":
-    return {"already": True, "status": status}
+        return {"already": True, "status": status}
 
     amount_kop = int(inv.get("amount_kop") or 0)
     if amount_kop <= 0:
         return None
 
-# 0) if already credited -> idempotent exit
-    if await LedgerRepo.has_topup_invoice(user_id, int(invoice_id)):
-# інвойс могли вже провести раніше
-        await AccountRepo.ensure(user_id)
-        acc = await AccountRepo.get(user_id)
-        bal = int((acc or {}).get("balance_kop") or 0)
-        return {"already": True, "status": "credited", "new_balance_kop": bal}
+    # 1) mark paid
+    await InvoiceRepo.mark_paid(user_id, invoice_id)
 
-# 1) mark paid
-    await InvoiceRepo.mark_paid(user_id, int(invoice_id))
-
-# 2) balance +
+    # 2) balance +
     await AccountRepo.ensure(user_id)
     acc = await AccountRepo.get(user_id)
     balance = int((acc or {}).get("balance_kop") or 0) + amount_kop
     await AccountRepo.set_balance(user_id, balance)
 
-# 3) ledger +
+    # 3) ledger +
     await LedgerRepo.add(
         user_id,
         "topup",
         +amount_kop,
         tenant_id=None,
-        meta={"invoice_id": int(invoice_id), "provider": inv.get("provider")},
+        meta={"invoice_id": invoice_id, "provider": inv.get("provider")},
     )
 
     return {"ok": True, "new_balance_kop": balance, "amount_kop": amount_kop}
+
+
 # ======================================================================
 # Tenant config (режим 2): інтеграції + секрети (ключі клієнта)
 # ======================================================================
