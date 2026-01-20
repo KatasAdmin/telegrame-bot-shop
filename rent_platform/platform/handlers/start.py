@@ -427,28 +427,6 @@ async def _render_cabinet(message: Message) -> None:
         f"💸 Для виведення: *{withdraw_uah:.2f} грн*\n"
     )
 
-    if CABINET_BANNER_URL:
-        await message.answer_photo(
-            photo=CABINET_BANNER_URL,
-            caption=caption,
-            parse_mode="Markdown",
-            reply_markup=cabinet_actions_kb(),
-        )
-    else:
-        await message.answer(
-            caption,
-            parse_mode="Markdown",
-            reply_markup=cabinet_actions_kb(),
-        )
-
-    lines = [
-        "👤 Кабінет",
-        "",
-        f"🕒 Зараз: {_fmt_ts(now)}",
-        f"💰 Баланс: {balance_uah:.2f} грн",
-        "",
-        "Твої боти і статуси:",
-    ]
 
     for i, b in enumerate(bots, 1):
         st = (b.get("status") or "active").lower()
