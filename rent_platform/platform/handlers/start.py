@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from datetime import datetime
+CABINET_BANNER_URL = os.getenv("CABINET_BANNER_URL", "").strip()
 
 from aiogram import Router, F
 from aiogram.filters import CommandStart
@@ -10,6 +12,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
+from rent_platform.platform.keyboards import cabinet_actions_kb
 from rent_platform.platform.keyboards import (
     # my bots
     my_bots_kb,
@@ -411,24 +414,32 @@ async def _render_cabinet(message: Message) -> None:
     user_id = message.from_user.id
     data = await get_cabinet(user_id)
 
-    now = int(data.get("now") or time.time())
-    bots = data.get("bots") or []
+    balance_uah = int(data.get("balance_kop") or 0) / 100.0
+    withdraw_uah = int(data.get("withdraw_balance_kop") or 0) / 100.0
+    active_bots = int(data.get("active_bots") or 0)
 
-    # ✅ баланс
-    balance_kop = int(data.get("balance_kop") or 0)
-    balance_uah = balance_kop / 100.0
+    caption = (
+        "👤 *Кабінет*\n\n"
+        "Привіт 🙂\n"
+        f"Ваш ID: `{user_id}`\n"
+        f"Працюючих ботів: *{active_bots}*\n\n"
+        f"💰 Основний рахунок: *{balance_uah:.2f} грн*\n"
+        f"💸 Для виведення: *{withdraw_uah:.2f} грн*\n"
+    )
 
-    if not bots:
-        await message.answer(
-            "👤 Кабінет\n\n"
-            f"💰 Баланс: *{balance_uah:.2f} грн*\n\n"
-            "Поки що немає підключених ботів.\n"
-            "Йди в «Мої боти» і додай токен.",
+    if CABINET_BANNER_URL:
+        await message.answer_photo(
+            photo=CABINET_BANNER_URL,
+            caption=caption,
             parse_mode="Markdown",
-            reply_markup=back_to_menu_kb(),
+            reply_markup=cabinet_actions_kb(),
         )
-        await message.answer("Поповнення балансу:", reply_markup=cabinet_topup_kb())
-        return
+    else:
+        await message.answer(
+            caption,
+            parse_mode="Markdown",
+            reply_markup=cabinet_actions_kb(),
+        )
 
     lines = [
         "👤 Кабінет",
