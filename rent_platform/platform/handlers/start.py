@@ -1,5 +1,3 @@
-# rent_platform/platform/handlers/start.py
-# rent_platform/platform/handlers/start.py
 from __future__ import annotations
 
 import logging
@@ -13,13 +11,16 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
 from rent_platform.platform.keyboards import (
+    # my bots
     my_bots_kb,
     my_bots_list_kb,
 
+    # menus
     main_menu_kb,
     main_menu_inline_kb,
     back_to_menu_kb,
 
+    # info/partners
     partners_inline_kb,
     about_inline_kb,
 
@@ -27,14 +28,18 @@ from rent_platform.platform.keyboards import (
     marketplace_products_kb,
     marketplace_buy_kb,
 
+    # cabinet old pay (можеш лишити, навіть якщо не юзаєш зараз)
     cabinet_pay_kb,
+
+    # config
     config_kb,
 
-    # ✅ topup
+    # topup
     cabinet_topup_kb,
     topup_provider_kb,
     topup_confirm_kb,
 
+    # btn constants
     BTN_MARKETPLACE,
     BTN_MY_BOTS,
     BTN_CABINET,
@@ -50,7 +55,7 @@ from rent_platform.platform.storage import (
     pause_bot,
     resume_bot,
 
-    # marketplace (products)
+    # marketplace
     list_marketplace_products,
     get_marketplace_product,
     buy_product,
@@ -59,7 +64,7 @@ from rent_platform.platform.storage import (
     get_cabinet,
     create_payment_link,
 
-    # ✅ topup
+    # topup
     create_topup_invoice,
     confirm_topup_paid_test,
 
