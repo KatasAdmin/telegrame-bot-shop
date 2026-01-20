@@ -1,4 +1,5 @@
 # rent_platform/platform/handlers/start.py
+# rent_platform/platform/handlers/start.py
 from __future__ import annotations
 
 import logging
@@ -24,11 +25,15 @@ from rent_platform.platform.keyboards import (
 
     # marketplace
     marketplace_products_kb,
-    marketplace_buy_kb,          # якщо лишаєш flow mkp:open + mkp:buy
-    # marketplace_product_kb,     # якщо лишаєш flow prod: + buy: (див. пункт 2)
+    marketplace_buy_kb,
 
     cabinet_pay_kb,
     config_kb,
+
+    # ✅ topup
+    cabinet_topup_kb,
+    topup_provider_kb,
+    topup_confirm_kb,
 
     BTN_MARKETPLACE,
     BTN_MY_BOTS,
@@ -44,13 +49,20 @@ from rent_platform.platform.storage import (
     delete_bot,
     pause_bot,
     resume_bot,
+
     # marketplace (products)
     list_marketplace_products,
     get_marketplace_product,
     buy_product,
+
     # cabinet
     get_cabinet,
     create_payment_link,
+
+    # ✅ topup
+    create_topup_invoice,
+    confirm_topup_paid_test,
+
     # config
     get_bot_config,
     toggle_integration,
@@ -72,6 +84,8 @@ class ConfigFlow(StatesGroup):
 class MarketplaceBuyFlow(StatesGroup):
     waiting_bot_token = State()
 
+class TopUpFlow(StatesGroup):
+    waiting_amount = State()
 
 def _label(message: Message) -> str:
     chat_id = message.chat.id if message.chat else None
@@ -394,17 +408,27 @@ async def _render_cabinet(message: Message) -> None:
     now = int(data.get("now") or time.time())
     bots = data.get("bots") or []
 
+    # ✅ баланс
+    balance_kop = int(data.get("balance_kop") or 0)
+    balance_uah = balance_kop / 100.0
+
     if not bots:
         await message.answer(
-            "👤 Кабінет\n\nПоки що немає підключених ботів.\nЙди в «Мої боти» і додай токен.",
+            "👤 Кабінет\n\n"
+            f"💰 Баланс: *{balance_uah:.2f} грн*\n\n"
+            "Поки що немає підключених ботів.\n"
+            "Йди в «Мої боти» і додай токен.",
+            parse_mode="Markdown",
             reply_markup=back_to_menu_kb(),
         )
+        await message.answer("Поповнення балансу:", reply_markup=cabinet_topup_kb())
         return
 
     lines = [
         "👤 Кабінет",
         "",
         f"🕒 Зараз: {_fmt_ts(now)}",
+        f"💰 Баланс: *{balance_uah:.2f} грн*",
         "",
         "Твої боти і статуси:",
     ]
@@ -428,7 +452,10 @@ async def _render_cabinet(message: Message) -> None:
             f"   • id: {b['id']}"
         )
 
-    await message.answer("\n".join(lines), reply_markup=back_to_menu_kb())
+    await message.answer("\n".join(lines), parse_mode="Markdown", reply_markup=back_to_menu_kb())
+
+    # ✅ кнопка поповнення
+    await message.answer("Поповнення балансу:", reply_markup=cabinet_topup_kb())
 
     # Якщо прострочено — показуємо кнопку оплатити (MVP)
     for b in bots:
@@ -740,6 +767,110 @@ async def cfg_receive_secret(message: Message, state: FSMContext) -> None:
     await message.answer("✅ Зберіг.", reply_markup=back_to_menu_kb())
     await _render_config(message, bot_id)
 # ДОДАЙ В САМ КІНЕЦЬ rent_platform/platform/handlers/start.py
+
+# ======================================================================
+# TopUp (баланс)
+# ======================================================================
+
+@router.callback_query(F.data == "pl:topup:start")
+async def cb_topup_start(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(TopUpFlow.waiting_amount)
+    if call.message:
+        await call.message.answer(
+            "💰 *Поповнення балансу*\n\n"
+            "Введи суму в гривнях (цілим числом), наприклад: `200`",
+            parse_mode="Markdown",
+            reply_markup=back_to_menu_kb(),
+        )
+    await call.answer()
+
+
+@router.message(TopUpFlow.waiting_amount, F.text)
+async def topup_receive_amount(message: Message, state: FSMContext) -> None:
+    raw = (message.text or "").strip().replace(" ", "")
+    if not raw.isdigit():
+        await message.answer("❌ Введи число в грн, напр. 200")
+        return
+
+    amount = int(raw)
+    if amount < 10:
+        await message.answer("❌ Мінімум 10 грн. Спробуй ще раз.")
+        return
+    if amount > 200000:
+        await message.answer("❌ Забагато 😄 Введи меншу суму.")
+        return
+
+    await state.clear()
+    await message.answer(
+        f"Обери спосіб поповнення на *{amount} грн* 👇",
+        parse_mode="Markdown",
+        reply_markup=topup_provider_kb(amount),
+    )
+
+
+@router.callback_query(F.data.startswith("pl:topup:prov:"))
+async def cb_topup_provider(call: CallbackQuery) -> None:
+    if not call.message:
+        await call.answer()
+        return
+
+    payload = call.data.split("pl:topup:prov:", 1)[1]
+    try:
+        provider, amount_s = payload.split(":", 1)
+        amount = int(amount_s)
+    except Exception:
+        await call.answer("⚠️ Bad payload")
+        return
+
+    inv = await create_topup_invoice(call.from_user.id, amount_uah=amount, provider=provider)
+    if not inv:
+        await call.answer("Не вийшло створити інвойс", show_alert=True)
+        return
+
+    await call.message.answer(
+        "💳 *Інвойс створено*\n\n"
+        f"Сума: *{inv['amount_uah']} грн*\n"
+        f"Провайдер: *{provider}*\n\n"
+        f"Посилання (поки заглушка):\n{inv['pay_url']}\n\n"
+        "Для MVP натисни кнопку нижче (тестове підтвердження):",
+        parse_mode="Markdown",
+        reply_markup=topup_confirm_kb(int(inv["invoice_id"])),
+    )
+    await call.answer("OK")
+
+
+@router.callback_query(F.data.startswith("pl:topup:confirm:"))
+async def cb_topup_confirm(call: CallbackQuery) -> None:
+    if not call.message:
+        await call.answer()
+        return
+
+    invoice_id_s = call.data.split("pl:topup:confirm:", 1)[1]
+    try:
+        invoice_id = int(invoice_id_s)
+    except Exception:
+        await call.answer("⚠️ Bad invoice id")
+        return
+
+    res = await confirm_topup_paid_test(call.from_user.id, invoice_id)
+    if not res:
+        await call.answer("Не знайдено інвойс", show_alert=True)
+        return
+
+    if res.get("already"):
+        await call.message.answer("ℹ️ Цей інвойс вже не pending.")
+        await call.answer()
+        return
+
+    new_balance = (int(res["new_balance_kop"]) / 100.0)
+    added = (int(res["amount_kop"]) / 100.0)
+    await call.message.answer(
+        f"✅ Оплату підтверджено (тест). Баланс +{added:.2f} грн.\n"
+        f"💰 Новий баланс: {new_balance:.2f} грн",
+        reply_markup=back_to_menu_kb(),
+    )
+    await call.answer("✅")
+
 
 @router.message(F.text)
 async def _debug_unhandled_text(message: Message, state: FSMContext) -> None:
