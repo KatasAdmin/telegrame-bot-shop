@@ -199,11 +199,17 @@ async def get_cabinet(user_id: int) -> dict[str, Any]:
     await AccountRepo.ensure(user_id)
     acc = await AccountRepo.get(user_id)
     balance_kop = int((acc or {}).get("balance_kop") or 0)
+    withdraw_kop = int((acc or {}).get("withdraw_balance_kop") or 0)
 
     items = await TenantRepo.list_by_owner(user_id)
 
     bots: list[dict[str, Any]] = []
+    active_count = 0
     for it in items:
+        st = (it.get("status") or "active").lower()
+        if st == "active":
+            active_count += 1
+
         plan = (it.get("plan_key") or "free")
         paid_until = int(it.get("paid_until_ts") or 0)
         expired = bool(paid_until and paid_until < now)
@@ -212,7 +218,7 @@ async def get_cabinet(user_id: int) -> dict[str, Any]:
             {
                 "id": it["id"],
                 "name": it.get("name") or "Bot",
-                "status": (it.get("status") or "active"),
+                "status": st,
                 "plan_key": plan,
                 "paid_until_ts": paid_until,
                 "paused_reason": it.get("paused_reason"),
@@ -221,9 +227,14 @@ async def get_cabinet(user_id: int) -> dict[str, Any]:
             }
         )
 
-    return {"now": now, "balance_kop": balance_kop, "bots": bots}
-
-
+    return {
+        "now": now,
+        "user_id": user_id,
+        "active_bots": active_count,
+        "balance_kop": balance_kop,
+        "withdraw_balance_kop": withdraw_kop,
+        "bots": bots,
+    }
 async def create_payment_link(user_id: int, bot_id: str, months: int = 1) -> dict | None:
     row = await TenantRepo.get_token_secret_for_owner(user_id, bot_id)
     if not row:
