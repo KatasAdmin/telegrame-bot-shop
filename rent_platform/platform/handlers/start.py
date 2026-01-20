@@ -414,9 +414,15 @@ async def _render_cabinet(message: Message) -> None:
     user_id = message.from_user.id
     data = await get_cabinet(user_id)
 
+    # базові значення (щоб не падало)
     balance_uah = int(data.get("balance_kop") or 0) / 100.0
     withdraw_uah = int(data.get("withdraw_balance_kop") or 0) / 100.0
-    active_bots = int(data.get("active_bots") or 0)
+
+    # беремо ботів зі старої структури get_cabinet (в тебе вона така і є)
+    bots = data.get("bots") or []
+
+    # рахуємо "працюючих" ботів (active)
+    active_bots = sum(1 for b in bots if (b.get("status") or "").lower() == "active")
 
     caption = (
         "👤 *Кабінет*\n\n"
@@ -427,47 +433,32 @@ async def _render_cabinet(message: Message) -> None:
         f"💸 Для виведення: *{withdraw_uah:.2f} грн*\n"
     )
 
-
-    for i, b in enumerate(bots, 1):
-        st = (b.get("status") or "active").lower()
-        plan = _md_escape(b.get("plan_key") or "free")
-        paid_until = int(b.get("paid_until_ts") or 0)
-        expired = bool(b.get("expired"))
-        paused_reason = b.get("paused_reason")
-
-        safe_name = _md_escape(b.get("name", "Bot"))
-        safe_reason = _md_escape(paused_reason) if paused_reason else ""
-
-        badge = (
-            "✅ active"
-            if st == "active"
-            else ("⏸ paused" if st == "paused" else ("🗑 deleted" if st == "deleted" else st))
+    # 1) Банер (або текст)
+    if CABINET_BANNER_URL:
+        await message.answer_photo(
+            photo=CABINET_BANNER_URL,
+            caption=caption,
+            parse_mode="Markdown",
+            reply_markup=cabinet_actions_kb(),
         )
-        pay_str = _fmt_ts(paid_until)
-        pay_note = " ⚠️ прострочено" if expired else ""
-        extra = f" (reason: {safe_reason})" if safe_reason else ""
-
-        lines.append(
-            f"{i}) {safe_name} — {badge}{extra}\n"
-            f"   • plan: {plan}\n"
-            f"   • paid_until: {pay_str}{pay_note}\n"
-            f"   • id: {b['id']}"
+    else:
+        await message.answer(
+            caption,
+            parse_mode="Markdown",
+            reply_markup=cabinet_actions_kb(),
         )
 
-    await message.answer("\n".join(lines), reply_markup=back_to_menu_kb())
+    # 2) Додатково (опційно): короткий список ботів
+    #    Якщо не хочеш — просто видали цей блок.
+    if bots:
+        lines = ["\n🤖 *Ваші боти:*"]
+        for i, b in enumerate(bots, 1):
+            name = _md_escape(b.get("name") or "Bot")
+            st = (b.get("status") or "active").lower()
+            badge = "✅ active" if st == "active" else ("⏸ paused" if st == "paused" else st)
+            lines.append(f"{i}) {name} — {badge} (`{b.get('id')}`)")
 
-    # ✅ кнопка поповнення
-    await message.answer("Поповнення балансу:", reply_markup=cabinet_topup_kb())
-
-    # Якщо прострочено — показуємо кнопку оплатити (MVP)
-    for b in bots:
-        if b.get("expired"):
-            await message.answer(
-                f"⚠️ Бот `{_md_escape(b['id'])}` прострочений. Щоб продовжити — натисни оплату 👇",
-                parse_mode="Markdown",
-                reply_markup=cabinet_pay_kb(b["id"]),
-            )
-
+        await message.answer("\n".join(lines), parse_mode="Markdown", reply_markup=back_to_menu_kb())
 
 @router.callback_query(F.data.startswith("pl:pay:"))
 async def cb_pay(call: CallbackQuery) -> None:
