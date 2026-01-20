@@ -537,7 +537,8 @@ async def _render_marketplace_pick_bot(message: Message) -> None:
 
     await message.answer(
         "\n".join(lines),
-        reply_markup=back_to_menu_kb(),
+        parse_mode="Markdown",
+        reply_markup=marketplace_products_kb(items),
     )
 
 
@@ -777,7 +778,6 @@ async def cfg_receive_secret(message: Message, state: FSMContext) -> None:
 
     await message.answer("✅ Зберіг.", reply_markup=back_to_menu_kb())
     await _render_config(message, bot_id)
-# ДОДАЙ В САМ КІНЕЦЬ rent_platform/platform/handlers/start.py
 
 # ======================================================================
 # TopUp (баланс)
@@ -865,7 +865,7 @@ async def cb_topup_confirm(call: CallbackQuery) -> None:
 
     res = await confirm_topup_paid_test(call.from_user.id, invoice_id)
 
-    log.warning("TOPUP CONFIRM: uid=%s invoice_id=%s", call.from_user.id, invoice_id)
+    log.info("TOPUP confirm click: uid=%s invoice_id=%s", call.from_user.id, invoice_id)
 
     if not res:
         await call.answer("Не знайдено інвойс", show_alert=True)
