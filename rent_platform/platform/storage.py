@@ -234,7 +234,6 @@ async def create_payment_link(user_id: int, bot_id: str, months: int = 1) -> dic
     }
 
 async def create_topup_invoice(user_id: int, amount_uah: int, provider: str) -> dict | None:
-    # валідації
     amount_uah = int(amount_uah)
     if amount_uah < 10:
         return None
@@ -242,8 +241,6 @@ async def create_topup_invoice(user_id: int, amount_uah: int, provider: str) -> 
         return None
 
     amount_kop = _uah_to_kop(amount_uah)
-
-    # pay_url заглушка (потім буде реальний інвойс провайдера)
     pay_url = f"https://example.com/topup?u={user_id}&a={amount_uah}&p={provider}"
 
     inv = await InvoiceRepo.create(
@@ -254,48 +251,15 @@ async def create_topup_invoice(user_id: int, amount_uah: int, provider: str) -> 
         meta={"amount_uah": amount_uah, "provider": provider},
     )
 
+log.info("TOPUP invoice created: uid=%s inv=%s", user_id, inv)
     return {
-        "invoice_id": inv["id"],
+        "invoice_id": int(inv["id"]),
         "provider": provider,
         "amount_uah": amount_uah,
         "amount_kop": amount_kop,
         "pay_url": pay_url,
-        "created_ts": inv.get("created_ts"),
+        "created_ts": int(inv.get("created_ts") or 0),
     }
-
-if not inv or not inv.get("id"):
-    return None
-
-async def confirm_topup_paid_test(user_id: int, invoice_id: int) -> dict | None:
-    inv = await InvoiceRepo.get_for_owner(user_id, int(invoice_id))
-    if not inv:
-        return None
-    if (inv.get("status") or "") != "pending":
-        return {"already": True, "status": inv.get("status")}
-
-    amount_kop = int(inv.get("amount_kop") or 0)
-    if amount_kop <= 0:
-        return None
-
-    # 1) mark paid
-    await InvoiceRepo.mark_paid(user_id, int(invoice_id))
-
-    # 2) balance +
-    await AccountRepo.ensure(user_id)
-    acc = await AccountRepo.get(user_id)
-    balance = int((acc or {}).get("balance_kop") or 0) + amount_kop
-    await AccountRepo.set_balance(user_id, balance)
-
-    # 3) ledger +
-    await LedgerRepo.add(
-        user_id,
-        "topup",
-        +amount_kop,
-        tenant_id=None,
-        meta={"invoice_id": int(invoice_id), "provider": inv.get("provider")},
-    )
-
-    return {"ok": True, "new_balance_kop": balance, "amount_kop": amount_kop}
 # ======================================================================
 # Tenant config (режим 2): інтеграції + секрети (ключі клієнта)
 # ======================================================================
