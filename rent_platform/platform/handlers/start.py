@@ -864,6 +864,9 @@ async def cb_topup_confirm(call: CallbackQuery) -> None:
         return
 
     res = await confirm_topup_paid_test(call.from_user.id, invoice_id)
+
+    log.warning("TOPUP CONFIRM: uid=%s invoice_id=%s", call.from_user.id, invoice_id)
+
     if not res:
         await call.answer("Не знайдено інвойс", show_alert=True)
         return
