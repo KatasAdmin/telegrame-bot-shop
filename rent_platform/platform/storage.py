@@ -272,8 +272,9 @@ async def confirm_topup_paid_test(user_id: int, invoice_id: int) -> dict | None:
     if not inv:
         return None
 
-    if (inv.get("status") or "") != "pending":
-        return {"already": True, "status": inv.get("status")}
+    status = (inv.get("status") or "").lower()
+    if status != "pending":
+    return {"already": True, "status": status}
 
     amount_kop = int(inv.get("amount_kop") or 0)
     if amount_kop <= 0:
