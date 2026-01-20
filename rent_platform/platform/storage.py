@@ -253,6 +253,7 @@ async def create_topup_invoice(user_id: int, amount_uah: int, provider: str) -> 
         pay_url=pay_url,
         meta={"amount_uah": amount_uah, "provider": provider},
     )
+
     return {
         "invoice_id": inv["id"],
         "provider": provider,
@@ -262,6 +263,8 @@ async def create_topup_invoice(user_id: int, amount_uah: int, provider: str) -> 
         "created_ts": inv.get("created_ts"),
     }
 
+if not inv or not inv.get("id"):
+    return None
 
 async def confirm_topup_paid_test(user_id: int, invoice_id: int) -> dict | None:
     inv = await InvoiceRepo.get_for_owner(user_id, int(invoice_id))
