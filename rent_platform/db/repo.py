@@ -515,19 +515,26 @@ class LedgerRepo:
         ) 
 
 class InvoiceRepo:
+    TABLE = "billing_invoices"
+
     @staticmethod
     async def create(
         owner_user_id: int,
         provider: str,
         amount_kop: int,
-        pay_url: str,
+        pay_url: str | None = None,
         meta: dict | None = None,
     ) -> dict[str, Any]:
         ts = int(time.time())
-        q = """
-        INSERT INTO invoices (owner_user_id, provider, amount_kop, pay_url, status, meta, created_ts)
-        VALUES (:uid, :p, :a, :url, 'pending', :m, :ts)
-        RETURNING id, owner_user_id, provider, amount_kop, pay_url, status, meta, created_ts, paid_ts
+        q = f"""
+        INSERT INTO {InvoiceRepo.TABLE} (
+            owner_user_id, provider, amount_kop, status, pay_url, meta, created_ts, paid_ts
+        )
+        VALUES (
+            :uid, :p, :a, 'pending', :url, :m, :ts, 0
+        )
+        RETURNING
+            id, owner_user_id, provider, amount_kop, status, pay_url, meta, created_ts, paid_ts
         """
         row = await db_fetch_one(
             q,
@@ -535,7 +542,7 @@ class InvoiceRepo:
                 "uid": int(owner_user_id),
                 "p": str(provider),
                 "a": int(amount_kop),
-                "url": str(pay_url),
+                "url": (str(pay_url) if pay_url else None),
                 "m": json.dumps(meta or {}, ensure_ascii=False),
                 "ts": ts,
             },
@@ -544,19 +551,22 @@ class InvoiceRepo:
 
     @staticmethod
     async def get_for_owner(owner_user_id: int, invoice_id: int) -> dict | None:
-        q = """
-        SELECT id, owner_user_id, provider, amount_kop, pay_url, status, meta, created_ts, paid_ts
-        FROM invoices
+        q = f"""
+        SELECT
+            id, owner_user_id, provider, amount_kop, status, pay_url, meta, created_ts, paid_ts
+        FROM {InvoiceRepo.TABLE}
         WHERE id = :id AND owner_user_id = :uid
         """
         return await db_fetch_one(q, {"id": int(invoice_id), "uid": int(owner_user_id)})
 
     @staticmethod
     async def mark_paid(owner_user_id: int, invoice_id: int) -> None:
-        q = """
-        UPDATE invoices
+        q = f"""
+        UPDATE {InvoiceRepo.TABLE}
         SET status = 'paid',
             paid_ts = :ts
-        WHERE id = :id AND owner_user_id = :uid AND status = 'pending'
+        WHERE id = :id
+          AND owner_user_id = :uid
+          AND status = 'pending'
         """
         await db_execute(q, {"id": int(invoice_id), "uid": int(owner_user_id), "ts": int(time.time())})
