@@ -523,7 +523,7 @@ class InvoiceRepo:
     TABLE = "billing_invoices"
 
     @staticmethod
-    async def create(owner_user_id: int, provider: str, amount_kop: int, pay_url: str, meta: dict | None = None) -> dict:
+    async def create(owner_user_id: int, provider: str, amount_kop: int, pay_url: str, meta: dict | None = None) -> dict[str, Any]:
         ts = int(time.time())
         q = f"""
         INSERT INTO {InvoiceRepo.TABLE} (
@@ -533,14 +533,18 @@ class InvoiceRepo:
         VALUES (:uid, :p, :a, 'pending', :url, :m, :ts, 0)
         RETURNING id, owner_user_id, provider, amount_kop, pay_url, status, meta, created_ts, paid_ts
         """
-        return await db_fetch_one(q, {
-            "uid": int(owner_user_id),
-            "p": str(provider),
-            "a": int(amount_kop),
-            "url": str(pay_url),
-            "m": json.dumps(meta or {}, ensure_ascii=False),
-            "ts": ts,
-        }) or {}
+        row = await db_fetch_one(
+            q,
+            {
+                "uid": int(owner_user_id),
+                "p": str(provider),
+                "a": int(amount_kop),
+                "url": str(pay_url),
+                "m": json.dumps(meta or {}, ensure_ascii=False),
+                "ts": ts,
+            },
+        )
+        return row or {}
 
     @staticmethod
     async def get_for_owner(owner_user_id: int, invoice_id: int) -> dict | None:
@@ -555,7 +559,8 @@ class InvoiceRepo:
     async def mark_paid(owner_user_id: int, invoice_id: int) -> None:
         q = f"""
         UPDATE {InvoiceRepo.TABLE}
-        SET status='paid', paid_ts=:ts
-        WHERE id=:id AND owner_user_id=:uid AND status='pending'
+        SET status = 'paid',
+            paid_ts = :ts
+        WHERE id = :id AND owner_user_id = :uid AND status = 'pending'
         """
         await db_execute(q, {"id": int(invoice_id), "uid": int(owner_user_id), "ts": int(time.time())})
