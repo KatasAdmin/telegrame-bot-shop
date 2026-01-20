@@ -433,7 +433,7 @@ async def _render_cabinet(message: Message) -> None:
         "👤 Кабінет",
         "",
         f"🕒 Зараз: {_fmt_ts(now)}",
-        f"💰 Баланс: *{balance_uah:.2f} грн*",
+        f"💰 Баланс: {balance_uah:.2f} грн",
         "",
         "Твої боти і статуси:",
     ]
@@ -464,7 +464,7 @@ async def _render_cabinet(message: Message) -> None:
             f"   • id: {b['id']}"
         )
 
-    await message.answer("\n".join(lines), parse_mode="Markdown", reply_markup=back_to_menu_kb())
+    await message.answer("\n".join(lines), reply_markup=back_to_menu_kb())
 
     # ✅ кнопка поповнення
     await message.answer("Поповнення балансу:", reply_markup=cabinet_topup_kb())
