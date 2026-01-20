@@ -440,12 +440,19 @@ async def _render_cabinet(message: Message) -> None:
 
     for i, b in enumerate(bots, 1):
         st = (b.get("status") or "active").lower()
-        plan = (b.get("plan_key") or "free")
+        plan = _md_escape(b.get("plan_key") or "free")
         paid_until = int(b.get("paid_until_ts") or 0)
         expired = bool(b.get("expired"))
         paused_reason = b.get("paused_reason")
 
-        badge = "✅ active" if st == "active" else ("⏸ paused" if st == "paused" else ("🗑 deleted" if st == "deleted" else st))
+        safe_name = _md_escape(b.get("name", "Bot"))
+        safe_reason = _md_escape(paused_reason) if paused_reason else ""
+
+        badge = (
+            "✅ active"
+            if st == "active"
+            else ("⏸ paused" if st == "paused" else ("🗑 deleted" if st == "deleted" else st))
+        )
         pay_str = _fmt_ts(paid_until)
         pay_note = " ⚠️ прострочено" if expired else ""
         extra = f" (reason: {safe_reason})" if safe_reason else ""
