@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
@@ -17,6 +18,8 @@ from rent_platform.db.repo import (
 )
 from rent_platform.products.catalog import PRODUCT_CATALOG
 
+log = logging.getLogger(__name__)
+
 
 def _tenant_webhook_url(tenant_id: str, secret: str) -> str:
     base = settings.WEBHOOK_URL.rstrip("/")
@@ -32,11 +35,10 @@ def _mask(v: str | None) -> str:
         return "***"
     return f"{v[:3]}***{v[-3:]}"
 
+
 def _uah_to_kop(amount_uah: int) -> int:
     return max(0, int(amount_uah) * 100)
 
-def _kop_to_uah_str(kop: int) -> str:
-    return f"{int(kop) / 100:.2f}"
 
 # ======================================================================
 # My bots
@@ -47,27 +49,18 @@ async def list_bots(user_id: int) -> list[dict]:
 
 
 async def add_bot(user_id: int, token: str, name: str = "Bot", product_key: str | None = None) -> dict:
-    """
-    Створює tenant (орендованого бота), вмикає базові модулі та модуль продукту,
-    ставить webhook на tenant-url.
-    """
     tenant = await TenantRepo.create(owner_user_id=user_id, bot_token=token)
 
-    # ім'я в UI
     await TenantRepo.set_display_name(user_id, tenant["id"], name)
 
-    # ✅ Фундамент: модулі вмикаємо напряму, без ensure_defaults (щоб не ламалось)
     await ModuleRepo.enable(tenant["id"], "core")
 
     if product_key:
-        # оренда з маркетплейсу -> вмикаємо модуль продукту
         await TenantRepo.set_product_key(user_id, tenant["id"], product_key)
         await ModuleRepo.enable(tenant["id"], product_key)
     else:
-        # ручне додавання -> підключимо дефолтний shop, якщо треба
         await ModuleRepo.enable(tenant["id"], "shop")
 
-    # webhook tenant-а
     url = _tenant_webhook_url(tenant["id"], tenant["secret"])
     tenant_bot = Bot(token=token)
     try:
@@ -80,6 +73,7 @@ async def add_bot(user_id: int, token: str, name: str = "Bot", product_key: str 
         await tenant_bot.session.close()
 
     return {"id": tenant["id"], "name": name, "status": tenant["status"], "product_key": product_key}
+
 
 async def pause_bot(user_id: int, bot_id: str) -> bool:
     row = await TenantRepo.get_token_secret_for_owner(user_id, bot_id)
@@ -233,6 +227,11 @@ async def create_payment_link(user_id: int, bot_id: str, months: int = 1) -> dic
         "created_ts": int(time.time()),
     }
 
+
+# ======================================================================
+# TopUp (баланс)
+# ======================================================================
+
 async def create_topup_invoice(user_id: int, amount_uah: int, provider: str) -> dict | None:
     amount_uah = int(amount_uah)
     if amount_uah < 10:
@@ -251,7 +250,11 @@ async def create_topup_invoice(user_id: int, amount_uah: int, provider: str) -> 
         meta={"amount_uah": amount_uah, "provider": provider},
     )
 
-log.info("TOPUP invoice created: uid=%s inv=%s", user_id, inv)
+    log.info("TOPUP invoice created: uid=%s inv=%s", user_id, inv)
+
+    if not inv or not inv.get("id"):
+        return None
+
     return {
         "invoice_id": int(inv["id"]),
         "provider": provider,
@@ -260,6 +263,40 @@ log.info("TOPUP invoice created: uid=%s inv=%s", user_id, inv)
         "pay_url": pay_url,
         "created_ts": int(inv.get("created_ts") or 0),
     }
+
+
+async def confirm_topup_paid_test(user_id: int, invoice_id: int) -> dict | None:
+    inv = await InvoiceRepo.get_for_owner(user_id, int(invoice_id))
+    log.info("TOPUP confirm requested: uid=%s invoice_id=%s inv=%s", user_id, invoice_id, inv)
+
+    if not inv:
+        return None
+
+    if (inv.get("status") or "") != "pending":
+        return {"already": True, "status": inv.get("status")}
+
+    amount_kop = int(inv.get("amount_kop") or 0)
+    if amount_kop <= 0:
+        return None
+
+    await InvoiceRepo.mark_paid(user_id, int(invoice_id))
+
+    await AccountRepo.ensure(user_id)
+    acc = await AccountRepo.get(user_id)
+    balance = int((acc or {}).get("balance_kop") or 0) + amount_kop
+    await AccountRepo.set_balance(user_id, balance)
+
+    await LedgerRepo.add(
+        user_id,
+        "topup",
+        +amount_kop,
+        tenant_id=None,
+        meta={"invoice_id": int(invoice_id), "provider": inv.get("provider")},
+    )
+
+    return {"ok": True, "new_balance_kop": balance, "amount_kop": amount_kop}
+
+
 # ======================================================================
 # Tenant config (режим 2): інтеграції + секрети (ключі клієнта)
 # ======================================================================
