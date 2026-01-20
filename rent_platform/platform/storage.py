@@ -280,13 +280,24 @@ async def confirm_topup_paid_test(user_id: int, invoice_id: int) -> dict | None:
     if amount_kop <= 0:
         return None
 
+# 0) if already credited -> idempotent exit
+    if await LedgerRepo.has_topup_invoice(user_id, int(invoice_id)):
+# інвойс могли вже провести раніше
+        await AccountRepo.ensure(user_id)
+        acc = await AccountRepo.get(user_id)
+        bal = int((acc or {}).get("balance_kop") or 0)
+        return {"already": True, "status": "credited", "new_balance_kop": bal}
+
+# 1) mark paid
     await InvoiceRepo.mark_paid(user_id, int(invoice_id))
 
+# 2) balance +
     await AccountRepo.ensure(user_id)
     acc = await AccountRepo.get(user_id)
     balance = int((acc or {}).get("balance_kop") or 0) + amount_kop
     await AccountRepo.set_balance(user_id, balance)
 
+# 3) ledger +
     await LedgerRepo.add(
         user_id,
         "topup",
@@ -296,8 +307,6 @@ async def confirm_topup_paid_test(user_id: int, invoice_id: int) -> dict | None:
     )
 
     return {"ok": True, "new_balance_kop": balance, "amount_kop": amount_kop}
-
-
 # ======================================================================
 # Tenant config (режим 2): інтеграції + секрети (ключі клієнта)
 # ======================================================================
