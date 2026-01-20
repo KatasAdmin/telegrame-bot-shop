@@ -16,11 +16,20 @@ BILL_TICK_SECONDS = 30
 
 def _product_rate_kop(product_key: str) -> int:
     meta = PRODUCT_CATALOG.get(product_key) or {}
-    # підтримка старого поля rate_per_min_uah (float) і нового rate_per_min_kop (int)
-    if "rate_per_min_kop" in meta:
-        return int(meta["rate_per_min_kop"] or 0)
-    uah = float(meta.get("rate_per_min_uah", 0) or 0)
-    return int(round(uah * 100))
+
+    # 1) новий формат: int коп/хв
+    if meta.get("rate_per_min_kop") is not None:
+        try:
+            return max(0, int(meta.get("rate_per_min_kop") or 0))
+        except Exception:
+            return 0
+
+    # 2) старий формат: float грн/хв -> коп/хв
+    try:
+        uah = float(meta.get("rate_per_min_uah", 0) or 0)
+    except Exception:
+        uah = 0.0
+    return max(0, int(round(uah * 100)))
 
 
 async def _send(platform_bot: Bot, user_id: int, text: str) -> None:
@@ -50,13 +59,7 @@ async def billing_tick(platform_bot: Bot) -> None:
         # burn rate для попереджень (сума ставок активних)
         burn_per_min = 0
         for t in items:
-            pk = t.get("product_key")
-            if not pk:
-                continue
-            r = int(t.get("rate_per_min_kop") or 0)
-            if r <= 0:
-                r = _product_rate_kop(pk)
-            burn_per_min += max(r, 0)
+            burn_per_min += _tenant_rate_kop(t)
 
         # Попередження (24h / 3h) — тільки якщо є burn rate
         if burn_per_min > 0:
@@ -83,9 +86,7 @@ async def billing_tick(platform_bot: Bot) -> None:
             if not pk:
                 continue
 
-            rate = int(t.get("rate_per_min_kop") or 0)
-            if rate <= 0:
-                rate = _product_rate_kop(pk)
+            rate = _tenant_rate_kop(t)
 
             if rate <= 0:
                 continue  # безкоштовний/нульовий продукт
@@ -134,3 +135,23 @@ async def billing_loop(platform_bot: Bot, stop_event: asyncio.Event) -> None:
         except asyncio.TimeoutError:
             pass
     log.info("billing loop stopped")
+
+def _tenant_rate_kop(t: dict) -> int:
+    """
+    Пріоритет тарифу:
+    1) tenant.rate_per_min_kop (override) якщо > 0
+    2) PRODUCT_CATALOG[product_key] rate (kop або uah)
+    """
+    pk = t.get("product_key")
+    if not pk:
+        return 0
+
+    try:
+        override = int(t.get("rate_per_min_kop") or 0)
+    except Exception:
+        override = 0
+
+    if override > 0:
+        return override
+
+    return _product_rate_kop(str(pk))
