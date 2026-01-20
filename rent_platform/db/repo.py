@@ -515,34 +515,18 @@ class LedgerRepo:
         ) 
 
 class InvoiceRepo:
-    """
-    invoices:
-      id (serial/bigserial)
-      owner_user_id (int)
-      provider (text)
-      amount_kop (int)
-      pay_url (text)
-      status (text)          -- pending/paid/canceled/failed...
-      meta (json/jsonb/text) -- ми пишемо json string
-      created_ts (int)
-      paid_ts (int nullable)
-    """
-
     @staticmethod
     async def create(
         owner_user_id: int,
         provider: str,
         amount_kop: int,
         pay_url: str,
-        meta: dict[str, Any] | None = None,
+        meta: dict | None = None,
     ) -> dict[str, Any]:
+        ts = int(time.time())
         q = """
-        INSERT INTO invoices (
-            owner_user_id, provider, amount_kop, pay_url, status, meta, created_ts, paid_ts
-        )
-        VALUES (
-            :uid, :p, :a, :url, 'pending', :m, :ts, NULL
-        )
+        INSERT INTO invoices (owner_user_id, provider, amount_kop, pay_url, status, meta, created_ts)
+        VALUES (:uid, :p, :a, :url, 'pending', :m, :ts)
         RETURNING id, owner_user_id, provider, amount_kop, pay_url, status, meta, created_ts, paid_ts
         """
         row = await db_fetch_one(
@@ -553,35 +537,26 @@ class InvoiceRepo:
                 "a": int(amount_kop),
                 "url": str(pay_url),
                 "m": json.dumps(meta or {}, ensure_ascii=False),
-                "ts": int(time.time()),
+                "ts": ts,
             },
         )
-        return dict(row) if row else {}
+        return row or {}
 
     @staticmethod
-    async def get_for_owner(owner_user_id: int, invoice_id: int) -> dict[str, Any] | None:
+    async def get_for_owner(owner_user_id: int, invoice_id: int) -> dict | None:
         q = """
         SELECT id, owner_user_id, provider, amount_kop, pay_url, status, meta, created_ts, paid_ts
         FROM invoices
-        WHERE owner_user_id = :uid AND id = :id
+        WHERE id = :id AND owner_user_id = :uid
         """
-        row = await db_fetch_one(q, {"uid": int(owner_user_id), "id": int(invoice_id)})
-        return dict(row) if row else None
+        return await db_fetch_one(q, {"id": int(invoice_id), "uid": int(owner_user_id)})
 
     @staticmethod
-    async def mark_paid(owner_user_id: int, invoice_id: int) -> bool:
+    async def mark_paid(owner_user_id: int, invoice_id: int) -> None:
         q = """
         UPDATE invoices
         SET status = 'paid',
             paid_ts = :ts
-        WHERE owner_user_id = :uid AND id = :id AND status = 'pending'
+        WHERE id = :id AND owner_user_id = :uid AND status = 'pending'
         """
-        res = await db_execute(q, {"uid": int(owner_user_id), "id": int(invoice_id), "ts": int(time.time())})
-        if res is None:
-            # якщо db_execute не повертає rowcount — перевіримо, що інвойс існує
-            row = await InvoiceRepo.get_for_owner(owner_user_id, invoice_id)
-            return bool(row)
-        try:
-            return int(res) > 0
-        except Exception:
-            return True
+        await db_execute(q, {"id": int(invoice_id), "uid": int(owner_user_id), "ts": int(time.time())})
