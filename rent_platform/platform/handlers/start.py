@@ -448,10 +448,10 @@ async def _render_cabinet(message: Message) -> None:
         badge = "✅ active" if st == "active" else ("⏸ paused" if st == "paused" else ("🗑 deleted" if st == "deleted" else st))
         pay_str = _fmt_ts(paid_until)
         pay_note = " ⚠️ прострочено" if expired else ""
-        extra = f" (reason: {paused_reason})" if paused_reason else ""
+        extra = f" (reason: {safe_reason})" if safe_reason else ""
 
         lines.append(
-            f"{i}) {b.get('name','Bot')} — {badge}{extra}\n"
+            f"{i}) {safe_name} — {badge}{extra}\n"
             f"   • plan: {plan}\n"
             f"   • paid_until: {pay_str}{pay_note}\n"
             f"   • id: {b['id']}"
