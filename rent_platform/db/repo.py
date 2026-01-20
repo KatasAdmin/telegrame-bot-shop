@@ -493,6 +493,18 @@ class AccountRepo:
 class LedgerRepo:
 
     @staticmethod
+    async def list_last(owner_user_id: int, limit: int = 10) -> list[dict]:
+        q = """
+        SELECT kind, amount_kop, tenant_id, meta, created_ts
+        FROM billing_ledger
+        WHERE owner_user_id = :uid
+        ORDER BY created_ts DESC
+        LIMIT :lim
+        """
+        return await db_fetch_all(q, {"uid": int(owner_user_id), "lim": int(limit)})
+
+
+    @staticmethod
     async def has_topup_invoice(owner_user_id: int, invoice_id: int) -> bool:
         q = """
         SELECT 1
