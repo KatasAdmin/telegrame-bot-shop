@@ -455,7 +455,7 @@ async def _render_cabinet(message: Message) -> None:
         )
         pay_str = _fmt_ts(paid_until)
         pay_note = " ⚠️ прострочено" if expired else ""
-        extra = f" (reason: {_md_escape(paused_reason)})" if paused_reason else ""
+        extra = f" (reason: {safe_reason})" if safe_reason else ""
 
         lines.append(
             f"{i}) {safe_name} — {badge}{extra}\n"
