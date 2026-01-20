@@ -206,6 +206,7 @@ async def cb_mkp_open(call: CallbackQuery) -> None:
         await call.answer("Не знайдено", show_alert=True)
         return
 
+    desc = _md_escape(p["desc"])
     text = (
         f"{p['desc']}\n\n"
         f"💸 *Тариф:* `{_rate_text(p)}`\n\n"
