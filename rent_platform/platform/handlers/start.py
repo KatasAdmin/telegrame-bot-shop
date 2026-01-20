@@ -886,6 +886,14 @@ async def cb_topup_confirm(call: CallbackQuery) -> None:
     )
     await call.answer("✅")
 
+    paused_ids = res.get("paused_billing_ids") or []
+    if paused_ids:
+        await call.message.answer(
+            "⏸ Деякі боти були зупинені через нульовий баланс.\n"
+            "Я їх НЕ запускаю автоматично (щоб не списувало без твоєї волі).\n\n"
+            "Йди в «🤖 Мої боти» і натисни ▶️ Відновити для потрібного бота.",
+            reply_markup=back_to_menu_kb(),
+        )
 
 @router.message(F.text)
 async def _debug_unhandled_text(message: Message, state: FSMContext) -> None:
