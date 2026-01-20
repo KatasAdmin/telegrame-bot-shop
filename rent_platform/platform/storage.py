@@ -286,7 +286,11 @@ async def confirm_topup_paid_test(user_id: int, invoice_id: int) -> dict | None:
 
     status = (inv.get("status") or "").lower()
     if status != "pending":
-        return {"already": True, "status": status}
+        # повертаємо balance теж — щоб UI міг показати актуальний стан
+        await AccountRepo.ensure(user_id)
+        acc = await AccountRepo.get(user_id)
+        balance_kop = int((acc or {}).get("balance_kop") or 0)
+        return {"already": True, "status": status, "new_balance_kop": balance_kop, "amount_kop": 0}
 
     amount_kop = int(inv.get("amount_kop") or 0)
     if amount_kop <= 0:
@@ -298,8 +302,8 @@ async def confirm_topup_paid_test(user_id: int, invoice_id: int) -> dict | None:
     # 2) balance +
     await AccountRepo.ensure(user_id)
     acc = await AccountRepo.get(user_id)
-    balance = int((acc or {}).get("balance_kop") or 0) + amount_kop
-    await AccountRepo.set_balance(user_id, balance)
+    new_balance = int((acc or {}).get("balance_kop") or 0) + amount_kop
+    await AccountRepo.set_balance(user_id, new_balance)
 
     # 3) ledger +
     await LedgerRepo.add(
@@ -310,9 +314,20 @@ async def confirm_topup_paid_test(user_id: int, invoice_id: int) -> dict | None:
         meta={"invoice_id": invoice_id, "provider": inv.get("provider")},
     )
 
-    return {"ok": True, "new_balance_kop": balance, "amount_kop": amount_kop}
+    bots = await TenantRepo.list_by_owner(user_id)
+    paused_billing_ids: list[str] = []
+    for b in bots or []:
+        st = (b.get("status") or "").lower()
+        reason = (b.get("paused_reason") or "").lower()
+        if st == "paused" and reason == "billing":
+            paused_billing_ids.append(b["id"])
 
-
+    return {
+        "ok": True,
+        "new_balance_kop": new_balance,
+        "amount_kop": amount_kop,
+        "paused_billing_ids": paused_billing_ids,
+    }
 # ======================================================================
 # Tenant config (режим 2): інтеграції + секрети (ключі клієнта)
 # ======================================================================
