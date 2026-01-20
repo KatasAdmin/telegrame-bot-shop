@@ -179,6 +179,27 @@ def marketplace_buy_kb(product_key: str) -> InlineKeyboardMarkup:
 # ======================================================================
 # Cabinet pay
 # ======================================================================
+def cabinet_topup_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="💰 Поповнити рахунок", callback_data="pl:topup:start"))
+    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
+    return kb.as_markup()
+
+
+def topup_provider_kb(amount_uah: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="🏦 Mono", callback_data=f"pl:topup:prov:mono:{amount_uah}"))
+    kb.row(InlineKeyboardButton(text="🏦 Privat", callback_data=f"pl:topup:prov:privat:{amount_uah}"))
+    kb.row(InlineKeyboardButton(text="🪙 CryptoBot", callback_data=f"pl:topup:prov:cryptobot:{amount_uah}"))
+    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
+    return kb.as_markup()
+
+
+def topup_confirm_kb(invoice_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="✅ Я оплатив (тест)", callback_data=f"pl:topup:confirm:{invoice_id}"))
+    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
+    return kb.as_markup()
 
 def cabinet_pay_kb(bot_id: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
