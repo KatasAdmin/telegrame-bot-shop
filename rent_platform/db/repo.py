@@ -515,6 +515,14 @@ class LedgerRepo:
         ) 
 
 class InvoiceRepo:
+    TABLE_PRIMARY = "billing_invoices"
+    TABLE_FALLBACK = "invoices"
+
+    @staticmethod
+    async def _select_one(sql: str, params: dict) -> dict | None:
+        # helper: просто викликаємо db_fetch_one
+        return await db_fetch_one(sql, params)
+
     @staticmethod
     async def create(
         owner_user_id: int,
@@ -524,53 +532,66 @@ class InvoiceRepo:
         meta: dict | None = None,
     ) -> dict[str, Any]:
         ts = int(time.time())
-        q = """
-        INSERT INTO billing_invoices (
-            owner_user_id, provider, amount_kop,
-            pay_url, status, meta, created_ts, paid_ts
-        )
-        VALUES (:uid, :p, :a, :url, 'pending', :m, :ts, 0)
-        RETURNING
-            id, owner_user_id, provider, amount_kop,
-            pay_url, status, meta, created_ts, paid_ts
-        """
-        row = await db_fetch_one(
-            q,
-            {
-                "uid": int(owner_user_id),
-                "p": str(provider),
-                "a": int(amount_kop),
-                "url": str(pay_url),
-                "m": json.dumps(meta or {}, ensure_ascii=False),
-                "ts": ts,
-            },
-        )
-        return row or {}
+        payload = {
+            "uid": int(owner_user_id),
+            "p": str(provider),
+            "a": int(amount_kop),
+            "url": str(pay_url),
+            "m": json.dumps(meta or {}, ensure_ascii=False),
+            "ts": ts,
+        }
+
+        for table in (InvoiceRepo.TABLE_PRIMARY, InvoiceRepo.TABLE_FALLBACK):
+            q = f"""
+            INSERT INTO {table} (
+                owner_user_id, provider, amount_kop,
+                status, pay_url, meta, created_ts, paid_ts
+            )
+            VALUES (:uid, :p, :a, 'pending', :url, :m, :ts, 0)
+            RETURNING id, owner_user_id, provider, amount_kop, pay_url, status, meta, created_ts, paid_ts
+            """
+            try:
+                row = await db_fetch_one(q, payload)
+                if row:
+                    return row
+            except Exception:
+                # якщо таблиці нема / колонки відрізняються — пробуємо наступну
+                continue
+
+        return {}
 
     @staticmethod
     async def get_for_owner(owner_user_id: int, invoice_id: int) -> dict | None:
-        q = """
-        SELECT
-            id, owner_user_id, provider, amount_kop,
-            pay_url, status, meta, created_ts, paid_ts
-        FROM billing_invoices
-        WHERE id = :id AND owner_user_id = :uid
-        """
-        return await db_fetch_one(q, {"id": int(invoice_id), "uid": int(owner_user_id)})
+        payload = {"id": int(invoice_id), "uid": int(owner_user_id)}
+
+        for table in (InvoiceRepo.TABLE_PRIMARY, InvoiceRepo.TABLE_FALLBACK):
+            q = f"""
+            SELECT id, owner_user_id, provider, amount_kop, pay_url, status, meta, created_ts, paid_ts
+            FROM {table}
+            WHERE id = :id AND owner_user_id = :uid
+            """
+            try:
+                row = await db_fetch_one(q, payload)
+                if row:
+                    return row
+            except Exception:
+                continue
+
+        return None
 
     @staticmethod
     async def mark_paid(owner_user_id: int, invoice_id: int) -> None:
-        q = """
-        UPDATE billing_invoices
-        SET status = 'paid',
-            paid_ts = :ts
-        WHERE id = :id AND owner_user_id = :uid AND status = 'pending'
-        """
-        await db_execute(
-            q,
-            {
-                "id": int(invoice_id),
-                "uid": int(owner_user_id),
-                "ts": int(time.time()),
-            }
-        )
+        payload = {"id": int(invoice_id), "uid": int(owner_user_id), "ts": int(time.time())}
+
+        for table in (InvoiceRepo.TABLE_PRIMARY, InvoiceRepo.TABLE_FALLBACK):
+            q = f"""
+            UPDATE {table}
+            SET status = 'paid',
+                paid_ts = :ts
+            WHERE id = :id AND owner_user_id = :uid AND status = 'pending'
+            """
+            try:
+                await db_execute(q, payload)
+                return
+            except Exception:
+                continue
