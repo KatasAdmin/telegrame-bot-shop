@@ -83,15 +83,14 @@ async def _send_main_menu(message: Message) -> None:
     text = (
         "✅ *Rent Platform запущено*\n\n"
         "Оберіть розділ:\n"
-        "• 🧩 Маркетплейс — підключення модулів\n"
-        "• 🤖 Мої боти — список орендованих/підключених\n"
-        "• 👤 Кабінет — тариф, рахунки, статус\n"
+        "• 🧩 Маркетплейс — вибір продукту/оренда\n"
+        "• 🤖 Мої боти — список підключених ботів\n"
+        "• 👤 Кабінет — баланс / списання / статуси\n"
         "• 🤝 Партнери — рефералка/виплати\n"
         "• 🆘 Підтримка — допомога\n"
     )
     await message.answer(text, parse_mode="Markdown", reply_markup=main_menu_kb(is_admin=False))
     await message.answer("Швидкі кнопки:", reply_markup=main_menu_inline_kb())
-
 
 @router.message(CommandStart())
 async def cmd_start(message: Message) -> None:
@@ -165,6 +164,17 @@ async def cb_marketplace(call: CallbackQuery) -> None:
         await _render_marketplace_pick_bot(call.message)
     await call.answer()
 
+def _rate_text(p: dict) -> str:
+    # пріоритет: kop -> uah
+    kop = p.get("rate_per_min_kop")
+    if kop is not None:
+        try:
+            return f"{int(kop) / 100:.2f} грн/хв"
+        except Exception:
+            pass
+    return f"{p.get('rate_per_min_uah', 0)} грн/хв"
+
+
 @router.callback_query(F.data.startswith("pl:mkp:open:"))
 async def cb_mkp_open(call: CallbackQuery) -> None:
     if not call.message:
@@ -179,7 +189,7 @@ async def cb_mkp_open(call: CallbackQuery) -> None:
 
     text = (
         f"{p['desc']}\n\n"
-        f"💸 *Тариф:* `{p.get('rate_per_min_uah', 0)}` грн/хв\n\n"
+        f"💸 *Тариф:* `{_rate_text(p)}`\n\n"
         f"Натисни «Купити», і я попрошу токен (BotFather), щоб створити твою копію."
     )
 
@@ -408,9 +418,10 @@ async def _render_marketplace_pick_bot(message: Message) -> None:
     lines = ["🧩 *Маркетплейс ботів*", "", "Обери продукт 👇"]
     for it in items:
         lines.append(f"• *{it['title']}* — {it.get('short','')}")
-        rate = it.get("rate_per_min_uah", 0)
-        if rate:
-            lines.append(f"   ⏱ Тариф: *{rate} грн/хв*")
+        # показ тарифу (kop або uah)
+        rate_text = _rate_text(it)
+        if rate_text and rate_text != "0 грн/хв":
+            lines.append(f"   ⏱ Тариф: *{rate_text}*")
 
     await message.answer(
         "\n".join(lines),
@@ -479,14 +490,21 @@ async def mkp_receive_token(message: Message, state: FSMContext) -> None:
         )
         return
 
-        if ":" not in token or len(token) < 20:
-            await message.answer("❌ Схоже на невалідний токен. Спробуй ще раз.")
-            return
+    # ✅ валідація токена
+    if ":" not in token or len(token) < 20:
+        await message.answer("❌ Схоже на невалідний токен. Спробуй ще раз.")
+        return
 
-    # створюємо tenant нормально (з webhook), бо це реальний токен
+    # створюємо tenant (реальний токен)
     p = await get_marketplace_product(product_key)
     nice_name = (p["title"] if p else f"Product: {product_key}")
-    tenant = await add_bot(message.from_user.id, token=token, name=nice_name, product_key=product_key)
+
+    tenant = await add_bot(
+        message.from_user.id,
+        token=token,
+        name=nice_name,
+        product_key=product_key,
+    )
     await state.clear()
 
     await message.answer(
@@ -651,9 +669,16 @@ async def cfg_receive_secret(message: Message, state: FSMContext) -> None:
 # ДОДАЙ В САМ КІНЕЦЬ rent_platform/platform/handlers/start.py
 
 @router.message(F.text)
-async def _debug_unhandled_text(message: Message) -> None:
-    log.warning("UNHANDLED TEXT: %r | chat=%s user=%s",
-                message.text,
-                getattr(getattr(message, "chat", None), "id", None),
-                getattr(getattr(message, "from_user", None), "id", None))
-    # можна не відповідати, щоб не спамити
+async def _debug_unhandled_text(message: Message, state: FSMContext) -> None:
+    st = await state.get_state()
+    if st:
+        # якщо ми в якомусь flow — не заважаємо
+        return
+
+    log.warning(
+        "UNHANDLED TEXT: %r | chat=%s user=%s",
+        message.text,
+        getattr(getattr(message, "chat", None), "id", None),
+        getattr(getattr(message, "from_user", None), "id", None),
+    )
+    await message.answer("Не зрозумів команду 🙂 Натисни «Меню» або /start")
