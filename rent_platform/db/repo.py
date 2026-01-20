@@ -513,3 +513,75 @@ class LedgerRepo:
                 "ts": int(time.time()),
             },
         ) 
+
+class InvoiceRepo:
+    """
+    invoices:
+      id (serial/bigserial)
+      owner_user_id (int)
+      provider (text)
+      amount_kop (int)
+      pay_url (text)
+      status (text)          -- pending/paid/canceled/failed...
+      meta (json/jsonb/text) -- ми пишемо json string
+      created_ts (int)
+      paid_ts (int nullable)
+    """
+
+    @staticmethod
+    async def create(
+        owner_user_id: int,
+        provider: str,
+        amount_kop: int,
+        pay_url: str,
+        meta: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        q = """
+        INSERT INTO invoices (
+            owner_user_id, provider, amount_kop, pay_url, status, meta, created_ts, paid_ts
+        )
+        VALUES (
+            :uid, :p, :a, :url, 'pending', :m, :ts, NULL
+        )
+        RETURNING id, owner_user_id, provider, amount_kop, pay_url, status, meta, created_ts, paid_ts
+        """
+        row = await db_fetch_one(
+            q,
+            {
+                "uid": int(owner_user_id),
+                "p": str(provider),
+                "a": int(amount_kop),
+                "url": str(pay_url),
+                "m": json.dumps(meta or {}, ensure_ascii=False),
+                "ts": int(time.time()),
+            },
+        )
+        return dict(row) if row else {}
+
+    @staticmethod
+    async def get_for_owner(owner_user_id: int, invoice_id: int) -> dict[str, Any] | None:
+        q = """
+        SELECT id, owner_user_id, provider, amount_kop, pay_url, status, meta, created_ts, paid_ts
+        FROM invoices
+        WHERE owner_user_id = :uid AND id = :id
+        """
+        row = await db_fetch_one(q, {"uid": int(owner_user_id), "id": int(invoice_id)})
+        return dict(row) if row else None
+
+    @staticmethod
+    async def mark_paid(owner_user_id: int, invoice_id: int) -> bool:
+        q = """
+        UPDATE invoices
+        SET status = 'paid',
+            paid_ts = :ts
+        WHERE owner_user_id = :uid AND id = :id AND status = 'pending'
+        """
+        res = await db_execute(q, {"uid": int(owner_user_id), "id": int(invoice_id), "ts": int(time.time())})
+        if res is None:
+            # якщо db_execute не повертає rowcount — перевіримо, що інвойс існує
+            row = await InvoiceRepo.get_for_owner(owner_user_id, invoice_id)
+            return bool(row)
+        try:
+            return int(res) > 0
+        except Exception:
+            return True
