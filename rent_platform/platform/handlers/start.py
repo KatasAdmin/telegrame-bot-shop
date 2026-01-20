@@ -208,6 +208,8 @@ async def cb_mkp_buy(call: CallbackQuery, state: FSMContext) -> None:
         return
 
     product_key = call.data.split("pl:mkp:buy:", 1)[1]
+
+    # ✅ ВАЖЛИВО: тут саме buy_product, а не get_marketplace_product
     p = await buy_product(call.from_user.id, product_key)
     if not p:
         await call.answer("Не знайдено", show_alert=True)
@@ -250,6 +252,19 @@ async def cb_my_bots(call: CallbackQuery, state: FSMContext) -> None:
 async def cb_my_bots_refresh(call: CallbackQuery, state: FSMContext) -> None:
     await cb_my_bots(call, state)
 
+@router.callback_query(F.data == "pl:my_bots:settings_stub")
+async def cb_my_bots_settings_stub(call: CallbackQuery) -> None:
+    if call.message:
+        await call.message.answer(
+            "⚙️ Налаштування (скоро)\n\n"
+            "План:\n"
+            "• встановлення тарифів по продуктам\n"
+            "• VIP-режим (індивідуальна копія)\n"
+            "• статистика списань\n",
+            reply_markup=back_to_menu_kb(),
+        )
+    await call.answer()
+
 
 @router.callback_query(F.data == "pl:partners")
 async def cb_partners(call: CallbackQuery) -> None:
@@ -269,6 +284,64 @@ async def cb_support(call: CallbackQuery) -> None:
             "🆘 *Підтримка*\n\nТакож є «Загальна інформація» 👇",
             parse_mode="Markdown",
             reply_markup=about_inline_kb(),
+        )
+    await call.answer()
+
+@router.callback_query(F.data == "pl:about")
+async def cb_about(call: CallbackQuery) -> None:
+    if call.message:
+        await call.message.answer(
+            "ℹ️ *Про платформу*\n\n"
+            "Rent Platform — маркетплейс ботів/модулів.\n"
+            "Ти орендуєш продукт → підключаєш свого бота токеном → платиш з балансу/тарифу.\n\n"
+            "Поточний статус: MVP (скелет) ✅",
+            parse_mode="Markdown",
+            reply_markup=back_to_menu_kb(),
+        )
+    await call.answer()
+
+
+@router.callback_query(F.data == "pl:privacy")
+async def cb_privacy(call: CallbackQuery) -> None:
+    if call.message:
+        await call.message.answer(
+            "🔒 *Політика конфіденційності*\n\n"
+            "• Токени ботів зберігаються для роботи оренди.\n"
+            "• Не публікуй токени у чатах.\n"
+            "• Дані використовуються лише для надання сервісу.\n\n"
+            "_Пізніше винесемо в окрему сторінку/URL._",
+            parse_mode="Markdown",
+            reply_markup=back_to_menu_kb(),
+        )
+    await call.answer()
+
+
+@router.callback_query(F.data == "pl:terms")
+async def cb_terms(call: CallbackQuery) -> None:
+    if call.message:
+        await call.message.answer(
+            "📄 *Умови користування*\n\n"
+            "• Ти відповідаєш за контент і дії свого бота.\n"
+            "• Платформа надає технічну оренду модулів/ботів.\n"
+            "• При 0 балансі оренда може зупинитись автоматично.\n\n"
+            "_Пізніше зробимо нормальний ToS документ._",
+            parse_mode="Markdown",
+            reply_markup=back_to_menu_kb(),
+        )
+    await call.answer()
+
+
+@router.callback_query(F.data == "pl:commitments")
+async def cb_commitments(call: CallbackQuery) -> None:
+    if call.message:
+        await call.message.answer(
+            "🛡 *Наші зобовʼязання*\n\n"
+            "• Мінімум доступів, тільки потрібне для роботи.\n"
+            "• Прозорі списання в ledger.\n"
+            "• Стабільність і контроль пауз/відновлення.\n\n"
+            "_Далі — адмінка, статистика, платіжні інтеграції._",
+            parse_mode="Markdown",
+            reply_markup=back_to_menu_kb(),
         )
     await call.answer()
 
@@ -420,7 +493,7 @@ async def _render_marketplace_pick_bot(message: Message) -> None:
         lines.append(f"• *{it['title']}* — {it.get('short','')}")
         # показ тарифу (kop або uah)
         rate_text = _rate_text(it)
-        if rate_text and rate_text != "0 грн/хв":
+        if rate_text and rate_text != "0 грн/хв" and rate_text != "0.00 грн/хв":
             lines.append(f"   ⏱ Тариф: *{rate_text}*")
 
     await message.answer(
