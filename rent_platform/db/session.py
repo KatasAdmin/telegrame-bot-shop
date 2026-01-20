@@ -16,19 +16,24 @@ else:
 engine = create_async_engine(ASYNC_URL, pool_pre_ping=True)
 
 
-async def db_fetch_one(query: str, params: dict) -> dict | None:
-    async with engine.connect() as conn:
+async def db_fetch_one(query: str, params: dict | None = None) -> dict | None:
+    params = params or {}
+    # ВАЖЛИВО: begin() => commit/rollback автоматом, і INSERT ... RETURNING стане "реальним"
+    async with engine.begin() as conn:
         res = await conn.execute(text(query), params)
         row = res.mappings().first()
         return dict(row) if row else None
 
 
-async def db_fetch_all(query: str, params: dict) -> list[dict]:
-    async with engine.connect() as conn:
+async def db_fetch_all(query: str, params: dict | None = None) -> list[dict]:
+    params = params or {}
+    async with engine.begin() as conn:
         res = await conn.execute(text(query), params)
         return [dict(r) for r in res.mappings().all()]
 
 
-async def db_execute(query: str, params: dict) -> None:
-    async with engine.begin() as conn:  # транзакція
-        await conn.execute(text(query), params)
+async def db_execute(query: str, params: dict | None = None) -> int:
+    params = params or {}
+    async with engine.begin() as conn:
+        res = await conn.execute(text(query), params)
+        return int(getattr(res, "rowcount", 0) or 0)
