@@ -537,8 +537,7 @@ async def _render_marketplace_pick_bot(message: Message) -> None:
 
     await message.answer(
         "\n".join(lines),
-        parse_mode="Markdown",
-        reply_markup=marketplace_products_kb(items),
+        reply_markup=back_to_menu_kb(),
     )
 
 
