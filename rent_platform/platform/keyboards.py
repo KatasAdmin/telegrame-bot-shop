@@ -92,6 +92,16 @@ def about_inline_kb() -> InlineKeyboardMarkup:
 # My bots
 # ======================================================================
 
+def cabinet_actions_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="💰 Поповнити", callback_data="pl:topup:start"), width=1)
+    kb.row(InlineKeyboardButton(text="💸 Вивести кошти", callback_data="pl:withdraw:start"), width=1)
+    kb.row(InlineKeyboardButton(text="📜 Історія транзакцій", callback_data="pl:tx:list"), width=1)
+    kb.row(InlineKeyboardButton(text="🔁 Обмін коштів", callback_data="pl:exchange:start"), width=1)
+    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"), width=1)
+    return kb.as_markup()
+
+
 def my_bots_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(
