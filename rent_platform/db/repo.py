@@ -414,114 +414,16 @@ class TenantSecretRepo:
         await db_execute(q, {"tid": tenant_id, "k": secret_key})
 
 
-class TenantIntegrationRepo:
-    @staticmethod
-    async def list_all(tenant_id: str) -> list[dict]:
-        q = """
-        SELECT provider, enabled, updated_ts
-        FROM tenant_integrations
-        WHERE tenant_id = :tid
-        ORDER BY provider
-        """
-        rows = await db_fetch_all(q, {"tid": tenant_id})
-        return [
-            {
-                "provider": r["provider"],
-                "enabled": bool(r["enabled"]),
-                "updated_ts": int(r.get("updated_ts") or 0),
-            }
-            for r in rows
-        ]
+import logging
 
-    @staticmethod
-    async def get(tenant_id: str, provider: str) -> dict | None:
-        q = """
-        SELECT provider, enabled, updated_ts
-        FROM tenant_integrations
-        WHERE tenant_id = :tid AND provider = :p
-        """
-        return await db_fetch_one(q, {"tid": tenant_id, "p": provider})
+log = logging.getLogger(__name__)
 
-    @staticmethod
-    async def set_enabled(tenant_id: str, provider: str, enabled: bool) -> None:
-        q = """
-        INSERT INTO tenant_integrations (tenant_id, provider, enabled, updated_ts)
-        VALUES (:tid, :p, :en, :ts)
-        ON CONFLICT (tenant_id, provider)
-        DO UPDATE SET enabled = EXCLUDED.enabled, updated_ts = EXCLUDED.updated_ts
-        """
-        await db_execute(q, {"tid": tenant_id, "p": provider, "en": bool(enabled), "ts": int(time.time())})
-        
-class AccountRepo:
-    @staticmethod
-    async def ensure(owner_user_id: int) -> None:
-        q = """
-        INSERT INTO owner_accounts (owner_user_id, balance_kop, updated_ts)
-        VALUES (:uid, 0, :ts)
-        ON CONFLICT (owner_user_id) DO NOTHING
-        """
-        await db_execute(q, {"uid": int(owner_user_id), "ts": int(time.time())})
-
-    @staticmethod
-    async def get(owner_user_id: int) -> dict | None:
-        q = """
-        SELECT owner_user_id, balance_kop, updated_ts
-        FROM owner_accounts
-        WHERE owner_user_id = :uid
-        """
-        return await db_fetch_one(q, {"uid": int(owner_user_id)})
-
-    @staticmethod
-    async def add_balance(owner_user_id: int, delta_kop: int) -> None:
-        # delta_kop може бути + або -
-        await AccountRepo.ensure(owner_user_id)
-        q = """
-        UPDATE owner_accounts
-        SET balance_kop = balance_kop + :d,
-            updated_ts = :ts
-        WHERE owner_user_id = :uid
-        """
-        await db_execute(q, {"uid": int(owner_user_id), "d": int(delta_kop), "ts": int(time.time())})
-
-    @staticmethod
-    async def set_balance(owner_user_id: int, new_balance_kop: int) -> None:
-        await AccountRepo.ensure(owner_user_id)
-        q = """
-        UPDATE owner_accounts
-        SET balance_kop = :b,
-            updated_ts = :ts
-        WHERE owner_user_id = :uid
-        """
-        await db_execute(q, {"uid": int(owner_user_id), "b": int(new_balance_kop), "ts": int(time.time())})
-
-
-class LedgerRepo:
-    @staticmethod
-    async def add(owner_user_id: int, kind: str, amount_kop: int, tenant_id: str | None = None, meta: dict | None = None) -> None:
-        q = """
-        INSERT INTO billing_ledger (owner_user_id, tenant_id, kind, amount_kop, meta, created_ts)
-        VALUES (:uid, :tid, :k, :a, :m, :ts)
-        """
-        await db_execute(
-            q,
-            {
-                "uid": int(owner_user_id),
-                "tid": tenant_id,
-                "k": str(kind),
-                "a": int(amount_kop),
-                "m": json.dumps(meta or {}, ensure_ascii=False),
-                "ts": int(time.time()),
-            },
-        ) 
 
 class InvoiceRepo:
+    # primary: new schema
     TABLE_PRIMARY = "billing_invoices"
+    # fallback: legacy schema (якщо колись було invoices)
     TABLE_FALLBACK = "invoices"
-
-    @staticmethod
-    async def _select_one(sql: str, params: dict) -> dict | None:
-        # helper: просто викликаємо db_fetch_one
-        return await db_fetch_one(sql, params)
 
     @staticmethod
     async def create(
@@ -532,50 +434,110 @@ class InvoiceRepo:
         meta: dict | None = None,
     ) -> dict[str, Any]:
         ts = int(time.time())
-        payload = {
-            "uid": int(owner_user_id),
-            "p": str(provider),
-            "a": int(amount_kop),
-            "url": str(pay_url),
-            "m": json.dumps(meta or {}, ensure_ascii=False),
-            "ts": ts,
-        }
+        meta_json = json.dumps(meta or {}, ensure_ascii=False)
 
-        for table in (InvoiceRepo.TABLE_PRIMARY, InvoiceRepo.TABLE_FALLBACK):
+        # 1) пробуємо НОВУ таблицю billing_invoices (owner_user_id)
+        try:
             q = f"""
-            INSERT INTO {table} (
+            INSERT INTO {InvoiceRepo.TABLE_PRIMARY} (
                 owner_user_id, provider, amount_kop,
                 status, pay_url, meta, created_ts, paid_ts
             )
             VALUES (:uid, :p, :a, 'pending', :url, :m, :ts, 0)
             RETURNING id, owner_user_id, provider, amount_kop, pay_url, status, meta, created_ts, paid_ts
             """
-            try:
-                row = await db_fetch_one(q, payload)
-                if row:
-                    return row
-            except Exception:
-                # якщо таблиці нема / колонки відрізняються — пробуємо наступну
-                continue
+            row = await db_fetch_one(
+                q,
+                {"uid": int(owner_user_id), "p": provider, "a": int(amount_kop), "url": pay_url, "m": meta_json, "ts": ts},
+            )
+            if row:
+                return row
+        except Exception as e:
+            log.exception("InvoiceRepo.create: failed on %s: %s", InvoiceRepo.TABLE_PRIMARY, e)
+
+        # 2) пробуємо legacy invoices з owner_user_id (якщо така є)
+        try:
+            q = f"""
+            INSERT INTO {InvoiceRepo.TABLE_FALLBACK} (
+                owner_user_id, provider, amount_kop,
+                status, pay_url, meta, created_ts, paid_ts
+            )
+            VALUES (:uid, :p, :a, 'pending', :url, :m, :ts, 0)
+            RETURNING id, owner_user_id, provider, amount_kop, pay_url, status, meta, created_ts, paid_ts
+            """
+            row = await db_fetch_one(
+                q,
+                {"uid": int(owner_user_id), "p": provider, "a": int(amount_kop), "url": pay_url, "m": meta_json, "ts": ts},
+            )
+            if row:
+                return row
+        except Exception as e:
+            log.exception("InvoiceRepo.create: failed on %s (owner_user_id schema): %s", InvoiceRepo.TABLE_FALLBACK, e)
+
+        # 3) пробуємо legacy invoices з user_id
+        try:
+            q = f"""
+            INSERT INTO {InvoiceRepo.TABLE_FALLBACK} (
+                user_id, provider, amount_kop,
+                status, pay_url, meta, created_ts, paid_ts
+            )
+            VALUES (:uid, :p, :a, 'pending', :url, :m, :ts, 0)
+            RETURNING id, user_id, provider, amount_kop, pay_url, status, meta, created_ts, paid_ts
+            """
+            row = await db_fetch_one(
+                q,
+                {"uid": int(owner_user_id), "p": provider, "a": int(amount_kop), "url": pay_url, "m": meta_json, "ts": ts},
+            )
+            if row:
+                # нормалізуємо під новий формат, щоб storage не міняти
+                row["owner_user_id"] = row.get("user_id")
+                return row
+        except Exception as e:
+            log.exception("InvoiceRepo.create: failed on %s (user_id schema): %s", InvoiceRepo.TABLE_FALLBACK, e)
 
         return {}
 
     @staticmethod
     async def get_for_owner(owner_user_id: int, invoice_id: int) -> dict | None:
-        payload = {"id": int(invoice_id), "uid": int(owner_user_id)}
-
-        for table in (InvoiceRepo.TABLE_PRIMARY, InvoiceRepo.TABLE_FALLBACK):
+        # 1) billing_invoices (owner_user_id)
+        try:
             q = f"""
             SELECT id, owner_user_id, provider, amount_kop, pay_url, status, meta, created_ts, paid_ts
-            FROM {table}
+            FROM {InvoiceRepo.TABLE_PRIMARY}
             WHERE id = :id AND owner_user_id = :uid
             """
-            try:
-                row = await db_fetch_one(q, payload)
-                if row:
-                    return row
-            except Exception:
-                continue
+            row = await db_fetch_one(q, {"id": int(invoice_id), "uid": int(owner_user_id)})
+            if row:
+                return row
+        except Exception as e:
+            log.exception("InvoiceRepo.get_for_owner: failed on %s: %s", InvoiceRepo.TABLE_PRIMARY, e)
+
+        # 2) invoices (owner_user_id)
+        try:
+            q = f"""
+            SELECT id, owner_user_id, provider, amount_kop, pay_url, status, meta, created_ts, paid_ts
+            FROM {InvoiceRepo.TABLE_FALLBACK}
+            WHERE id = :id AND owner_user_id = :uid
+            """
+            row = await db_fetch_one(q, {"id": int(invoice_id), "uid": int(owner_user_id)})
+            if row:
+                return row
+        except Exception as e:
+            log.exception("InvoiceRepo.get_for_owner: failed on %s (owner_user_id schema): %s", InvoiceRepo.TABLE_FALLBACK, e)
+
+        # 3) invoices (user_id)
+        try:
+            q = f"""
+            SELECT id, user_id, provider, amount_kop, pay_url, status, meta, created_ts, paid_ts
+            FROM {InvoiceRepo.TABLE_FALLBACK}
+            WHERE id = :id AND user_id = :uid
+            """
+            row = await db_fetch_one(q, {"id": int(invoice_id), "uid": int(owner_user_id)})
+            if row:
+                row["owner_user_id"] = row.get("user_id")
+                return row
+        except Exception as e:
+            log.exception("InvoiceRepo.get_for_owner: failed on %s (user_id schema): %s", InvoiceRepo.TABLE_FALLBACK, e)
 
         return None
 
@@ -583,15 +545,38 @@ class InvoiceRepo:
     async def mark_paid(owner_user_id: int, invoice_id: int) -> None:
         payload = {"id": int(invoice_id), "uid": int(owner_user_id), "ts": int(time.time())}
 
-        for table in (InvoiceRepo.TABLE_PRIMARY, InvoiceRepo.TABLE_FALLBACK):
+        # 1) billing_invoices owner_user_id
+        try:
             q = f"""
-            UPDATE {table}
-            SET status = 'paid',
-                paid_ts = :ts
+            UPDATE {InvoiceRepo.TABLE_PRIMARY}
+            SET status = 'paid', paid_ts = :ts
             WHERE id = :id AND owner_user_id = :uid AND status = 'pending'
             """
-            try:
-                await db_execute(q, payload)
-                return
-            except Exception:
-                continue
+            await db_execute(q, payload)
+            return
+        except Exception as e:
+            log.exception("InvoiceRepo.mark_paid: failed on %s: %s", InvoiceRepo.TABLE_PRIMARY, e)
+
+        # 2) invoices owner_user_id
+        try:
+            q = f"""
+            UPDATE {InvoiceRepo.TABLE_FALLBACK}
+            SET status = 'paid', paid_ts = :ts
+            WHERE id = :id AND owner_user_id = :uid AND status = 'pending'
+            """
+            await db_execute(q, payload)
+            return
+        except Exception as e:
+            log.exception("InvoiceRepo.mark_paid: failed on %s (owner_user_id schema): %s", InvoiceRepo.TABLE_FALLBACK, e)
+
+        # 3) invoices user_id
+        try:
+            q = f"""
+            UPDATE {InvoiceRepo.TABLE_FALLBACK}
+            SET status = 'paid', paid_ts = :ts
+            WHERE id = :id AND user_id = :uid AND status = 'pending'
+            """
+            await db_execute(q, payload)
+            return
+        except Exception as e:
+            log.exception("InvoiceRepo.mark_paid: failed on %s (user_id schema): %s", InvoiceRepo.TABLE_FALLBACK, e)
