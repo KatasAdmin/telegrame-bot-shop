@@ -491,6 +491,20 @@ class AccountRepo:
 
 
 class LedgerRepo:
+
+    @staticmethod
+    async def has_topup_invoice(owner_user_id: int, invoice_id: int) -> bool:
+        q = """
+        SELECT 1
+        FROM billing_ledger
+        WHERE owner_user_id = :uid
+          AND kind = 'topup'
+          AND (meta::jsonb ->> 'invoice_id') = :iid
+        LIMIT 1
+        """
+        row = await db_fetch_one(q, {"uid": int(owner_user_id), "iid": str(int(invoice_id))})
+        return bool(row)
+
     @staticmethod
     async def add(
         owner_user_id: int,
