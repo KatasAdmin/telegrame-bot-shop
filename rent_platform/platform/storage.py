@@ -210,7 +210,8 @@ async def get_cabinet(user_id: int) -> dict[str, Any]:
             }
         )
 
-    return {"now": now, "balance_kop": balance_kop, "bots": bots}
+    ledger = await LedgerRepo.list_last(user_id, limit=10)
+    return {"now": now, "balance_kop": balance_kop, "bots": bots, "ledger": ledger}}
 
 
 async def create_payment_link(user_id: int, bot_id: str, months: int = 1) -> dict | None:
