@@ -1,15 +1,4 @@
-# rent_platform/platform/storage.py
 from __future__ import annotations
-from rent_platform.db.repo import (
-    TenantRepo,
-    ModuleRepo,
-    TenantSecretRepo,
-    TenantIntegrationRepo,
-
-    AccountRepo,
-    LedgerRepo,
-    InvoiceRepo,
-)
 
 import time
 from typing import Any
@@ -22,6 +11,9 @@ from rent_platform.db.repo import (
     ModuleRepo,
     TenantSecretRepo,
     TenantIntegrationRepo,
+    AccountRepo,
+    LedgerRepo,
+    InvoiceRepo,
 )
 from rent_platform.products.catalog import PRODUCT_CATALOG
 
