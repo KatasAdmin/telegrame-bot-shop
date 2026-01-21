@@ -56,9 +56,9 @@ async def list_bots(user_id: int) -> list[dict]:
     return await TenantRepo.list_by_owner(user_id)
 
 
-async def get_cabinet_banner_url() -> str:
+async def get_cabinet_banner_text() -> str:
     s = await PlatformSettingsRepo.get()
-    return str((s or {}).get("cabinet_banner_url") or "").strip()
+    return str((s or {}).get("cabinet_banner_text") or "").strip()
 
 async def add_bot(user_id: int, token: str, name: str = "Bot", product_key: str | None = None) -> dict:
     """
@@ -344,13 +344,23 @@ async def cabinet_get_history(user_id: int, limit: int = 20) -> list[dict]:
         if kind == "topup":
             title = "💳 Поповнення"
             details = f"{_fmt_dt(ts)} • {meta.get('provider','')}".strip(" •")
-        elif kind == "daily_billing":
+        elif kind in ("daily_billing", "daily_charge", "daily_charge_partial", "daily_tariff"):
             title = "⏱ Списання за тариф"
-            # meta може містити tenant_id/product_key/rate/days/...
-            tname = ""
-            if tenant_id:
-                tname = f"бот: {tenant_id}"
-            details = f"{_fmt_dt(ts)} • {tname}".strip(" •")
+            tname = f"бот: {tenant_id}" if tenant_id else ""
+# якщо є meta minutes/rate — можна показати коротко
+            mins = meta.get("minutes")
+            rate = meta.get("rate_kop") or meta.get("rate_per_min_kop")
+            extra = []
+            if mins is not None:
+                extra.append(f"{mins} хв")
+            if rate is not None:
+                try:
+                    extra.append(f"{int(rate)/100:.2f} грн/хв")
+                except Exception:
+                    pass
+            extra_s = (" • " + ", ".join(extra)) if extra else ""
+            details = f"{_fmt_dt(ts)} • {tname}{extra_s}".strip(" •")
+
         elif kind == "exchange_withdraw_to_main":
             title = "♻️ Обмін (вивід → основний)"
             details = _fmt_dt(ts)
@@ -410,6 +420,27 @@ async def cabinet_get_tariffs(user_id: int) -> dict | None:
         )
 
     return {"bots": bots_out}
+
+# ======================================================================
+# Admin helpers (future: тарифи на кожен bot окремо)
+# ======================================================================
+
+async def admin_set_tenant_rate(tenant_id: str, rate_per_min_kop: int | None) -> None:
+    """
+    0/None -> прибирає override, тариф береться з PRODUCT_CATALOG по product_key
+    """
+    r = int(rate_per_min_kop or 0)
+    q = "UPDATE tenants SET rate_per_min_kop = :r WHERE id = :id"
+    await db_execute(q, {"r": r, "id": str(tenant_id)})
+
+
+async def admin_set_tenant_product(tenant_id: str, product_key: str | None) -> None:
+    """
+    None/"" -> прибирає product_key (tenant не буде білитись, бо list_active_for_billing фільтрує product_key IS NOT NULL)
+    """
+    pk = None if not (product_key or "").strip() else str(product_key).strip()
+    q = "UPDATE tenants SET product_key = :pk WHERE id = :id"
+    await db_execute(q, {"pk": pk, "id": str(tenant_id)})
 
 # ======================================================================
 # TopUp (інвойси)
