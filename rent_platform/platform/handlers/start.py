@@ -123,7 +123,6 @@ async def _send_main_menu(message: Message) -> None:
         "• 🆘 Підтримка — допомога\n"
     )
     await message.answer(text, parse_mode="Markdown", reply_markup=main_menu_kb(is_admin=False))
-    await message.answer("Швидкі кнопки:", reply_markup=main_menu_inline_kb())
 
 
 @router.message(CommandStart())
