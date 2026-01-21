@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import datetime as _dt
 
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command, StateFilter
@@ -68,11 +69,11 @@ from rent_platform.platform.storage import (
 log = logging.getLogger(__name__)
 router = Router()
 
-# ✅ register cabinet routes (separate file)
+# Реєструємо маршрути кабінету з окремого файлу
 register_cabinet(router)
 
 # ======================================================================
-# MENU_TEXTS — should interrupt any FSM
+# MENU_TEXTS — що має “перебивати” будь-який FSM
 # ======================================================================
 MENU_TEXTS = {
     "⬅️ В меню",
@@ -110,7 +111,7 @@ def _label(message: Message) -> str:
 
 
 def _md_escape(text: str) -> str:
-    # Markdown (not V2)
+    # Markdown (не V2)
     return (
         str(text)
         .replace("_", "\\_")
@@ -122,19 +123,19 @@ def _md_escape(text: str) -> str:
 
 async def _send_main_menu(message: Message) -> None:
     text = (
-        "✅ *Rent Platform // online*\n\n"
+        "✅ *Rent Platform запущено*\n\n"
         "Обери розділ 👇\n\n"
-        "🧩 *Marketplace* — продукти/оренда\n"
-        "🤖 *My bots* — керування копіями\n"
-        "👤 *Cabinet* — баланс / тарифи / історія\n"
-        "🤝 *Partners* — реф-силка / статистика\n"
-        "🆘 *Support* — інформація / правила\n"
+        "🧩 *Маркетплейс* — продукти/оренда\n"
+        "🤖 *Мої боти* — керування копіями\n"
+        "👤 *Кабінет* — баланс / тарифи / історія\n"
+        "🤝 *Партнери* — рефералка / виплати\n"
+        "🆘 *Підтримка* — інформація / правила\n"
     )
     await message.answer(text, parse_mode="Markdown", reply_markup=main_menu_kb(is_admin=False))
 
 
 # ======================================================================
-# ✅ menu buttons always work, even inside FSM
+# ✅ Меню-кнопки працюють завжди, навіть у будь-якому FSM
 # ======================================================================
 @router.message(StateFilter("*"), F.text.in_(MENU_TEXTS))
 async def menu_buttons_always_work(message: Message, state: FSMContext) -> None:
@@ -153,7 +154,7 @@ async def menu_buttons_always_work(message: Message, state: FSMContext) -> None:
             await render_cabinet(message)
         except Exception as e:
             log.exception("cabinet failed: %s", e)
-            await message.answer("⚠️ Cabinet // temporary down", reply_markup=back_to_menu_kb())
+            await message.answer("⚠️ Кабінет тимчасово недоступний.", reply_markup=back_to_menu_kb())
         return
 
     if message.text == BTN_PARTNERS:
@@ -184,11 +185,10 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 # ======================================================================
 # Partners / Support helpers (called from menu handler)
 # ======================================================================
-
 async def partners_text(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer(
-        "🤝 *Partners //*\n\n"
+        "🤝 *Партнерська програма*\n\n"
         "Рефералка + статистика + виплати.\n"
         "_MVP: заглушки, але структура вже є._",
         parse_mode="Markdown",
@@ -199,13 +199,12 @@ async def partners_text(message: Message, state: FSMContext) -> None:
 async def support_text(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer(
-        "🆘 *Support //*\n\n"
+        "🆘 *Підтримка*\n\n"
         "Тут буде база знань, правила, контакти.\n"
         "Поки що — загальна інформація 👇",
         parse_mode="Markdown",
         reply_markup=about_inline_kb(),
     )
-
 
 
 # ======================================================================
@@ -243,7 +242,7 @@ async def cb_my_bots_refresh(call: CallbackQuery, state: FSMContext) -> None:
 async def cb_partners(call: CallbackQuery) -> None:
     if call.message:
         await call.message.answer(
-            "🤝 *Partners //*\n\nОбери дію 👇",
+            "🤝 *Партнери*\n\nОбери дію 👇",
             parse_mode="Markdown",
             reply_markup=partners_inline_kb(),
         )
@@ -254,7 +253,7 @@ async def cb_partners(call: CallbackQuery) -> None:
 async def cb_support(call: CallbackQuery) -> None:
     if call.message:
         await call.message.answer(
-            "🆘 *Support //*\n\nТакож є «Info //» нижче 👇",
+            "🆘 *Підтримка*\n\nТакож є «Загальна інформація» нижче 👇",
             parse_mode="Markdown",
             reply_markup=about_inline_kb(),
         )
@@ -265,10 +264,10 @@ async def cb_support(call: CallbackQuery) -> None:
 async def cb_about(call: CallbackQuery) -> None:
     if call.message:
         await call.message.answer(
-            "ℹ️ *About //*\n\n"
+            "ℹ️ *Про платформу*\n\n"
             "Rent Platform — маркетплейс ботів/модулів.\n"
             "Потік: *обрав продукт* → *підключив токен* → *списання з балансу*.\n\n"
-            "Статус: *MVP online* ✅",
+            "Статус: *MVP працює* ✅",
             parse_mode="Markdown",
             reply_markup=back_to_menu_kb(),
         )
@@ -279,8 +278,8 @@ async def cb_about(call: CallbackQuery) -> None:
 async def cb_privacy(call: CallbackQuery) -> None:
     if call.message:
         await call.message.answer(
-            "🔒 *Privacy policy //*\n\n"
-            "• Токени ботів зберігаються для роботи оренди.\n"
+            "🔒 *Політика конфіденційності*\n\n"
+            "• Токени ботів зберігаються тільки для роботи оренди.\n"
             "• Не публікуй токени у чатах.\n"
             "• Дані використовуються лише для надання сервісу.\n\n"
             "_Пізніше винесемо в окремий URL._",
@@ -294,10 +293,10 @@ async def cb_privacy(call: CallbackQuery) -> None:
 async def cb_terms(call: CallbackQuery) -> None:
     if call.message:
         await call.message.answer(
-            "📄 *Terms //*\n\n"
+            "📄 *Умови користування*\n\n"
             "• Ти відповідаєш за контент/дії свого бота.\n"
             "• Платформа надає технічну оренду модулів.\n"
-            "• При 0 балансі — авто-пауза billing.\n\n"
+            "• При 0 балансі — оренда може стати на паузу.\n\n"
             "_Пізніше — нормальний документ._",
             parse_mode="Markdown",
             reply_markup=back_to_menu_kb(),
@@ -309,11 +308,11 @@ async def cb_terms(call: CallbackQuery) -> None:
 async def cb_commitments(call: CallbackQuery) -> None:
     if call.message:
         await call.message.answer(
-            "🛡 *Commitments //*\n\n"
+            "🛡 *Наші зобовʼязання*\n\n"
             "• Мінімум доступів.\n"
             "• Прозорі списання (ledger).\n"
             "• Контроль пауз/відновлення.\n\n"
-            "_Roadmap: admin panel, stats, payments._",
+            "_Далі: адмінка, статистика, реальні оплати._",
             parse_mode="Markdown",
             reply_markup=back_to_menu_kb(),
         )
@@ -328,13 +327,13 @@ async def cb_partners_sub(call: CallbackQuery) -> None:
 
     key = call.data.split("pl:partners:", 1)[1]
     mapping = {
-        "link": "🔗 *Ref link //*\n\n_MVP: заглушка_",
-        "stats": "📊 *Stats //*\n\n_MVP: заглушка_",
-        "payouts": "💸 *Payouts //*\n\n_MVP: заглушка_",
-        "rules": "📜 *Rules //*\n\n_MVP: заглушка_",
+        "link": "🔗 *Моя реф-силка*\n\n_MVP: заглушка_",
+        "stats": "📊 *Статистика*\n\n_MVP: заглушка_",
+        "payouts": "💸 *Виплати*\n\n_MVP: заглушка_",
+        "rules": "📜 *Правила*\n\n_MVP: заглушка_",
     }
     await call.message.answer(
-        mapping.get(key, "In progress //"),
+        mapping.get(key, "Пункт у розробці."),
         parse_mode="Markdown",
         reply_markup=partners_inline_kb(),
     )
@@ -362,17 +361,18 @@ async def _render_marketplace(message: Message) -> None:
 
     if not items:
         await message.answer(
-            "🧩 *Marketplace //*\n\nПоки що немає продуктів 🙂",
+            "🧩 *Маркетплейс*\n\nПоки що немає продуктів 🙂",
             parse_mode="Markdown",
             reply_markup=back_to_menu_kb(),
         )
         return
 
-    lines = ["🧩 *Marketplace // bots*", "", "Обери продукт 👇", ""]
+    lines = ["🧩 *Маркетплейс ботів*", "", "Обери продукт 👇", ""]
     for it in items:
         title = it.get("title") or it.get("key")
         short = (it.get("short") or "").strip()
         rate = _rate_text(it)
+
         lines.append(f"• *{_md_escape(title)}*")
         if short:
             lines.append(f"  _{_md_escape(short)}_")
@@ -399,12 +399,15 @@ async def cb_mkp_open(call: CallbackQuery) -> None:
         await call.answer("Не знайдено", show_alert=True)
         return
 
+    title = p.get("title") or "Продукт"
+    desc = p.get("desc") or ""
+
     text = (
-        "🧩 *Product //*\n\n"
-        f"*{_md_escape(p.get('title','Product'))}*\n"
-        f"{_md_escape(p.get('desc',''))}\n\n"
-        f"⏱ *Tariff:* `{_rate_text(p)}`\n\n"
-        "Натисни *Buy* → встав токен (BotFather) → отримаєш копію."
+        "🧩 *Продукт*\n\n"
+        f"*{_md_escape(title)}*\n"
+        f"{_md_escape(desc)}\n\n"
+        f"⏱ *Тариф:* `{_rate_text(p)}`\n\n"
+        "Натисни «Купити» — я попрошу токен (BotFather), щоб створити твою копію."
     )
 
     await call.message.answer(
@@ -431,14 +434,14 @@ async def cb_mkp_buy(call: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(mkp_product_key=product_key)
 
     await call.message.answer(
-        "✅ *Buy // create your copy*\n\n"
-        "Встав *BotFather token* бота, який буде працювати як копія.\n"
+        "✅ *Покупка: створення твоєї копії*\n\n"
+        "Встав *BotFather токен* бота, який буде працювати як твоя копія.\n"
         "Формат: `123456:AA...`\n\n"
         "⚠️ Не кидай токен у публічні чати.",
         parse_mode="Markdown",
         reply_markup=back_to_menu_kb(),
     )
-    await call.answer("OK")
+    await call.answer("Ок")
 
 
 @router.message(MarketplaceBuyFlow.waiting_bot_token, F.text)
@@ -450,17 +453,17 @@ async def mkp_receive_token(message: Message, state: FSMContext) -> None:
     if not product_key:
         await state.clear()
         await message.answer(
-            "⚠️ Buy state lost //\n\nЗайди в Marketplace і натисни Buy ще раз.",
+            "⚠️ Стан покупки загубився.\n\nЗайди в Маркетплейс і натисни «Купити» ще раз.",
             reply_markup=back_to_menu_kb(),
         )
         return
 
     if ":" not in token or len(token) < 20:
-        await message.answer("❌ Token looks invalid. Try again.")
+        await message.answer("❌ Схоже на невалідний токен. Спробуй ще раз.")
         return
 
     p = await get_marketplace_product(product_key)
-    nice_name = (p.get("title") if p else f"Product: {product_key}") or "Bot"
+    nice_name = (p.get("title") if p else f"Продукт: {product_key}") or "Bot"
 
     tenant = await add_bot(
         message.from_user.id,
@@ -472,33 +475,32 @@ async def mkp_receive_token(message: Message, state: FSMContext) -> None:
     await state.clear()
 
     await message.answer(
-        "✅ *Copy created //*\n\n"
+        "✅ *Готово! Твоя копія створена.*\n\n"
         f"ID: `{tenant['id']}`\n"
-        f"Product: `{product_key}`\n\n"
-        "Далі: *My bots* → ⚙️ *Config* (ключі оплат/інтеграцій).",
+        f"Продукт: `{product_key}`\n\n"
+        "Далі: «Мої боти» → ⚙️ «Конфіг» (ключі оплат/інтеграцій).",
         parse_mode="Markdown",
         reply_markup=back_to_menu_kb(),
     )
 
 
 # ======================================================================
-# My Bots — B-look (grouped + clean)
+# My Bots — згруповано та акуратно
 # ======================================================================
-
 def _status_badge(st: str | None, paused_reason: str | None = None) -> str:
     st = (st or "active").lower()
     pr = (paused_reason or "").lower()
 
     if st == "active":
-        return "🟢 active"
+        return "🟢 активний"
     if st == "paused":
         if pr == "billing":
-            return "🔻 paused • billing"
+            return "🔻 пауза • білінг"
         if pr == "manual":
-            return "🟡 paused • manual"
-        return "⏸ paused"
+            return "🟡 пауза • вручну"
+        return "⏸ пауза"
     if st == "deleted":
-        return "🗑 deleted"
+        return "🗑 видалено"
     return f"⚪️ {st}"
 
 
@@ -509,8 +511,6 @@ def _fmt_paid_until(ts: int | None) -> str:
         ts_i = 0
     if ts_i <= 0:
         return "—"
-    # коротко, без секунд
-    import datetime as _dt
     return _dt.datetime.fromtimestamp(ts_i).strftime("%Y-%m-%d %H:%M")
 
 
@@ -527,12 +527,12 @@ def _group_key(it: dict) -> str:
 
 def _section_title(key: str, count: int) -> str:
     if key == "active":
-        return f"🟢 *Active* — *{count}*"
+        return f"🟢 *Активні* — *{count}*"
     if key == "paused":
-        return f"⏸ *Paused* — *{count}*"
+        return f"⏸ *На паузі* — *{count}*"
     if key == "deleted":
-        return f"🗑 *Deleted* — *{count}*"
-    return f"⚪️ *Other* — *{count}*"
+        return f"🗑 *Видалені* — *{count}*"
+    return f"⚪️ *Інші* — *{count}*"
 
 
 async def _render_my_bots(message: Message) -> None:
@@ -541,7 +541,7 @@ async def _render_my_bots(message: Message) -> None:
 
     if not items:
         await message.answer(
-            "🤖 *My bots //*\n\n"
+            "🤖 *Мої боти*\n\n"
             "Поки порожньо.\n"
             "Натисни *➕ Додати бота* і встав токен.",
             parse_mode="Markdown",
@@ -549,25 +549,21 @@ async def _render_my_bots(message: Message) -> None:
         )
         return
 
-    # group
     grouped: dict[str, list[dict]] = {"active": [], "paused": [], "deleted": [], "other": []}
     for it in items:
         grouped[_group_key(it)].append(it)
 
-    # header
     total = len(items)
     active_n = len(grouped["active"])
     paused_n = len(grouped["paused"])
     deleted_n = len(grouped["deleted"])
 
     header = (
-        "🤖 *My bots //*\n\n"
+        "🤖 *Мої боти*\n\n"
         f"Всього: *{total}*  •  🟢 *{active_n}*  ⏸ *{paused_n}*  🗑 *{deleted_n}*\n"
     )
 
     lines: list[str] = [header]
-
-    # stable order of sections
     section_order = ["active", "paused", "deleted", "other"]
     idx = 0
 
@@ -581,7 +577,7 @@ async def _render_my_bots(message: Message) -> None:
 
         for it in sec_items:
             idx += 1
-            name = it.get("name") or "Bot"
+            name = it.get("name") or "Бот"
             bot_id = it["id"]
 
             st_badge = _status_badge(it.get("status"), it.get("paused_reason"))
@@ -592,14 +588,10 @@ async def _render_my_bots(message: Message) -> None:
             paid_until = _fmt_paid_until(it.get("paid_until_ts"))
             plan = (it.get("plan_key") or "free").strip()
 
-            # 1) Name line
             lines.append(f"{idx}) *{_md_escape(name)}*")
-            # 2) status + id
             lines.append(f"   {st_badge}  •  id: `{bot_id}`")
-            # 3) product + plan
-            lines.append(f"   🧩 product: `{pk_s}`  •  📦 plan: `{plan}`")
-            # 4) paid_until (optional but nice)
-            lines.append(f"   ⏳ paid until: `{paid_until}`")
+            lines.append(f"   🧩 продукт: `{pk_s}`  •  📦 план: `{plan}`")
+            lines.append(f"   ⏳ оплачено до: `{paid_until}`")
             lines.append("")
 
         lines.append("")
@@ -610,9 +602,8 @@ async def _render_my_bots(message: Message) -> None:
         reply_markup=my_bots_kb(),
     )
 
-    # manage panel (inline list)
     await message.answer(
-        "⚙️ *Manage //*",
+        "⚙️ *Керування ботами*",
         parse_mode="Markdown",
         reply_markup=my_bots_list_kb(items),
     )
@@ -623,7 +614,7 @@ async def cb_my_bots_add(call: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(MyBotsFlow.waiting_token)
     if call.message:
         await call.message.answer(
-            "➕ *Add bot //*\n\nВстав токен (BotFather: `123456:AA...`).",
+            "➕ *Додати бота*\n\nВстав токен (BotFather: `123456:AA...`).",
             parse_mode="Markdown",
             reply_markup=back_to_menu_kb(),
         )
@@ -635,14 +626,14 @@ async def my_bots_receive_token(message: Message, state: FSMContext) -> None:
     token = (message.text or "").strip()
 
     if ":" not in token or len(token) < 20:
-        await message.answer("❌ Token looks invalid. Try again.")
+        await message.answer("❌ Схоже на невалідний токен. Спробуй ще раз.")
         return
 
     user_id = message.from_user.id
-    await add_bot(user_id, token=token, name="Bot")
+    await add_bot(user_id, token=token, name="Бот")
 
     await state.clear()
-    await message.answer("✅ Added //")
+    await message.answer("✅ Додав.", reply_markup=back_to_menu_kb())
     await _render_my_bots(message)
 
 
@@ -656,7 +647,7 @@ async def cb_my_bots_pause(call: CallbackQuery) -> None:
     bot_id = call.data.split("pl:my_bots:pause:", 1)[1]
     ok = await pause_bot(call.from_user.id, bot_id)
     if call.message:
-        await call.message.answer("⏸ Paused //" if ok else "⚠️ Failed //")
+        await call.message.answer("⏸ Поставив на паузу." if ok else "⚠️ Не вийшло.")
         await _render_my_bots(call.message)
     await call.answer()
 
@@ -666,7 +657,7 @@ async def cb_my_bots_resume(call: CallbackQuery) -> None:
     bot_id = call.data.split("pl:my_bots:resume:", 1)[1]
     ok = await resume_bot(call.from_user.id, bot_id)
     if call.message:
-        await call.message.answer("▶️ Resumed //" if ok else "⚠️ Failed //")
+        await call.message.answer("▶️ Відновив." if ok else "⚠️ Не вийшло.")
         await _render_my_bots(call.message)
     await call.answer()
 
@@ -676,7 +667,7 @@ async def cb_my_bots_delete(call: CallbackQuery) -> None:
     bot_id = call.data.split("pl:my_bots:del:", 1)[1]
     ok = await delete_bot(call.from_user.id, bot_id)
     if call.message:
-        await call.message.answer("🗑 Deleted (soft) //" if ok else "⚠️ Not found //")
+        await call.message.answer("🗑 Видалив (soft)." if ok else "⚠️ Не знайшов такого бота.")
         await _render_my_bots(call.message)
     await call.answer()
 
@@ -687,12 +678,12 @@ async def cb_my_bots_delete(call: CallbackQuery) -> None:
 async def _render_config(message: Message, bot_id: str) -> None:
     data = await get_bot_config(message.from_user.id, bot_id)
     if not data:
-        await message.answer("⚠️ Bot not found / no access //", reply_markup=back_to_menu_kb())
+        await message.answer("⚠️ Не знайшов бота або нема доступу.", reply_markup=back_to_menu_kb())
         return
 
     providers = data["providers"]
 
-    lines = [f"⚙️ *Config //* `{bot_id}`", ""]
+    lines = [f"⚙️ *Конфіг* `{bot_id}`", ""]
     for p in providers:
         lines.append(f"{'✅' if p['enabled'] else '➕'} *{p['title']}*")
         for s in p.get("secrets") or []:
@@ -728,7 +719,7 @@ async def cb_cfg_toggle(call: CallbackQuery) -> None:
         return
 
     ok = await toggle_integration(call.from_user.id, bot_id, provider)
-    await call.answer("OK ✅" if ok else "Not allowed", show_alert=not ok)
+    await call.answer("Ок ✅" if ok else "Не можна", show_alert=not ok)
 
     if ok:
         await _render_config(call.message, bot_id)
@@ -751,7 +742,7 @@ async def cb_cfg_set(call: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(cfg_bot_id=bot_id, cfg_secret_key=secret_key)
 
     await call.message.answer(
-        f"🔑 Set value for `{secret_key}` //\n\n"
+        f"🔑 Встав значення для `{secret_key}`.\n\n"
         "⚠️ Не кидай це в публічні чати.",
         parse_mode="Markdown",
         reply_markup=back_to_menu_kb(),
@@ -768,7 +759,7 @@ async def cfg_receive_secret(message: Message, state: FSMContext) -> None:
 
     if not bot_id or not secret_key:
         await state.clear()
-        await message.answer("⚠️ State broken // try again", reply_markup=back_to_menu_kb())
+        await message.answer("⚠️ Стан зламався, спробуй ще раз.", reply_markup=back_to_menu_kb())
         return
 
     ok = await set_bot_secret(message.from_user.id, bot_id, secret_key, value)
@@ -776,24 +767,24 @@ async def cfg_receive_secret(message: Message, state: FSMContext) -> None:
 
     if not ok:
         await message.answer(
-            "⚠️ Save failed // (no access or key not allowed)",
+            "⚠️ Не вийшло зберегти (нема доступу або ключ не дозволений).",
             reply_markup=back_to_menu_kb(),
         )
         return
 
-    await message.answer("✅ Saved //", reply_markup=back_to_menu_kb())
+    await message.answer("✅ Зберіг.", reply_markup=back_to_menu_kb())
     await _render_config(message, bot_id)
 
 
 # ======================================================================
-# TopUp (balance) — keep in start.py for MVP
+# TopUp (баланс) — MVP
 # ======================================================================
 @router.callback_query(F.data == "pl:topup:start")
 async def cb_topup_start(call: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(TopUpFlow.waiting_amount)
     if call.message:
         await call.message.answer(
-            "💰 *TopUp //*\n\n"
+            "💰 *Поповнення балансу*\n\n"
             "Введи суму в гривнях (цілим числом), напр: `200`",
             parse_mode="Markdown",
             reply_markup=back_to_menu_kb(),
@@ -819,7 +810,7 @@ async def topup_receive_amount(message: Message, state: FSMContext) -> None:
 
     await state.clear()
     await message.answer(
-        f"Обери провайдера на *{amount} грн* 👇",
+        f"Обери спосіб поповнення на *{amount} грн* 👇",
         parse_mode="Markdown",
         reply_markup=topup_provider_kb(amount),
     )
@@ -841,15 +832,15 @@ async def cb_topup_provider(call: CallbackQuery) -> None:
 
     inv = await create_topup_invoice(call.from_user.id, amount_uah=amount, provider=provider)
     if not inv:
-        await call.answer("Invoice create failed", show_alert=True)
+        await call.answer("Не вийшло створити інвойс", show_alert=True)
         return
 
     await call.message.answer(
-        "💳 *Invoice created //*\n\n"
-        f"Amount: *{inv['amount_uah']} грн*\n"
-        f"Provider: *{provider}*\n\n"
-        f"URL (stub):\n{inv['pay_url']}\n\n"
-        "MVP: натисни confirm (test) 👇",
+        "💳 *Інвойс створено*\n\n"
+        f"Сума: *{inv['amount_uah']} грн*\n"
+        f"Провайдер: *{provider}*\n\n"
+        f"Посилання (поки заглушка):\n{inv['pay_url']}\n\n"
+        "Для MVP натисни кнопку нижче (тестове підтвердження):",
         parse_mode="Markdown",
         reply_markup=topup_confirm_kb(int(inv["invoice_id"])),
     )
@@ -871,19 +862,19 @@ async def cb_topup_confirm(call: CallbackQuery) -> None:
 
     res = await confirm_topup_paid_test(call.from_user.id, invoice_id)
     if not res:
-        await call.answer("Invoice not found", show_alert=True)
+        await call.answer("Не знайдено інвойс", show_alert=True)
         return
 
     if res.get("already"):
-        await call.message.answer("ℹ️ Invoice is not pending anymore.")
+        await call.message.answer("ℹ️ Цей інвойс вже не pending.")
         await call.answer()
         return
 
     new_balance = int(res["new_balance_kop"]) / 100.0
     added = int(res["amount_kop"]) / 100.0
     await call.message.answer(
-        f"✅ Confirmed (test) // +{added:.2f} грн\n"
-        f"💰 Balance: {new_balance:.2f} грн",
+        f"✅ Оплату підтверджено (тест). Баланс +{added:.2f} грн.\n"
+        f"💰 Новий баланс: {new_balance:.2f} грн",
         reply_markup=back_to_menu_kb(),
     )
     await call.answer("✅")
