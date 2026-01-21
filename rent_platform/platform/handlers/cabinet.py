@@ -88,7 +88,7 @@ async def render_cabinet(message: Message) -> None:
     if total_bots == 0:
         vibe = "🆕 *ПУСТО*  _але скоро буде жарко_"
     elif paused_billing:
-        vibe = "🔻 *BILLING-ПАУЗА*  _не вистачає балансу_"
+        vibe = "🔻 "БІЛІНГ-ПАУЗА"  _не вистачає балансу_"
     elif paused_manual:
         vibe = "🟡 *РУЧНА ПАУЗА*  _ти керуєш_"
     else:
@@ -96,16 +96,16 @@ async def render_cabinet(message: Message) -> None:
 
     hint = ""
     if paused_billing:
-        hint = "\n\n⚠️ *Є боти на billing-паузі.* Поповни баланс — і вони піднімуться автоматом."
+        hint = "\n\n⚠️ "⚠️ Є боти на білінг-паузі. Поповни баланс — і вони піднімуться автоматом."
 
     caption = (
-        "🧩 *КАБІНЕТ // RENT PLATFORM*\n"
+        "👤 *Кабінет Rent Platform*"
         f"{vibe}\n\n"
         f"🆔 *ID:* `{user_id}`\n\n"
         "🤖 *БОТИ*\n"
         f"• Всього: *{total_bots}*\n"
         f"• Активні: *{active_cnt}*\n"
-        f"• Пауза: *{paused_cnt}*  (💸 billing: *{paused_billing}*, ✋ manual: *{paused_manual}*)\n"
+        f"• Пауза: {paused} (💸 білінг: {paused_billing}, ✋ вручну: {paused_manual})"
         f"• Видалені: *{deleted_cnt}*"
         + (f"\n• Інші: *{other_cnt}*" if other_cnt else "")
         + "\n\n"
