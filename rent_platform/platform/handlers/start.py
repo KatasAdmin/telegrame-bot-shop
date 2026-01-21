@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import datetime as _dt
-
+import CommandObject
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.types import Message, CallbackQuery
@@ -176,9 +176,18 @@ async def back_to_menu_text(message: Message, state: FSMContext) -> None:
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext) -> None:
+async def cmd_start(message: Message, state: FSMContext, command: CommandObject) -> None:
     await state.clear()
-    log.info("platform /start: %s", _label(message))
+
+    user_id = message.from_user.id
+    payload = (command.args or "").strip()  # ref_123456
+    if payload.startswith("ref_"):
+        try:
+            referrer_id = int(payload.split("ref_", 1)[1])
+            await ReferralRepo.bind(user_id=user_id, referrer_id=referrer_id)
+        except Exception:
+            pass
+
     await _send_main_menu(message)
 
 
