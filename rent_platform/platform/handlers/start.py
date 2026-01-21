@@ -310,6 +310,48 @@ async def cb_support(call: CallbackQuery) -> None:
         )
     await call.answer()
 
+@router.callback_query(F.data == "pl:cabinet:topup")
+async def cb_cabinet_topup(call: CallbackQuery, state: FSMContext) -> None:
+    await cb_topup_start(call, state)  # ти вже маєш цю логіку
+    await call.answer()
+
+@router.callback_query(F.data == "pl:cabinet:withdraw")
+async def cb_cabinet_withdraw(call: CallbackQuery) -> None:
+    if call.message:
+        await call.message.answer(
+            "💵 *Вивід коштів*\n\n(скоро)\n\n"
+            "Тут буде:\n"
+            "• додати карту/реквізити\n"
+            "• заявка на вивід\n"
+            "• статуси виплат",
+            parse_mode="Markdown",
+            reply_markup=back_to_menu_kb(),
+        )
+    await call.answer()
+
+@router.callback_query(F.data == "pl:cabinet:exchange")
+async def cb_cabinet_exchange(call: CallbackQuery) -> None:
+    if call.message:
+        await call.message.answer(
+            "♻️ *Обмін коштів*\n\n(скоро)\n\n"
+            "Тут буде обмін з рахунку «для виведення» → на «основний».\n"
+            "Для акцій можна буде робити курс/комісію/гачок.",
+            parse_mode="Markdown",
+            reply_markup=back_to_menu_kb(),
+        )
+    await call.answer()
+
+@router.callback_query(F.data == "pl:cabinet:history")
+async def cb_cabinet_history(call: CallbackQuery) -> None:
+    if call.message:
+        await call.message.answer(
+            "📋 *Історія транзакцій*\n\n(скоро)\n\n"
+            "Тут покажемо поповнення/списання/вивід/обмін.",
+            parse_mode="Markdown",
+            reply_markup=back_to_menu_kb(),
+        )
+    await call.answer()
+
 @router.callback_query(F.data == "pl:about")
 async def cb_about(call: CallbackQuery) -> None:
     if call.message:
