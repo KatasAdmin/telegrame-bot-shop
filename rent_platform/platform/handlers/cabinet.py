@@ -182,6 +182,13 @@ def register_cabinet(router: Router) -> None:
 
     @router.message(WithdrawFlow.waiting_amount, F.text)
     async def withdraw_receive_amount(message: Message, state: FSMContext) -> None:
+        txt = (message.text or "").strip()
+
+        if txt in {"⬅️ В меню", "В меню", "Меню", "/start"} or txt in {
+            BTN_MARKETPLACE, BTN_MY_BOTS, BTN_CABINET, BTN_PARTNERS, BTN_HELP
+        }:
+            raise SkipHandler
+
         raw = (message.text or "").strip().replace(" ", "")
         if not raw.isdigit():
             await message.answer("❌ Введи число в грн, напр. 200")
