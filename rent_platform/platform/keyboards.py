@@ -93,24 +93,17 @@ def about_inline_kb() -> InlineKeyboardMarkup:
 # ======================================================================
 
 def cabinet_actions_kb() -> InlineKeyboardMarkup:
-    """
-    Порядок кнопок як ти хотів:
-    1 ряд: Поповнити + Вивести
-    2 ряд: Обміняти
-    3 ряд: Історія
-    4 ряд: В меню
-
-    IMPORTANT:
-    - "Поповнити" веде на pl:topup:start (бо у тебе хендлер саме на нього)
-    - Інші 3 callback'и поки заглушки (хендлери додамо у start.py)
-    """
     kb = InlineKeyboardBuilder()
     kb.row(
         InlineKeyboardButton(text="💳 Поповнити", callback_data="pl:topup:start"),
         InlineKeyboardButton(text="💵 Вивести", callback_data="pl:cabinet:withdraw"),
         width=2,
     )
-    kb.row(InlineKeyboardButton(text="♻️ Обміняти", callback_data="pl:cabinet:exchange"), width=1)
+    kb.row(
+        InlineKeyboardButton(text="♻️ Обміняти", callback_data="pl:cabinet:exchange"),
+        InlineKeyboardButton(text="📈 Тарифи", callback_data="pl:cabinet:tariffs"),
+        width=2,
+    )
     kb.row(InlineKeyboardButton(text="📋 Історія", callback_data="pl:cabinet:history"), width=1)
     kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"), width=1)
     return kb.as_markup()
