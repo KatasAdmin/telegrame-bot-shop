@@ -23,7 +23,7 @@ from rent_platform.db.session import db_execute
 log = logging.getLogger(__name__)
 
 app = FastAPI()
-
+app.include_router(admin_router)
 # Platform bot (керує SaaS-меню)
 platform_bot = Bot(token=settings.BOT_TOKEN)
 dp = Dispatcher()
