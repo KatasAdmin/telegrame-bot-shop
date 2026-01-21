@@ -92,28 +92,38 @@ def about_inline_kb() -> InlineKeyboardMarkup:
 # My bots
 # ======================================================================
 
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+
 def cabinet_actions_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="💰 Поповнити", callback_data="pl:topup:start"), width=1)
-    kb.row(InlineKeyboardButton(text="💸 Вивести кошти", callback_data="pl:withdraw:start"), width=1)
-    kb.row(InlineKeyboardButton(text="📜 Історія транзакцій", callback_data="pl:tx:list"), width=1)
-    kb.row(InlineKeyboardButton(text="🔁 Обмін коштів", callback_data="pl:exchange:start"), width=1)
-    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"), width=1)
-    return kb.as_markup()
 
-
-def my_bots_kb() -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
+    # Поповнити + Вивести (в один ряд)
     kb.row(
-        InlineKeyboardButton(text="➕ Підключити свій бот (токен)", callback_data="pl:my_bots:add"),
-        InlineKeyboardButton(text="🔄 Оновити", callback_data="pl:my_bots:refresh"),
+        InlineKeyboardButton(text="💳 Поповнити", callback_data="pl:topup:start"),
+        InlineKeyboardButton(text="💵 Вивід коштів", callback_data="pl:cabinet:withdraw"),
         width=2,
     )
+
+    # Обмін
     kb.row(
-        InlineKeyboardButton(text="⚙️ Налаштування (скоро)", callback_data="pl:my_bots:settings_stub"),
+        InlineKeyboardButton(text="♻️ Обміняти кошти", callback_data="pl:cabinet:exchange"),
         width=1,
     )
-    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"), width=1)
+
+    # Історія
+    kb.row(
+        InlineKeyboardButton(text="📋 Історія транзакцій", callback_data="pl:cabinet:history"),
+        width=1,
+    )
+
+    # В меню
+    kb.row(
+        InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"),
+        width=1,
+    )
+
     return kb.as_markup()
 
 
