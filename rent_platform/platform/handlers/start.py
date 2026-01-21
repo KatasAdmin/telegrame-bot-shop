@@ -312,7 +312,7 @@ async def cb_support(call: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "pl:cabinet:topup")
 async def cb_cabinet_topup(call: CallbackQuery, state: FSMContext) -> None:
-    await cb_topup_start(call, state)  # ти вже маєш цю логіку
+    await cb_topup_start(call, state)
     await call.answer()
 
 @router.callback_query(F.data == "pl:cabinet:withdraw")
@@ -456,6 +456,8 @@ async def _render_cabinet(message: Message) -> None:
     user_id = message.from_user.id
     data = await get_cabinet(user_id)
 
+    bots = data.get("bots") or []   # ✅ ОЦЕ БУЛО ВІДСУТНЄ
+
     balance_uah = int(data.get("balance_kop") or 0) / 100.0
     withdraw_uah = int(data.get("withdraw_balance_kop") or 0) / 100.0
     active_bots = int(data.get("active_bots") or 0)
@@ -483,17 +485,19 @@ async def _render_cabinet(message: Message) -> None:
         )
 
     # 2) Додатково (опційно): короткий список ботів
-    #    Якщо не хочеш — просто видали цей блок.
     if bots:
-        lines = ["\n🤖 *Ваші боти:*"]
+        lines = ["🤖 *Ваші боти:*"]
         for i, b in enumerate(bots, 1):
             name = _md_escape(b.get("name") or "Bot")
             st = (b.get("status") or "active").lower()
             badge = "✅ active" if st == "active" else ("⏸ paused" if st == "paused" else st)
             lines.append(f"{i}) {name} — {badge} (`{b.get('id')}`)")
 
-        await message.answer("\n".join(lines), parse_mode="Markdown", reply_markup=back_to_menu_kb())
-
+        await message.answer(
+            "\n".join(lines),
+            parse_mode="Markdown",
+            reply_markup=back_to_menu_kb(),
+        )
 @router.callback_query(F.data.startswith("pl:pay:"))
 async def cb_pay(call: CallbackQuery) -> None:
     if not call.message:
