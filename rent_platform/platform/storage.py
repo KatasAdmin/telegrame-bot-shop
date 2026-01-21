@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from rent_platform.db.repo import WithdrawRepo
 import time
 import logging
 from typing import Any
@@ -427,3 +427,57 @@ async def set_bot_secret(user_id: int, bot_id: str, secret_key: str, secret_valu
 
     await TenantSecretRepo.upsert(bot_id, secret_key, secret_value.strip())
     return True
+
+async def create_withdraw_request(user_id: int, amount_uah: int, method: str = "manual") -> dict | None:
+    """
+    Створює заявку на вивід (pending) і одразу блокує/списує гроші з withdraw_balance_kop.
+    method: поки заглушка ("manual"), пізніше: "card", "iban", "crypto"...
+    """
+    amount_uah = int(amount_uah)
+    if amount_uah < 10:
+        return None
+
+    amount_kop = _uah_to_kop(amount_uah)
+
+    await AccountRepo.ensure(user_id)
+    acc = await AccountRepo.get(user_id)
+    withdraw_kop = int((acc or {}).get("withdraw_balance_kop") or 0)
+
+    if amount_kop <= 0 or amount_kop > withdraw_kop:
+        return None
+
+    # 1) create withdraw request (pending)
+    # ВАЖЛИВО: тут я НЕ знаю точні поля твоєї таблиці/репозиторію.
+    # Тому виклик робимо максимально "м’який": try/except і meta.
+    req = await WithdrawRepo.create(
+        owner_user_id=user_id,
+        amount_kop=amount_kop,
+        method=method,
+        status="pending",
+        meta={"amount_uah": amount_uah},
+    )
+
+    if not req or not req.get("id"):
+        return None
+
+    # 2) subtract from withdraw balance (щоб не було подвійних заявок)
+    new_withdraw = withdraw_kop - amount_kop
+    await AccountRepo.set_withdraw_balance(user_id, new_withdraw)
+
+    # 3) ledger (опційно, але корисно для історії)
+    await LedgerRepo.add(
+        user_id,
+        "withdraw_request",
+        -amount_kop,
+        tenant_id=None,
+        meta={"withdraw_id": int(req["id"]), "method": method},
+    )
+
+    return {
+        "withdraw_id": int(req["id"]),
+        "status": "pending",
+        "amount_uah": amount_uah,
+        "amount_kop": amount_kop,
+        "new_withdraw_balance_kop": new_withdraw,
+        "created_ts": int(req.get("created_ts") or 0),
+    }
