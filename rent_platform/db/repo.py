@@ -590,3 +590,59 @@ class InvoiceRepo:
         WHERE id = :id AND owner_user_id = :uid AND status = 'pending'
         """
         await db_execute(q, {"id": int(invoice_id), "uid": int(owner_user_id), "ts": int(time.time())})
+
+class WithdrawRepo:
+    TABLE = "withdraw_requests"
+
+    @staticmethod
+    async def create(owner_user_id: int, amount_kop: int, method: str = "manual", meta: dict | None = None) -> dict:
+        ts = int(time.time())
+        q = f"""
+        INSERT INTO {WithdrawRepo.TABLE} (
+            owner_user_id, amount_kop, method,
+            status, meta, created_ts, updated_ts
+        )
+        VALUES (:uid, :a, :m, 'pending', :meta, :ts, :ts)
+        RETURNING id, owner_user_id, amount_kop, method, status, meta, created_ts, updated_ts
+        """
+        row = await db_fetch_one(
+            q,
+            {
+                "uid": int(owner_user_id),
+                "a": int(amount_kop),
+                "m": str(method),
+                "meta": json.dumps(meta or {}, ensure_ascii=False),
+                "ts": ts,
+            },
+        )
+        return row or {}
+
+    @staticmethod
+    async def get_for_owner(owner_user_id: int, withdraw_id: int) -> dict | None:
+        q = f"""
+        SELECT id, owner_user_id, amount_kop, method, status, meta, created_ts, updated_ts
+        FROM {WithdrawRepo.TABLE}
+        WHERE id = :id AND owner_user_id = :uid
+        """
+        return await db_fetch_one(q, {"id": int(withdraw_id), "uid": int(owner_user_id)})
+
+    @staticmethod
+    async def list_for_owner(owner_user_id: int, limit: int = 20) -> list[dict]:
+        q = f"""
+        SELECT id, owner_user_id, amount_kop, method, status, meta, created_ts, updated_ts
+        FROM {WithdrawRepo.TABLE}
+        WHERE owner_user_id = :uid
+        ORDER BY created_ts DESC
+        LIMIT :lim
+        """
+        return await db_fetch_all(q, {"uid": int(owner_user_id), "lim": int(limit)})
+
+    @staticmethod
+    async def set_status(withdraw_id: int, status: str) -> None:
+        q = f"""
+        UPDATE {WithdrawRepo.TABLE}
+        SET status = :st,
+            updated_ts = :ts
+        WHERE id = :id
+        """
+        await db_execute(q, {"id": int(withdraw_id), "st": str(status), "ts": int(time.time())})
