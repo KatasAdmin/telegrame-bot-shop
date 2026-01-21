@@ -83,12 +83,12 @@ def about_inline_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(
         InlineKeyboardButton(text="ℹ️ Про платформу", callback_data="pl:about"),
-        InlineKeyboardButton(text="🔒 Privacy policy", callback_data="pl:privacy"),
+        InlineKeyboardButton(text="🔒 Політика конфіденційності", callback_data="pl:privacy"),
         width=1,
     )
     kb.row(
-        InlineKeyboardButton(text="📄 Terms", callback_data="pl:terms"),
-        InlineKeyboardButton(text="🛡 Commitments", callback_data="pl:commitments"),
+        InlineKeyboardButton(text="📄 Умови користування", callback_data="pl:terms"),
+        InlineKeyboardButton(text="🛡 Наші зобовʼязання", callback_data="pl:commitments"),
         width=1,
     )
     kb.row(InlineKeyboardButton(text=LBL_MENU, callback_data="pl:menu"))
@@ -118,8 +118,8 @@ def cabinet_actions_kb() -> InlineKeyboardMarkup:
 # =========================================================
 def my_bots_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="➕ Add bot //", callback_data="pl:my_bots:add"), width=1)
-    kb.row(InlineKeyboardButton(text=f"{LBL_REFRESH} //", callback_data="pl:my_bots:refresh"), width=1)
+    kb.row(InlineKeyboardButton(text="➕ Додати бота", callback_data="pl:my_bots:add"), width=1)
+    kb.row(InlineKeyboardButton(text=LBL_REFRESH, callback_data="pl:my_bots:refresh"), width=1)
     kb.row(InlineKeyboardButton(text=LBL_MENU, callback_data="pl:menu"), width=1)
     return kb.as_markup()
 
@@ -129,15 +129,15 @@ def _bot_badge(it: dict) -> str:
     pr = (it.get("paused_reason") or "").lower()
 
     if st == "active":
-        return "🟢 online"
+        return "🟢 активний"
     if st == "paused":
         if pr == "billing":
-            return "🔻 paused(billing)"
+            return "🔻 пауза • білінг"
         if pr == "manual":
-            return "🟡 paused(manual)"
-        return "⏸ paused"
+            return "🟡 пауза • вручну"
+        return "⏸ пауза"
     if st == "deleted":
-        return "🗑 deleted"
+        return "🗑 видалено"
     return st
 
 
@@ -146,7 +146,7 @@ def my_bots_list_kb(items: list[dict]) -> InlineKeyboardMarkup:
 
     for it in items:
         bot_id = it["id"]
-        name = (it.get("name") or "Bot").strip()
+        name = (it.get("name") or "Бот").strip()
         badge = _bot_badge(it)
 
         kb.row(
@@ -159,21 +159,26 @@ def my_bots_list_kb(items: list[dict]) -> InlineKeyboardMarkup:
         st = (it.get("status") or "active").lower()
         if st in ("active", "paused"):
             kb.row(
-                InlineKeyboardButton(text="⚙️ Config //", callback_data=f"pl:cfg:open:{bot_id}"),
+                InlineKeyboardButton(text="⚙️ Конфіг", callback_data=f"pl:cfg:open:{bot_id}"),
                 InlineKeyboardButton(
-                    text=("⏸ Pause //" if st == "active" else "▶️ Resume //"),
-                    callback_data=(f"pl:my_bots:pause:{bot_id}" if st == "active" else f"pl:my_bots:resume:{bot_id}"),
+                    text=("⏸ Пауза" if st == "active" else "▶️ Відновити"),
+                    callback_data=(
+                        f"pl:my_bots:pause:{bot_id}" if st == "active"
+                        else f"pl:my_bots:resume:{bot_id}"
+                    ),
                 ),
                 width=2,
             )
             kb.row(
-                InlineKeyboardButton(text="🗑 Delete //", callback_data=f"pl:my_bots:del:{bot_id}"),
+                InlineKeyboardButton(text="🗑 Видалити", callback_data=f"pl:my_bots:del:{bot_id}"),
                 width=1,
             )
         else:
-            kb.row(InlineKeyboardButton(text="🙂 (disabled)", callback_data=f"pl:my_bots:noop:{bot_id}"))
+            kb.row(
+                InlineKeyboardButton(text="🙂 Недоступно", callback_data=f"pl:my_bots:noop:{bot_id}")
+            )
 
-    kb.row(InlineKeyboardButton(text="⬅️ Back //", callback_data="pl:my_bots"), width=1)
+    kb.row(InlineKeyboardButton(text=LBL_BACK, callback_data="pl:my_bots"), width=1)
     return kb.as_markup()
 
 
@@ -206,8 +211,8 @@ def marketplace_products_kb(items: list[dict]) -> InlineKeyboardMarkup:
 
 def marketplace_buy_kb(product_key: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="✅ Buy // create copy", callback_data=f"pl:mkp:buy:{product_key}"))
-    kb.row(InlineKeyboardButton(text="⬅️ Back //", callback_data="pl:marketplace"))
+    kb.row(InlineKeyboardButton(text="✅ Купити (створити копію)", callback_data=f"pl:mkp:buy:{product_key}"))
+    kb.row(InlineKeyboardButton(text=LBL_BACK, callback_data="pl:marketplace"))
     kb.row(InlineKeyboardButton(text=LBL_MENU, callback_data="pl:menu"))
     return kb.as_markup()
 
@@ -217,7 +222,7 @@ def marketplace_buy_kb(product_key: str) -> InlineKeyboardMarkup:
 # =========================================================
 def cabinet_topup_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="💰 TopUp //", callback_data="pl:topup:start"))
+    kb.row(InlineKeyboardButton(text="💰 Поповнити баланс", callback_data="pl:topup:start"))
     kb.row(InlineKeyboardButton(text=LBL_MENU, callback_data="pl:menu"))
     return kb.as_markup()
 
@@ -233,7 +238,7 @@ def topup_provider_kb(amount_uah: int) -> InlineKeyboardMarkup:
 
 def topup_confirm_kb(invoice_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="✅ Confirm paid (test) //", callback_data=f"pl:topup:confirm:{invoice_id}"))
+    kb.row(InlineKeyboardButton(text="✅ Я оплатив (тест)", callback_data=f"pl:topup:confirm:{invoice_id}"))
     kb.row(InlineKeyboardButton(text=LBL_MENU, callback_data="pl:menu"))
     return kb.as_markup()
 
@@ -243,7 +248,7 @@ def topup_confirm_kb(invoice_id: int) -> InlineKeyboardMarkup:
 # =========================================================
 def cabinet_pay_kb(bot_id: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="💳 Pay (1 month) //", callback_data=f"pl:pay:{bot_id}:1"))
+    kb.row(InlineKeyboardButton(text="💳 Оплатити (1 міс)", callback_data=f"pl:pay:{bot_id}:1"))
     kb.row(InlineKeyboardButton(text=LBL_MENU, callback_data="pl:menu"))
     return kb.as_markup()
 
@@ -260,7 +265,7 @@ def config_kb(bot_id: str, providers: list[dict]) -> InlineKeyboardMarkup:
         enabled = bool(p["enabled"])
         kb.row(
             InlineKeyboardButton(
-                text=f"{'✅' if enabled else '➕'} {title} //",
+                text=f"{'✅' if enabled else '➕'} {title}",
                 callback_data=f"pl:cfg:tg:{bot_id}:{prov}",
             )
         )
@@ -273,8 +278,8 @@ def config_kb(bot_id: str, providers: list[dict]) -> InlineKeyboardMarkup:
             )
 
     kb.row(
-        InlineKeyboardButton(text=f"{LBL_REFRESH} //", callback_data=f"pl:cfg:open:{bot_id}"),
-        InlineKeyboardButton(text="⬅️ To bots //", callback_data="pl:my_bots"),
+        InlineKeyboardButton(text=LBL_REFRESH, callback_data=f"pl:cfg:open:{bot_id}"),
+        InlineKeyboardButton(text="⬅️ До ботів", callback_data="pl:my_bots"),
         width=2,
     )
     kb.row(InlineKeyboardButton(text=LBL_MENU, callback_data="pl:menu"))
