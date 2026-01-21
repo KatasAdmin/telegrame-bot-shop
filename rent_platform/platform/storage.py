@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-from rent_platform.db.repo
-import ReferralRepo
 import json
 import time
 import datetime
 import logging
 from typing import Any
-from rent_platform.db.repo import PlatformSettingsRepo
+
 from aiogram import Bot
 
 from rent_platform.config import settings
+from rent_platform.db.repo import PlatformSettingsRepo
 from rent_platform.db.repo import (
     TenantRepo,
     ModuleRepo,
@@ -20,6 +19,8 @@ from rent_platform.db.repo import (
     LedgerRepo,
     InvoiceRepo,
     WithdrawRepo,
+    ReferralRepo,
+    RefPayoutRepo,
 )
 from rent_platform.db.session import db_fetch_one, db_execute
 from rent_platform.products.catalog import PRODUCT_CATALOG
