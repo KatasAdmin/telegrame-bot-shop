@@ -224,8 +224,12 @@ def register_cabinet(router: Router) -> None:
         try:
             res = await create_withdraw_request(message.from_user.id, amount_uah=amount, method="manual")
         except Exception as e:
-            log.exception("withdraw failed: %s", e)
-            await message.answer("⚠️ Помилка під час створення заявки. Дивись логи.", reply_markup=back_to_menu_kb())
+            log.exception("exchange failed: %s", e)
+            await message.answer(
+                "⚠️ Не вийшло виконати обмін.\n"
+                "Ймовірно, недостатньо коштів на рахунку для виводу.",
+                reply_markup=back_to_menu_kb(),
+            )
             return
 
         if not res:
