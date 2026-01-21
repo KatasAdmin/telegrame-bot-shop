@@ -27,8 +27,8 @@ from rent_platform.platform.storage import (
 log = logging.getLogger(__name__)
 CABINET_BANNER_URL = os.getenv("CABINET_BANNER_URL", "").strip()
 
-# те саме, що в start.py — щоб FSM не ловив меню
-MENU_TEXTS = {
+# Тексти, які НЕ мають оброблятися FSM "введи суму"
+MENU_TEXTS = (
     "⬅️ В меню",
     "В меню",
     "Меню",
@@ -38,7 +38,7 @@ MENU_TEXTS = {
     BTN_CABINET,
     BTN_PARTNERS,
     BTN_HELP,
-}
+)
 
 
 class WithdrawFlow(StatesGroup):
@@ -54,8 +54,8 @@ async def render_cabinet(message: Message) -> None:
     data = await get_cabinet(user_id)
 
     bots = data.get("bots") or []
-
     total_bots = len(bots)
+
     active_cnt = paused_cnt = deleted_cnt = other_cnt = 0
     for b in bots:
         st = (b.get("status") or "active").lower()
@@ -130,16 +130,18 @@ def register_cabinet(router: Router) -> None:
             )
         await call.answer()
 
-    @router.message(ExchangeFlow.waiting_amount, F.text, ~F.text.in_(MENU_TEXTS))
+    # Якщо юзер тисне меню-кнопки під час state — просто виходимо зі state
+    @router.message(ExchangeFlow.waiting_amount, F.text.in_(MENU_TEXTS))
+    async def exchange_menu_pressed(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        # нічого не відповідаємо — меню/кнопки зловляться іншими хендлерами
+
+    # Якщо юзер ввів число
+    @router.message(ExchangeFlow.waiting_amount, F.text.regexp(r"^\s*\d+\s*$"))
     async def exchange_receive_amount(message: Message, state: FSMContext) -> None:
         txt = (message.text or "").strip()
+        amount = int(txt)
 
-        raw = txt.replace(" ", "")
-        if not raw.isdigit():
-            await message.answer("❌ Введи число в грн, напр. 200")
-            return
-
-        amount = int(raw)
         if amount < 1:
             await message.answer("❌ Мінімум 1 грн. Спробуй ще раз.")
             return
@@ -147,7 +149,15 @@ def register_cabinet(router: Router) -> None:
             await message.answer("❌ Забагато 😄 Введи меншу суму.")
             return
 
-        res = await exchange_withdraw_to_main(message.from_user.id, amount_uah=amount)
+        await message.answer("⏳ Обробляю...")
+
+        try:
+            res = await exchange_withdraw_to_main(message.from_user.id, amount_uah=amount)
+        except Exception as e:
+            log.exception("exchange failed: %s", e)
+            await message.answer("⚠️ Помилка під час обміну. Дивись логи.", reply_markup=back_to_menu_kb())
+            return
+
         if not res:
             await message.answer(
                 "⚠️ Не вийшло зробити обмін.\n"
@@ -176,6 +186,11 @@ def register_cabinet(router: Router) -> None:
         except Exception:
             pass
 
+    # Якщо юзер ввів не число
+    @router.message(ExchangeFlow.waiting_amount, F.text)
+    async def exchange_invalid_input(message: Message) -> None:
+        await message.answer("❌ Введи число в грн, напр. 200")
+
     # -------------------------
     # Withdraw (start)
     # -------------------------
@@ -192,16 +207,15 @@ def register_cabinet(router: Router) -> None:
             )
         await call.answer()
 
-    @router.message(WithdrawFlow.waiting_amount, F.text, ~F.text.in_(MENU_TEXTS))
+    @router.message(WithdrawFlow.waiting_amount, F.text.in_(MENU_TEXTS))
+    async def withdraw_menu_pressed(message: Message, state: FSMContext) -> None:
+        await state.clear()
+
+    @router.message(WithdrawFlow.waiting_amount, F.text.regexp(r"^\s*\d+\s*$"))
     async def withdraw_receive_amount(message: Message, state: FSMContext) -> None:
         txt = (message.text or "").strip()
+        amount = int(txt)
 
-        raw = txt.replace(" ", "")
-        if not raw.isdigit():
-            await message.answer("❌ Введи число в грн, напр. 200")
-            return
-
-        amount = int(raw)
         if amount < 10:
             await message.answer("❌ Мінімум 10 грн. Спробуй ще раз.")
             return
@@ -209,7 +223,15 @@ def register_cabinet(router: Router) -> None:
             await message.answer("❌ Забагато 😄 Введи меншу суму.")
             return
 
-        res = await create_withdraw_request(message.from_user.id, amount_uah=amount, method="manual")
+        await message.answer("⏳ Створюю заявку...")
+
+        try:
+            res = await create_withdraw_request(message.from_user.id, amount_uah=amount, method="manual")
+        except Exception as e:
+            log.exception("withdraw failed: %s", e)
+            await message.answer("⚠️ Помилка під час створення заявки. Дивись логи.", reply_markup=back_to_menu_kb())
+            return
+
         if not res:
             await message.answer(
                 "⚠️ Не вийшло створити заявку.\n"
@@ -238,3 +260,7 @@ def register_cabinet(router: Router) -> None:
             await render_cabinet(message)
         except Exception:
             pass
+
+    @router.message(WithdrawFlow.waiting_amount, F.text)
+    async def withdraw_invalid_input(message: Message) -> None:
+        await message.answer("❌ Введи число в грн, напр. 200")
