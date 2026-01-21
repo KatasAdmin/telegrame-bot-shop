@@ -452,8 +452,8 @@ class AccountRepo:
     @staticmethod
     async def ensure(owner_user_id: int) -> None:
         q = """
-        INSERT INTO owner_accounts (owner_user_id, balance_kop, updated_ts)
-        VALUES (:uid, 0, :ts)
+        INSERT INTO owner_accounts (owner_user_id, balance_kop, withdraw_balance_kop, updated_ts)
+        VALUES (:uid, 0, 0, :ts)
         ON CONFLICT (owner_user_id) DO NOTHING
         """
         await db_execute(q, {"uid": int(owner_user_id), "ts": int(time.time())})
@@ -461,7 +461,7 @@ class AccountRepo:
     @staticmethod
     async def get(owner_user_id: int) -> dict | None:
         q = """
-        SELECT owner_user_id, balance_kop, updated_ts
+        SELECT owner_user_id, balance_kop, withdraw_balance_kop, updated_ts
         FROM owner_accounts
         WHERE owner_user_id = :uid
         """
@@ -489,6 +489,27 @@ class AccountRepo:
         """
         await db_execute(q, {"uid": int(owner_user_id), "b": int(new_balance_kop), "ts": int(time.time())})
 
+    @staticmethod
+    async def add_withdraw_balance(owner_user_id: int, delta_kop: int) -> None:
+        await AccountRepo.ensure(owner_user_id)
+        q = """
+        UPDATE owner_accounts
+        SET withdraw_balance_kop = withdraw_balance_kop + :d,
+            updated_ts = :ts
+        WHERE owner_user_id = :uid
+        """
+        await db_execute(q, {"uid": int(owner_user_id), "d": int(delta_kop), "ts": int(time.time())})
+
+    @staticmethod
+    async def set_withdraw_balance(owner_user_id: int, new_withdraw_kop: int) -> None:
+        await AccountRepo.ensure(owner_user_id)
+        q = """
+        UPDATE owner_accounts
+        SET withdraw_balance_kop = :w,
+            updated_ts = :ts
+        WHERE owner_user_id = :uid
+        """
+        await db_execute(q, {"uid": int(owner_user_id), "w": int(new_withdraw_kop), "ts": int(time.time())})
 
 class LedgerRepo:
 
@@ -646,3 +667,126 @@ class WithdrawRepo:
         WHERE id = :id
         """
         await db_execute(q, {"id": int(withdraw_id), "st": str(status), "ts": int(time.time())})
+
+import asyncio
+from datetime import datetime, timedelta, timezone
+
+BILLING_NEGATIVE_LIMIT_KOP = -300  # -3 грн
+BILLING_MAX_MINUTES_PER_DAY = 24 * 60
+
+def _floor_minutes(a_ts: int, b_ts: int) -> int:
+    if b_ts <= a_ts:
+        return 0
+    return max(0, int((b_ts - a_ts) // 60))
+
+async def _try_charge_owner_balance(owner_user_id: int, charge_kop: int) -> bool:
+    """
+    Atomic списання з лімітом мінуса до -3 грн.
+    """
+    await AccountRepo.ensure(owner_user_id)
+    q = """
+    UPDATE owner_accounts
+    SET balance_kop = balance_kop - :c,
+        updated_ts = :ts
+    WHERE owner_user_id = :uid
+      AND (balance_kop - :c) >= :min_bal
+    RETURNING balance_kop
+    """
+    row = await db_fetch_one(
+        q,
+        {"uid": int(owner_user_id), "c": int(charge_kop), "ts": int(time.time()), "min_bal": int(BILLING_NEGATIVE_LIMIT_KOP)},
+    )
+    return bool(row)
+
+async def run_daily_billing(now_ts: int | None = None) -> dict[str, Any]:
+    """
+    Запускати 1 раз на добу о 00:00.
+    Повертає статистику (для логів/адмінки).
+    """
+    now_ts = int(now_ts or time.time())
+    tenants = await TenantRepo.list_active_for_billing()
+
+    charged_total_kop = 0
+    charged_cnt = 0
+    paused_cnt = 0
+
+    for t in tenants:
+        tenant_id = t["id"]
+        owner_user_id = int(t["owner_user_id"])
+        rate = int(t.get("rate_per_min_kop") or 0)
+        last_billed_ts = int(t.get("last_billed_ts") or 0)
+
+        if rate <= 0:
+            # якщо тариф ще не проставили — просто синхронізуємо last_billed_ts, щоб не накопичувалось
+            await TenantRepo.set_rate_and_last_billed(owner_user_id, tenant_id, rate_per_min_kop=0, last_billed_ts=now_ts)
+            continue
+
+        minutes = _floor_minutes(last_billed_ts, now_ts)
+        if minutes <= 0:
+            continue
+
+        if minutes > BILLING_MAX_MINUTES_PER_DAY:
+            minutes = BILLING_MAX_MINUTES_PER_DAY
+
+        charge_kop = int(minutes * rate)
+        if charge_kop <= 0:
+            await TenantRepo.set_rate_and_last_billed(owner_user_id, tenant_id, rate_per_min_kop=rate, last_billed_ts=now_ts)
+            continue
+
+        ok = await _try_charge_owner_balance(owner_user_id, charge_kop)
+        if not ok:
+            # не вистачає — ставимо на паузу billing
+            await TenantRepo.system_pause_billing(tenant_id)
+            paused_cnt += 1
+            try:
+                await LedgerRepo.add(
+                    owner_user_id,
+                    "billing_paused",
+                    0,
+                    tenant_id=tenant_id,
+                    meta={"reason": "insufficient_funds"},
+                )
+            except Exception:
+                pass
+            continue
+
+        # списали успішно
+        charged_total_kop += charge_kop
+        charged_cnt += 1
+
+        await TenantRepo.set_rate_and_last_billed(owner_user_id, tenant_id, rate_per_min_kop=rate, last_billed_ts=now_ts)
+
+        try:
+            await LedgerRepo.add(
+                owner_user_id,
+                "daily_tariff",
+                -charge_kop,
+                tenant_id=tenant_id,
+                meta={"minutes": minutes, "rate_per_min_kop": rate, "charged_kop": charge_kop, "ts": now_ts},
+            )
+        except Exception:
+            pass
+
+    return {
+        "now_ts": now_ts,
+        "charged_cnt": charged_cnt,
+        "charged_total_kop": charged_total_kop,
+        "paused_cnt": paused_cnt,
+    }
+
+async def billing_daemon_daily_midnight() -> None:
+    """
+    Фоновий демон: чекає до наступної 00:00 і робить run_daily_billing().
+    """
+    while True:
+        # UTC+2/UTC+3 у тебе плаває — краще брати локальний server time як є.
+        now = datetime.now()
+        tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        sleep_s = max(1, int((tomorrow - now).total_seconds()))
+        await asyncio.sleep(sleep_s)
+
+        try:
+            res = await run_daily_billing(int(time.time()))
+            log.info("DAILY BILLING: %s", res)
+        except Exception as e:
+            log.exception("DAILY BILLING FAILED: %s", e)
