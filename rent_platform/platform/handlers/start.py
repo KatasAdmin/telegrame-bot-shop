@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import logging
 import datetime as _dt
-import CommandObject
+
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command, StateFilter
+from aiogram.filters.command import CommandObject
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
+from rent_platform.db.repo import ReferralRepo
 from rent_platform.platform.handlers.cabinet import register_cabinet, render_cabinet
 
 from rent_platform.platform.keyboards import (
