@@ -14,6 +14,7 @@ from rent_platform.core.modules import init_modules
 from rent_platform.core.tenant_ctx import init_tenants
 from rent_platform.db.repo import TenantRepo, ModuleRepo
 from rent_platform.core.registry import get_module
+from rent_platform.db.migrations import run_migrations
 
 from rent_platform.platform.admin_router import router as admin_router
 from rent_platform.core.billing import billing_daemon_daily_midnight, billing_loop
@@ -24,6 +25,11 @@ from rent_platform.db.session import db_execute
 log = logging.getLogger(__name__)
 
 app = FastAPI()
+from rent_platform.db.migrations import run_migrations
+
+@app.on_event("startup")
+async def _startup():
+    await run_migrations()
 app.include_router(admin_router)
 
 # Platform bot (керує SaaS-меню)
