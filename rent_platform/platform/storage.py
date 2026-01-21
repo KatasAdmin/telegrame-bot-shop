@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from rent_platform.db.repo
+import ReferralRepo
 import json
 import time
 import datetime
@@ -519,6 +521,19 @@ async def confirm_topup_paid_test(user_id: int, invoice_id: int) -> dict | None:
         tenant_id=None,
         meta={"invoice_id": invoice_id, "provider": inv.get("provider")},
     )
+    try:
+        await ReferralRepo.apply_commission(
+            user_id=user_id,
+            kind="topup",
+            amount_kop=amount_kop,
+            event_key=f"topup:{invoice_id}",  # ключ унікальності (щоб не дублювалось)
+            title="Партнерка з поповнення",
+            details=f"invoice_id={invoice_id}, provider={inv.get('provider')}",
+            meta={"invoice_id": invoice_id, "provider": inv.get("provider")},
+        )
+    except Exception:
+        # партнерка не повинна ламати поповнення
+        log.exception("Referral commission failed for topup invoice_id=%s uid=%s", invoice_id, user_id)
 
     bots = await TenantRepo.list_by_owner(user_id)
     paused_billing_ids: list[str] = []
