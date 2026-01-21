@@ -126,7 +126,7 @@ async def _send_main_menu(message: Message) -> None:
         "Обери розділ 👇\n\n"
         "🧩 *Marketplace* — продукти/оренда\n"
         "🤖 *My bots* — керування копіями\n"
-        "🧩 *Cabinet* — баланс / тарифи / історія\n"
+        "👤 *Cabinet* — баланс / тарифи / історія\n"
         "🤝 *Partners* — реф-силка / статистика\n"
         "🆘 *Support* — інформація / правила\n"
     )
@@ -182,25 +182,9 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 
 
 # ======================================================================
-# Reply buttons (text)
+# Partners / Support helpers (called from menu handler)
 # ======================================================================
-@router.message(F.text == BTN_MARKETPLACE)
-async def marketplace_text(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    await _render_marketplace(message)
 
-
-@router.message(F.text == BTN_CABINET)
-async def cabinet_text(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    try:
-        await render_cabinet(message)
-    except Exception as e:
-        log.exception("cabinet failed: %s", e)
-        await message.answer("⚠️ Cabinet // temporary down", reply_markup=back_to_menu_kb())
-
-
-@router.message(F.text == BTN_PARTNERS)
 async def partners_text(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer(
@@ -212,7 +196,6 @@ async def partners_text(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.message(F.text == BTN_HELP)
 async def support_text(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer(
@@ -223,11 +206,6 @@ async def support_text(message: Message, state: FSMContext) -> None:
         reply_markup=about_inline_kb(),
     )
 
-
-@router.message(F.text == BTN_MY_BOTS)
-async def my_bots_text(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    await _render_my_bots(message)
 
 
 # ======================================================================
@@ -504,23 +482,57 @@ async def mkp_receive_token(message: Message, state: FSMContext) -> None:
 
 
 # ======================================================================
-# My Bots
+# My Bots — B-look (grouped + clean)
 # ======================================================================
+
 def _status_badge(st: str | None, paused_reason: str | None = None) -> str:
     st = (st or "active").lower()
     pr = (paused_reason or "").lower()
 
     if st == "active":
-        return "🟢 online"
+        return "🟢 active"
     if st == "paused":
         if pr == "billing":
-            return "🔻 paused(billing)"
+            return "🔻 paused • billing"
         if pr == "manual":
-            return "🟡 paused(manual)"
+            return "🟡 paused • manual"
         return "⏸ paused"
     if st == "deleted":
         return "🗑 deleted"
     return f"⚪️ {st}"
+
+
+def _fmt_paid_until(ts: int | None) -> str:
+    try:
+        ts_i = int(ts or 0)
+    except Exception:
+        ts_i = 0
+    if ts_i <= 0:
+        return "—"
+    # коротко, без секунд
+    import datetime as _dt
+    return _dt.datetime.fromtimestamp(ts_i).strftime("%Y-%m-%d %H:%M")
+
+
+def _group_key(it: dict) -> str:
+    st = (it.get("status") or "active").lower()
+    if st == "active":
+        return "active"
+    if st == "paused":
+        return "paused"
+    if st == "deleted":
+        return "deleted"
+    return "other"
+
+
+def _section_title(key: str, count: int) -> str:
+    if key == "active":
+        return f"🟢 *Active* — *{count}*"
+    if key == "paused":
+        return f"⏸ *Paused* — *{count}*"
+    if key == "deleted":
+        return f"🗑 *Deleted* — *{count}*"
+    return f"⚪️ *Other* — *{count}*"
 
 
 async def _render_my_bots(message: Message) -> None:
@@ -530,23 +542,80 @@ async def _render_my_bots(message: Message) -> None:
     if not items:
         await message.answer(
             "🤖 *My bots //*\n\n"
-            "Список порожній.\n"
-            "Натисни *Add bot* і встав токен.",
+            "Поки порожньо.\n"
+            "Натисни *➕ Додати бота* і встав токен.",
             parse_mode="Markdown",
             reply_markup=my_bots_kb(),
         )
         return
 
-    lines = ["🤖 *My bots //*", ""]
-    for i, it in enumerate(items, 1):
-        name = it.get("name") or "Bot"
-        st = _status_badge(it.get("status"), it.get("paused_reason"))
-        lines.append(f"{i}) *{_md_escape(name)}* — {st}")
-        lines.append(f"   id: `{it['id']}`")
+    # group
+    grouped: dict[str, list[dict]] = {"active": [], "paused": [], "deleted": [], "other": []}
+    for it in items:
+        grouped[_group_key(it)].append(it)
+
+    # header
+    total = len(items)
+    active_n = len(grouped["active"])
+    paused_n = len(grouped["paused"])
+    deleted_n = len(grouped["deleted"])
+
+    header = (
+        "🤖 *My bots //*\n\n"
+        f"Всього: *{total}*  •  🟢 *{active_n}*  ⏸ *{paused_n}*  🗑 *{deleted_n}*\n"
+    )
+
+    lines: list[str] = [header]
+
+    # stable order of sections
+    section_order = ["active", "paused", "deleted", "other"]
+    idx = 0
+
+    for sec in section_order:
+        sec_items = grouped[sec]
+        if not sec_items:
+            continue
+
+        lines.append(_section_title(sec, len(sec_items)))
         lines.append("")
 
-    await message.answer("\n".join(lines).strip(), parse_mode="Markdown", reply_markup=my_bots_kb())
-    await message.answer("⚙️ *Manage //*", parse_mode="Markdown", reply_markup=my_bots_list_kb(items))
+        for it in sec_items:
+            idx += 1
+            name = it.get("name") or "Bot"
+            bot_id = it["id"]
+
+            st_badge = _status_badge(it.get("status"), it.get("paused_reason"))
+
+            pk = (it.get("product_key") or "").strip()
+            pk_s = pk if pk else "—"
+
+            paid_until = _fmt_paid_until(it.get("paid_until_ts"))
+            plan = (it.get("plan_key") or "free").strip()
+
+            # 1) Name line
+            lines.append(f"{idx}) *{_md_escape(name)}*")
+            # 2) status + id
+            lines.append(f"   {st_badge}  •  id: `{bot_id}`")
+            # 3) product + plan
+            lines.append(f"   🧩 product: `{pk_s}`  •  📦 plan: `{plan}`")
+            # 4) paid_until (optional but nice)
+            lines.append(f"   ⏳ paid until: `{paid_until}`")
+            lines.append("")
+
+        lines.append("")
+
+    await message.answer(
+        "\n".join(lines).strip(),
+        parse_mode="Markdown",
+        reply_markup=my_bots_kb(),
+    )
+
+    # manage panel (inline list)
+    await message.answer(
+        "⚙️ *Manage //*",
+        parse_mode="Markdown",
+        reply_markup=my_bots_list_kb(items),
+    )
 
 
 @router.callback_query(F.data == "pl:my_bots:add")
