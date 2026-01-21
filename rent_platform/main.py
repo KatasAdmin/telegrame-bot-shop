@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import time
 import asyncio
+from rent_platform.platform.admin_router import router as admin_router
 from rent_platform.core.billing import billing_daemon_daily_midnight
 from rent_platform.core.billing import billing_loop
 from fastapi import FastAPI, Request, HTTPException
