@@ -11,34 +11,20 @@ from aiogram.fsm.context import FSMContext
 from rent_platform.platform.keyboards import cabinet_actions_kb, back_to_menu_kb
 from rent_platform.platform.storage import (
     get_cabinet,
-    exchange_withdraw_to_main,
     create_withdraw_request,
+    exchange_withdraw_to_main,
 )
 
 log = logging.getLogger(__name__)
-
 CABINET_BANNER_URL = os.getenv("CABINET_BANNER_URL", "").strip()
-
-
-# =========================
-# Flows
-# =========================
-class ExchangeFlow(StatesGroup):
-    waiting_amount = State()
 
 
 class WithdrawFlow(StatesGroup):
     waiting_amount = State()
 
 
-def _md_escape(text: str) -> str:
-    return (
-        str(text)
-        .replace("_", "\\_")
-        .replace("*", "\\*")
-        .replace("`", "\\`")
-        .replace("[", "\\[")
-    )
+class ExchangeFlow(StatesGroup):
+    waiting_amount = State()
 
 
 async def render_cabinet(message: Message) -> None:
@@ -93,9 +79,9 @@ async def render_cabinet(message: Message) -> None:
 
 
 def register_cabinet(router: Router) -> None:
-    # =========================
+    # -------------------------
     # Open cabinet
-    # =========================
+    # -------------------------
     @router.callback_query(F.data == "pl:cabinet")
     async def cb_cabinet(call: CallbackQuery) -> None:
         if call.message:
@@ -106,9 +92,9 @@ def register_cabinet(router: Router) -> None:
                 await call.message.answer("⚠️ Кабінет тимчасово впав.", reply_markup=back_to_menu_kb())
         await call.answer()
 
-    # =========================
+    # -------------------------
     # Exchange (start)
-    # =========================
+    # -------------------------
     @router.callback_query(F.data == "pl:cabinet:exchange")
     async def cb_exchange_start(call: CallbackQuery, state: FSMContext) -> None:
         if call.message:
@@ -122,9 +108,6 @@ def register_cabinet(router: Router) -> None:
             )
         await call.answer()
 
-    # =========================
-    # Exchange (amount)
-    # =========================
     @router.message(ExchangeFlow.waiting_amount, F.text)
     async def exchange_receive_amount(message: Message, state: FSMContext) -> None:
         raw = (message.text or "").strip().replace(" ", "")
@@ -164,15 +147,14 @@ def register_cabinet(router: Router) -> None:
             reply_markup=back_to_menu_kb(),
         )
 
-        # щоб юзер одразу бачив актуальні цифри
         try:
             await render_cabinet(message)
         except Exception:
             pass
 
-    # =========================
+    # -------------------------
     # Withdraw (start)
-    # =========================
+    # -------------------------
     @router.callback_query(F.data == "pl:cabinet:withdraw")
     async def cb_withdraw_start(call: CallbackQuery, state: FSMContext) -> None:
         if call.message:
@@ -186,9 +168,6 @@ def register_cabinet(router: Router) -> None:
             )
         await call.answer()
 
-    # =========================
-    # Withdraw (amount)
-    # =========================
     @router.message(WithdrawFlow.waiting_amount, F.text)
     async def withdraw_receive_amount(message: Message, state: FSMContext) -> None:
         raw = (message.text or "").strip().replace(" ", "")
@@ -229,22 +208,7 @@ def register_cabinet(router: Router) -> None:
             reply_markup=back_to_menu_kb(),
         )
 
-        # щоб юзер одразу бачив актуальні цифри
         try:
             await render_cabinet(message)
         except Exception:
             pass
-
-    # =========================
-    # History (stub)
-    # =========================
-    @router.callback_query(F.data == "pl:cabinet:history")
-    async def cb_history_stub(call: CallbackQuery) -> None:
-        if call.message:
-            await call.message.answer(
-                "📋 *Історія транзакцій*\n\n(скоро)\n\n"
-                "Покажемо: поповнення / списання / заявки на вивід / обміни.",
-                parse_mode="Markdown",
-                reply_markup=back_to_menu_kb(),
-            )
-        await call.answer()
