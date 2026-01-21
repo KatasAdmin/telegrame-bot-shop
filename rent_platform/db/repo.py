@@ -796,8 +796,8 @@ class PlatformSettingsRepo:
     @staticmethod
     async def get() -> dict | None:
         q = f"""
-        SELECT id, cabinet_banner_url, updated_ts
-        FROM {PlatformSettingsRepo.TABLE}
+        SELECT id, cabinet_banner_url, ref_json, updated_ts
+        FROM platform_settings
         WHERE id = 1
         """
         return await db_fetch_one(q, {})
