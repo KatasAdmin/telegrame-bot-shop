@@ -1,13 +1,23 @@
 from __future__ import annotations
 
 import os
+import logging
+
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
 
 from rent_platform.platform.keyboards import cabinet_actions_kb, back_to_menu_kb
-from rent_platform.platform.storage import get_cabinet
+from rent_platform.platform.storage import get_cabinet, create_withdraw_request
+
+log = logging.getLogger(__name__)
 
 CABINET_BANNER_URL = os.getenv("CABINET_BANNER_URL", "").strip()
+
+
+class WithdrawFlow(StatesGroup):
+    waiting_amount = State()
 
 
 def _md_escape(text: str) -> str:
@@ -72,11 +82,109 @@ async def render_cabinet(message: Message) -> None:
 
 
 def register_cabinet(router: Router) -> None:
+    # =========================
+    # Open cabinet
+    # =========================
     @router.callback_query(F.data == "pl:cabinet")
     async def cb_cabinet(call: CallbackQuery) -> None:
         if call.message:
             try:
                 await render_cabinet(call.message)
-            except Exception:
+            except Exception as e:
+                log.exception("cabinet failed: %s", e)
                 await call.message.answer("⚠️ Кабінет тимчасово впав.", reply_markup=back_to_menu_kb())
+        await call.answer()
+
+    # =========================
+    # Withdraw (start)
+    # =========================
+    @router.callback_query(F.data == "pl:cabinet:withdraw")
+    async def cb_withdraw_start(call: CallbackQuery, state: FSMContext) -> None:
+        if call.message:
+            await state.set_state(WithdrawFlow.waiting_amount)
+            await call.message.answer(
+                "💵 *Вивід коштів*\n\n"
+                "Введи суму в гривнях (цілим числом), наприклад: `200`\n\n"
+                "⚠️ Вивід можливий тільки з *рахунку для виводу*.",
+                parse_mode="Markdown",
+                reply_markup=back_to_menu_kb(),
+            )
+        await call.answer()
+
+    # =========================
+    # Withdraw (amount)
+    # =========================
+    @router.message(WithdrawFlow.waiting_amount, F.text)
+    async def withdraw_receive_amount(message: Message, state: FSMContext) -> None:
+        raw = (message.text or "").strip().replace(" ", "")
+        if not raw.isdigit():
+            await message.answer("❌ Введи число в грн, напр. 200")
+            return
+
+        amount = int(raw)
+        if amount < 10:
+            await message.answer("❌ Мінімум 10 грн. Спробуй ще раз.")
+            return
+        if amount > 200000:
+            await message.answer("❌ Забагато 😄 Введи меншу суму.")
+            return
+
+        res = await create_withdraw_request(message.from_user.id, amount_uah=amount, method="manual")
+        if not res:
+            await message.answer(
+                "⚠️ Не вийшло створити заявку.\n"
+                "Перевір, чи вистачає коштів на рахунку для виводу.",
+                reply_markup=back_to_menu_kb(),
+            )
+            return
+
+        await state.clear()
+
+        new_withdraw = int(res.get("new_withdraw_balance_kop") or 0) / 100.0
+        withdraw_id = int(res.get("withdraw_id") or 0)
+
+        await message.answer(
+            "✅ *Заявку на вивід створено*\n\n"
+            f"🧾 ID заявки: `{withdraw_id}`\n"
+            f"💵 Сума: *{int(res.get('amount_uah') or amount)} грн*\n"
+            "⏳ Статус: *pending*\n\n"
+            f"💼 Новий баланс для виводу: *{new_withdraw:.2f} грн*\n\n"
+            "_Далі заявка потрапить в адмін-панель для обробки (approve/reject/paid)._",
+            parse_mode="Markdown",
+            reply_markup=back_to_menu_kb(),
+        )
+
+        # щоб юзер одразу бачив актуальні цифри
+        try:
+            await render_cabinet(message)
+        except Exception:
+            pass
+
+    # =========================
+    # Exchange (stub)
+    # =========================
+    @router.callback_query(F.data == "pl:cabinet:exchange")
+    async def cb_exchange_stub(call: CallbackQuery) -> None:
+        if call.message:
+            await call.message.answer(
+                "♻️ *Обмін коштів*\n\n(скоро)\n\n"
+                "План: з рахунку *для виводу* → на *основний*.\n"
+                "Пізніше додамо курс/комісію/акції.",
+                parse_mode="Markdown",
+                reply_markup=back_to_menu_kb(),
+            )
+        await call.answer()
+
+    # =========================
+    # History (stub)
+    # =========================
+    @router.callback_query(F.data == "pl:cabinet:history")
+    async def cb_history_stub(call: CallbackQuery) -> None:
+        if call.message:
+            await call.message.answer(
+                "📋 *Історія транзакцій*\n\n(скоро)\n\n"
+                "Покажемо: поповнення / списання / заявки на вивід / обміни.",
+                parse_mode="Markdown",
+                reply_markup=back_to_menu_kb(),
+            )
         await call.answer()
