@@ -113,10 +113,76 @@ def register_cabinet(router: Router) -> None:
                 log.exception("cabinet failed: %s", e)
                 await call.message.answer("⚠️ Кабінет тимчасово впав.", reply_markup=back_to_menu_kb())
         await call.answer()
+    @router.callback_query(F.data == "pl:cabinet:history")
+    async def cb_cabinet_history(call: CallbackQuery) -> None:
+        if not call.message:
+            await call.answer()
+            return
 
-    # -------------------------
-    # Exchange (start)
-    # -------------------------
+        items = await cabinet_get_history(call.from_user.id, limit=20)
+        if not items:
+            await call.message.answer(
+                "📋 *Історія*\n\nПоки що порожньо 🙂",
+                parse_mode="Markdown",
+                reply_markup=back_to_menu_kb(),
+            )
+            await call.answer()
+            return
+
+        lines = ["📋 *Історія (останні 20)*", ""]
+        for it in items:
+# it: {"ts":.., "title":.., "amount_str":.., "details":..}
+            lines.append(f"• {it['title']}")
+            if it.get("details"):
+                lines.append(f"  _{it['details']}_")
+            if it.get("amount_str") is not None:
+                lines.append(f"  💰 *{it['amount_str']}*")
+            lines.append("")  # пустий рядок між подіями
+
+        await call.message.answer(
+            "\n".join(lines).strip(),
+            parse_mode="Markdown",
+            reply_markup=back_to_menu_kb(),
+        )
+        await call.answer()
+
+
+    @router.callback_query(F.data == "pl:cabinet:tariffs")
+    async def cb_cabinet_tariffs(call: CallbackQuery) -> None:
+        if not call.message:
+            await call.answer()
+            return
+
+        data = await cabinet_get_tariffs(call.from_user.id)
+        if not data:
+            await call.message.answer("⚠️ Не знайшов ботів.", reply_markup=back_to_menu_kb())
+            await call.answer()
+            return
+
+        lines = ["📈 *Тарифи*", ""]
+        lines.append("Списання йде *1 раз на добу о 00:00* (сумарно за день).")
+        lines.append("Якщо бот на паузі — *не списуємо*.")
+        lines.append("Баланс може піти до *-3.00 грн* (тестовий мінус).")
+        lines.append("")
+
+        for b in data["bots"]:
+# b: {"name","id","status","rate_per_min_uah","rate_per_day_uah","note"}
+            lines.append(f"• *{b['name']}*  (`{b['id']}`)")
+            lines.append(f"  Статус: *{b['status']}*")
+            lines.append(f"  Тариф: *{b['rate_per_min_uah']:.2f} грн/хв*  (~*{b['rate_per_day_uah']:.2f} грн/день*)")
+            if b.get("note"):
+                lines.append(f"  _{b['note']}_")
+            lines.append("")
+
+        await call.message.answer(
+            "\n".join(lines).strip(),
+            parse_mode="Markdown",
+            reply_markup=back_to_menu_kb(),
+        )
+        await call.answer()
+#-------------------------
+#Exchange (start)
+# -------------------------
     @router.callback_query(F.data == "pl:cabinet:exchange")
     async def cb_exchange_start(call: CallbackQuery, state: FSMContext) -> None:
         if call.message:
