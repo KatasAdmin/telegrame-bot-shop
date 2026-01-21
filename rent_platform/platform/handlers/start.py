@@ -414,26 +414,18 @@ async def _render_cabinet(message: Message) -> None:
     user_id = message.from_user.id
     data = await get_cabinet(user_id)
 
-    # базові значення (щоб не падало)
     balance_uah = int(data.get("balance_kop") or 0) / 100.0
     withdraw_uah = int(data.get("withdraw_balance_kop") or 0) / 100.0
-
-    # беремо ботів зі старої структури get_cabinet (в тебе вона така і є)
-    bots = data.get("bots") or []
-
-    # рахуємо "працюючих" ботів (active)
-    active_bots = sum(1 for b in bots if (b.get("status") or "").lower() == "active")
+    active_bots = int(data.get("active_bots") or 0)
 
     caption = (
-        "👤 *Кабінет*\n\n"
-        "Привіт 🙂\n"
-        f"Ваш ID: `{user_id}`\n"
-        f"Працюючих ботів: *{active_bots}*\n\n"
-        f"💰 Основний рахунок: *{balance_uah:.2f} грн*\n"
-        f"💸 Для виведення: *{withdraw_uah:.2f} грн*\n"
+        "💼 *Кабінет*\n\n"
+        f"🆔 *Ваш ID:* `{user_id}`\n"
+        f"🦾 *Ваші боти:* *{active_bots}*\n\n"
+        f"💳 *Основний рахунок:* *{balance_uah:.2f} грн*\n"
+        f"💵 *Рахунок для виводу:* *{withdraw_uah:.2f} грн*"
     )
 
-    # 1) Банер (або текст)
     if CABINET_BANNER_URL:
         await message.answer_photo(
             photo=CABINET_BANNER_URL,
