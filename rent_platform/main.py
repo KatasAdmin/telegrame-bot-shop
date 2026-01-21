@@ -4,8 +4,7 @@ from __future__ import annotations
 import logging
 import time
 import asyncio
-import asyncio
-from rent_platform.platform.storage import billing_daemon_daily_midnight
+from rent_platform.core.billing import billing_daemon_daily_midnight
 from rent_platform.core.billing import billing_loop
 from fastapi import FastAPI, Request, HTTPException
 from aiogram import Bot, Dispatcher
@@ -24,10 +23,6 @@ log = logging.getLogger(__name__)
 
 app = FastAPI()
 
-@app.on_event("startup")
-async def _startup():
-    asyncio.create_task(billing_daemon_daily_midnight())
-
 # Platform bot (керує SaaS-меню)
 platform_bot = Bot(token=settings.BOT_TOKEN)
 dp = Dispatcher()
@@ -42,6 +37,7 @@ _webhook_inited = False
 _TENANT_BOTS: dict[str, Bot] = {}
 _BILL_STOP = asyncio.Event()
 _BILL_TASK: asyncio.Task | None = None
+_DAILY_TASK: asyncio.Task | None = None
 
 def _get_tenant_bot(tenant_id: str, token: str) -> Bot:
     bot = _TENANT_BOTS.get(tenant_id)
@@ -115,18 +111,20 @@ async def _maybe_apply_billing_pause(tenant: dict) -> tuple[bool, str | None]:
 
 @app.on_event("startup")
 async def on_startup():
-    global _webhook_inited, _BILL_TASK
-
-    logging.basicConfig(level=logging.INFO)
+    global _BILL_TASK, _DAILY_TASK, _webhook_inited
 
     init_tenants()
     init_modules()
+
+    # daily billing daemon (12:00 ночі)
+    if _DAILY_TASK is None:
+        _DAILY_TASK = asyncio.create_task(billing_daemon_daily_midnight(platform_bot, _BILL_STOP))
+        log.info("billing daily daemon started")
 
     log.info("Префикс арендатора: %s", settings.TENANT_WEBHOOK_PREFIX)
 
     webhook_full = settings.WEBHOOK_URL.rstrip("/") + settings.WEBHOOK_PATH
 
-    # 1) якщо webhook вже інітнули в цьому воркері — просто піднімаємо billing loop (якщо ще не піднятий)
     if _webhook_inited:
         log.info("Startup: webhook already inited in this worker")
         if _BILL_TASK is None:
@@ -134,7 +132,6 @@ async def on_startup():
             log.info("billing loop started")
         return
 
-    # 2) перевіряємо поточний webhook у Telegram
     try:
         info = await platform_bot.get_webhook_info()
         if (info.url or "").strip() == webhook_full:
@@ -149,7 +146,6 @@ async def on_startup():
     except Exception as e:
         log.warning("getWebhookInfo failed: %s", e)
 
-    # 3) ставимо webhook
     await platform_bot.set_webhook(
         webhook_full,
         drop_pending_updates=False,
@@ -158,11 +154,9 @@ async def on_startup():
     _webhook_inited = True
     log.info("Webhook set to %s", webhook_full)
 
-    # 4) старт billing loop
     if _BILL_TASK is None:
         _BILL_TASK = asyncio.create_task(billing_loop(platform_bot, _BILL_STOP))
         log.info("billing loop started")
-
 
 @app.on_event("shutdown")
 async def on_shutdown():
