@@ -484,20 +484,6 @@ async def _render_cabinet(message: Message) -> None:
             reply_markup=cabinet_actions_kb(),
         )
 
-    # 2) Додатково (опційно): короткий список ботів
-    if bots:
-        lines = ["🤖 *Ваші боти:*"]
-        for i, b in enumerate(bots, 1):
-            name = _md_escape(b.get("name") or "Bot")
-            st = (b.get("status") or "active").lower()
-            badge = "✅ active" if st == "active" else ("⏸ paused" if st == "paused" else st)
-            lines.append(f"{i}) {name} — {badge} (`{b.get('id')}`)")
-
-        await message.answer(
-            "\n".join(lines),
-            parse_mode="Markdown",
-            reply_markup=back_to_menu_kb(),
-        )
 @router.callback_query(F.data.startswith("pl:pay:"))
 async def cb_pay(call: CallbackQuery) -> None:
     if not call.message:
