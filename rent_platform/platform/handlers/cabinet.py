@@ -2,17 +2,22 @@ from __future__ import annotations
 
 import os
 import logging
-from aiogram.exceptions import SkipHandler
-from rent_platform.platform.keyboards import (
-    BTN_MARKETPLACE, BTN_MY_BOTS, BTN_CABINET, BTN_PARTNERS, BTN_HELP
-)
 
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
-from rent_platform.platform.keyboards import cabinet_actions_kb, back_to_menu_kb
+from rent_platform.platform.keyboards import (
+    cabinet_actions_kb,
+    back_to_menu_kb,
+    BTN_MARKETPLACE,
+    BTN_MY_BOTS,
+    BTN_CABINET,
+    BTN_PARTNERS,
+    BTN_HELP,
+)
+
 from rent_platform.platform.storage import (
     get_cabinet,
     create_withdraw_request,
@@ -21,6 +26,19 @@ from rent_platform.platform.storage import (
 
 log = logging.getLogger(__name__)
 CABINET_BANNER_URL = os.getenv("CABINET_BANNER_URL", "").strip()
+
+# те саме, що в start.py — щоб FSM не ловив меню
+MENU_TEXTS = {
+    "⬅️ В меню",
+    "В меню",
+    "Меню",
+    "/start",
+    BTN_MARKETPLACE,
+    BTN_MY_BOTS,
+    BTN_CABINET,
+    BTN_PARTNERS,
+    BTN_HELP,
+}
 
 
 class WithdrawFlow(StatesGroup):
@@ -112,15 +130,9 @@ def register_cabinet(router: Router) -> None:
             )
         await call.answer()
 
-    @router.message(ExchangeFlow.waiting_amount, F.text)
+    @router.message(ExchangeFlow.waiting_amount, F.text, ~F.text.in_(MENU_TEXTS))
     async def exchange_receive_amount(message: Message, state: FSMContext) -> None:
         txt = (message.text or "").strip()
-
-        # ✅ якщо юзер тисне меню-кнопки або /start — пропускаємо FSM, щоб меню спрацювало
-        if txt in {"⬅️ В меню", "В меню", "Меню", "/start"} or txt in {
-            BTN_MARKETPLACE, BTN_MY_BOTS, BTN_CABINET, BTN_PARTNERS, BTN_HELP
-        }:
-            raise SkipHandler
 
         raw = txt.replace(" ", "")
         if not raw.isdigit():
@@ -180,16 +192,11 @@ def register_cabinet(router: Router) -> None:
             )
         await call.answer()
 
-    @router.message(WithdrawFlow.waiting_amount, F.text)
+    @router.message(WithdrawFlow.waiting_amount, F.text, ~F.text.in_(MENU_TEXTS))
     async def withdraw_receive_amount(message: Message, state: FSMContext) -> None:
         txt = (message.text or "").strip()
 
-        if txt in {"⬅️ В меню", "В меню", "Меню", "/start"} or txt in {
-            BTN_MARKETPLACE, BTN_MY_BOTS, BTN_CABINET, BTN_PARTNERS, BTN_HELP
-        }:
-            raise SkipHandler
-
-        raw = (message.text or "").strip().replace(" ", "")
+        raw = txt.replace(" ", "")
         if not raw.isdigit():
             await message.answer("❌ Введи число в грн, напр. 200")
             return
