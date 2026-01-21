@@ -337,19 +337,62 @@ async def cb_partners_sub(call: CallbackQuery) -> None:
         return
 
     key = call.data.split("pl:partners:", 1)[1]
-    mapping = {
-        "link": "🔗 *Моя реф-силка*\n\n_MVP: заглушка_",
-        "stats": "📊 *Статистика*\n\n_MVP: заглушка_",
-        "payouts": "💸 *Виплати*\n\n_MVP: заглушка_",
-        "rules": "📜 *Правила*\n\n_MVP: заглушка_",
-    }
-    await call.message.answer(
-        mapping.get(key, "Пункт у розробці."),
-        parse_mode="Markdown",
-        reply_markup=partners_inline_kb(),
-    )
-    await call.answer()
 
+    # 🔗 МОЯ РЕФ-СИЛКА
+    if key == "link":
+        uid = call.from_user.id
+        bot_username = (await call.bot.me()).username
+        ref_link = f"https://t.me/{bot_username}?start=ref_{uid}"
+
+        await call.message.answer(
+            "🔗 *Твоя реферальна силка*\n\n"
+            f"`{ref_link}`\n\n"
+            "Запроси друзів — і ти будеш отримувати % з:\n"
+            "• їх поповнень\n"
+            "• їх білінгу\n\n"
+            "💰 Виплати — через «Партнери → Виплати»",
+            parse_mode="Markdown",
+            reply_markup=partners_inline_kb(),
+        )
+        await call.answer()
+        return
+
+    # 📊 СТАТИСТИКА (поки заглушка)
+    if key == "stats":
+        await call.message.answer(
+            "📊 *Статистика*\n\n"
+            "_Скоро тут буде кількість рефералів, прибуток і графіки._",
+            parse_mode="Markdown",
+            reply_markup=partners_inline_kb(),
+        )
+        await call.answer()
+        return
+
+    # 💸 ВИПЛАТИ (поки заглушка)
+    if key == "payouts":
+        await call.message.answer(
+            "💸 *Виплати*\n\n"
+            "_Скоро тут можна буде замовити виплату._",
+            parse_mode="Markdown",
+            reply_markup=partners_inline_kb(),
+        )
+        await call.answer()
+        return
+
+    # 📜 ПРАВИЛА
+    if key == "rules":
+        await call.message.answer(
+            "📜 *Правила партнерської програми*\n\n"
+            "• 1 користувач = 1 реферер\n"
+            "• % нараховується з реальних оплат\n"
+            "• Заборонено спам\n",
+            parse_mode="Markdown",
+            reply_markup=partners_inline_kb(),
+        )
+        await call.answer()
+        return
+
+    await call.answer("Невідомий пункт")
 
 # ======================================================================
 # Marketplace
