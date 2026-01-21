@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 import datetime
 import logging
@@ -627,7 +628,6 @@ async def create_withdraw_request(user_id: int, amount_uah: int, method: str = "
         owner_user_id=user_id,
         amount_kop=amount_kop,
         method=method,
-        status="pending",
         meta={"amount_uah": amount_uah},
     )
 
