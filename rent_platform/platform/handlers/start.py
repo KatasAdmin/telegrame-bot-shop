@@ -56,6 +56,11 @@ from rent_platform.platform.storage import (
     list_marketplace_products,
     get_marketplace_product,
     buy_product,
+    
+    #хз
+    partners_get_link,
+    partners_get_stats,
+    partners_create_payout,
 
     # topup
     create_topup_invoice,
@@ -330,68 +335,64 @@ async def cb_commitments(call: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("pl:partners:"))
-async def cb_partners_sub(call: CallbackQuery) -> None:
+async def cb_partners_sub(call: CallbackQuery, state: FSMContext) -> None:
     if not call.message:
         await call.answer()
         return
 
     key = call.data.split("pl:partners:", 1)[1]
 
-    # 🔗 МОЯ РЕФ-СИЛКА
     if key == "link":
-        uid = call.from_user.id
         bot_username = (await call.bot.me()).username
-        ref_link = f"https://t.me/{bot_username}?start=ref_{uid}"
+        ref_link = await partners_get_link(call.from_user.id, bot_username)
 
         await call.message.answer(
             "🔗 *Твоя реферальна силка*\n\n"
-            f"`{ref_link}`\n\n"
-            "Запроси друзів — і ти будеш отримувати % з:\n"
-            "• їх поповнень\n"
-            "• їх білінгу\n\n"
-            "💰 Виплати — через «Партнери → Виплати»",
+            f"`{ref_link}`",
             parse_mode="Markdown",
             reply_markup=partners_inline_kb(),
         )
         await call.answer()
         return
 
-    # 📊 СТАТИСТИКА (поки заглушка)
     if key == "stats":
+        data = await partners_get_stats(call.from_user.id)
+        st = data["stats"]
+        s = data["settings"]
+
         await call.message.answer(
             "📊 *Статистика*\n\n"
-            "_Скоро тут буде кількість рефералів, прибуток і графіки._",
+            f"👥 Рефералів: *{int(st['refs_cnt'])}*\n"
+            f"💰 Доступно: *{int(st['available_kop'])/100:.2f} грн*\n"
+            f"🏦 Зароблено: *{int(st['total_earned_kop'])/100:.2f} грн*\n"
+            f"✅ Виплачено: *{int(st['total_paid_kop'])/100:.2f} грн*\n\n"
+            "⚙️ *Умови*\n"
+            f"• з поповнень: *{int(s['percent_topup_bps'])/100:.2f}%*\n"
+            f"• з білінгу: *{int(s['percent_billing_bps'])/100:.2f}%*\n"
+            f"• мін. виплата: *{int(s['min_payout_kop'])/100:.2f} грн*",
             parse_mode="Markdown",
             reply_markup=partners_inline_kb(),
         )
         await call.answer()
         return
 
-    # 💸 ВИПЛАТИ (поки заглушка)
     if key == "payouts":
+        data = await partners_get_stats(call.from_user.id)
+        min_payout = int(data["settings"]["min_payout_kop"]) / 100.0
+
+        await state.set_state(RefPayoutFlow.waiting_amount)
         await call.message.answer(
-            "💸 *Виплати*\n\n"
-            "_Скоро тут можна буде замовити виплату._",
+            "💸 *Виплата партнерки*\n\n"
+            f"Введи суму в грн (ціле число).\n"
+            f"Мінімум: *{min_payout:.2f} грн*\n\n"
+            "Приклад: `200`",
             parse_mode="Markdown",
-            reply_markup=partners_inline_kb(),
+            reply_markup=back_to_menu_kb(),
         )
         await call.answer()
         return
 
-    # 📜 ПРАВИЛА
-    if key == "rules":
-        await call.message.answer(
-            "📜 *Правила партнерської програми*\n\n"
-            "• 1 користувач = 1 реферер\n"
-            "• % нараховується з реальних оплат\n"
-            "• Заборонено спам\n",
-            parse_mode="Markdown",
-            reply_markup=partners_inline_kb(),
-        )
-        await call.answer()
-        return
-
-    await call.answer("Невідомий пункт")
+    await call.answer("Пункт у розробці")
 
 # ======================================================================
 # Marketplace
@@ -931,6 +932,34 @@ async def cb_topup_confirm(call: CallbackQuery) -> None:
         reply_markup=back_to_menu_kb(),
     )
     await call.answer("✅")
+
+@router.message(RefPayoutFlow.waiting_amount, F.text, ~F.text.in_(MENU_TEXTS))
+async def ref_payout_receive_amount(message: Message, state: FSMContext) -> None:
+    txt = (message.text or "").strip().replace(" ", "")
+    if not txt.isdigit():
+        await message.answer("❌ Введи число в грн, напр. 200")
+        return
+
+    amount_uah = int(txt)
+    await state.clear()
+
+    req = await partners_create_payout(message.from_user.id, amount_uah=amount_uah, note="manual")
+    if not req:
+        await message.answer(
+            "⚠️ Не вийшло створити заявку.\n"
+            "Причини: недостатньо доступно або сума менша за мінімальну.",
+            reply_markup=back_to_menu_kb(),
+        )
+        return
+
+    await message.answer(
+        "✅ *Заявку створено*\n\n"
+        f"ID: `{int(req.get('id') or 0)}`\n"
+        f"Сума: *{amount_uah} грн*\n"
+        "Статус: `pending`",
+        parse_mode="Markdown",
+        reply_markup=back_to_menu_kb(),
+    )
 
 
 @router.message(F.text)
