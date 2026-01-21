@@ -9,11 +9,22 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
 from rent_platform.platform.keyboards import cabinet_actions_kb, back_to_menu_kb
-from rent_platform.platform.storage import get_cabinet, create_withdraw_request
+from rent_platform.platform.storage import (
+    get_cabinet,
+    exchange_withdraw_to_main,
+    create_withdraw_request,
+)
 
 log = logging.getLogger(__name__)
 
 CABINET_BANNER_URL = os.getenv("CABINET_BANNER_URL", "").strip()
+
+
+# =========================
+# Flows
+# =========================
+class ExchangeFlow(StatesGroup):
+    waiting_amount = State()
 
 
 class WithdrawFlow(StatesGroup):
@@ -96,6 +107,70 @@ def register_cabinet(router: Router) -> None:
         await call.answer()
 
     # =========================
+    # Exchange (start)
+    # =========================
+    @router.callback_query(F.data == "pl:cabinet:exchange")
+    async def cb_exchange_start(call: CallbackQuery, state: FSMContext) -> None:
+        if call.message:
+            await state.set_state(ExchangeFlow.waiting_amount)
+            await call.message.answer(
+                "♻️ *Обмін коштів*\n\n"
+                "Переведемо кошти з *рахунку для виводу* → на *основний рахунок*.\n\n"
+                "Введи суму в гривнях (цілим числом), наприклад: `200`",
+                parse_mode="Markdown",
+                reply_markup=back_to_menu_kb(),
+            )
+        await call.answer()
+
+    # =========================
+    # Exchange (amount)
+    # =========================
+    @router.message(ExchangeFlow.waiting_amount, F.text)
+    async def exchange_receive_amount(message: Message, state: FSMContext) -> None:
+        raw = (message.text or "").strip().replace(" ", "")
+        if not raw.isdigit():
+            await message.answer("❌ Введи число в грн, напр. 200")
+            return
+
+        amount = int(raw)
+        if amount < 1:
+            await message.answer("❌ Мінімум 1 грн. Спробуй ще раз.")
+            return
+        if amount > 200000:
+            await message.answer("❌ Забагато 😄 Введи меншу суму.")
+            return
+
+        res = await exchange_withdraw_to_main(message.from_user.id, amount_uah=amount)
+        if not res:
+            await message.answer(
+                "⚠️ Не вийшло зробити обмін.\n"
+                "Перевір, чи вистачає коштів на рахунку для виводу.",
+                reply_markup=back_to_menu_kb(),
+            )
+            return
+
+        await state.clear()
+
+        new_main = int(res.get("new_balance_kop") or 0) / 100.0
+        new_withdraw = int(res.get("new_withdraw_balance_kop") or 0) / 100.0
+        moved = int(res.get("amount_kop") or (amount * 100)) / 100.0
+
+        await message.answer(
+            "✅ *Обмін виконано*\n\n"
+            f"♻️ Переведено: *{moved:.2f} грн*\n"
+            f"💳 Основний рахунок: *{new_main:.2f} грн*\n"
+            f"💵 Рахунок для виводу: *{new_withdraw:.2f} грн*",
+            parse_mode="Markdown",
+            reply_markup=back_to_menu_kb(),
+        )
+
+        # щоб юзер одразу бачив актуальні цифри
+        try:
+            await render_cabinet(message)
+        except Exception:
+            pass
+
+    # =========================
     # Withdraw (start)
     # =========================
     @router.callback_query(F.data == "pl:cabinet:withdraw")
@@ -159,21 +234,6 @@ def register_cabinet(router: Router) -> None:
             await render_cabinet(message)
         except Exception:
             pass
-
-    # =========================
-    # Exchange (stub)
-    # =========================
-    @router.callback_query(F.data == "pl:cabinet:exchange")
-    async def cb_exchange_stub(call: CallbackQuery) -> None:
-        if call.message:
-            await call.message.answer(
-                "♻️ *Обмін коштів*\n\n(скоро)\n\n"
-                "План: з рахунку *для виводу* → на *основний*.\n"
-                "Пізніше додамо курс/комісію/акції.",
-                parse_mode="Markdown",
-                reply_markup=back_to_menu_kb(),
-            )
-        await call.answer()
 
     # =========================
     # History (stub)
