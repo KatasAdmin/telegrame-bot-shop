@@ -22,6 +22,8 @@ from rent_platform.platform.storage import (
     get_cabinet,
     create_withdraw_request,
     exchange_withdraw_to_main,
+    cabinet_get_history,
+    cabinet_get_tariffs,
 )
 
 log = logging.getLogger(__name__)
