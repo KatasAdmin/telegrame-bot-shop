@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import logging
 
 from aiogram import Router, F
@@ -19,6 +18,7 @@ from rent_platform.platform.keyboards import (
 )
 
 from rent_platform.platform.storage import (
+    get_cabinet_banner_url,
     get_cabinet,
     create_withdraw_request,
     exchange_withdraw_to_main,
@@ -27,7 +27,6 @@ from rent_platform.platform.storage import (
 )
 
 log = logging.getLogger(__name__)
-CABINET_BANNER_URL = os.getenv("CABINET_BANNER_URL", "").strip()
 
 # Тексти, які НЕ мають оброблятися FSM "введи суму"
 MENU_TEXTS = (
@@ -87,9 +86,10 @@ async def render_cabinet(message: Message) -> None:
         f"💵 *Рахунок для виводу:* *{withdraw_uah:.2f} грн*"
     )
 
-    if CABINET_BANNER_URL:
+    banner_url = (await get_cabinet_banner_url()).strip()
+    if banner_url:
         await message.answer_photo(
-            photo=CABINET_BANNER_URL,
+            photo=banner_url,
             caption=caption,
             parse_mode="Markdown",
             reply_markup=cabinet_actions_kb(),
@@ -115,6 +115,10 @@ def register_cabinet(router: Router) -> None:
                 log.exception("cabinet failed: %s", e)
                 await call.message.answer("⚠️ Кабінет тимчасово впав.", reply_markup=back_to_menu_kb())
         await call.answer()
+
+    # -------------------------
+    # History
+    # -------------------------
     @router.callback_query(F.data == "pl:cabinet:history")
     async def cb_cabinet_history(call: CallbackQuery) -> None:
         if not call.message:
@@ -133,7 +137,7 @@ def register_cabinet(router: Router) -> None:
 
         lines = ["📋 *Історія (останні 20)*", ""]
         for it in items:
-# it: {"ts":.., "title":.., "amount_str":.., "details":..}
+            # it: {"ts":.., "title":.., "amount_str":.., "details":..}
             lines.append(f"• {it['title']}")
             if it.get("details"):
                 lines.append(f"  _{it['details']}_")
@@ -148,7 +152,9 @@ def register_cabinet(router: Router) -> None:
         )
         await call.answer()
 
-
+    # -------------------------
+    # Tariffs
+    # -------------------------
     @router.callback_query(F.data == "pl:cabinet:tariffs")
     async def cb_cabinet_tariffs(call: CallbackQuery) -> None:
         if not call.message:
@@ -168,10 +174,12 @@ def register_cabinet(router: Router) -> None:
         lines.append("")
 
         for b in data["bots"]:
-# b: {"name","id","status","rate_per_min_uah","rate_per_day_uah","note"}
+            # b: {"name","id","status","rate_per_min_uah","rate_per_day_uah","note"}
             lines.append(f"• *{b['name']}*  (`{b['id']}`)")
             lines.append(f"  Статус: *{b['status']}*")
-            lines.append(f"  Тариф: *{b['rate_per_min_uah']:.2f} грн/хв*  (~*{b['rate_per_day_uah']:.2f} грн/день*)")
+            lines.append(
+                f"  Тариф: *{b['rate_per_min_uah']:.2f} грн/хв*  (~*{b['rate_per_day_uah']:.2f} грн/день*)"
+            )
             if b.get("note"):
                 lines.append(f"  _{b['note']}_")
             lines.append("")
@@ -182,9 +190,10 @@ def register_cabinet(router: Router) -> None:
             reply_markup=back_to_menu_kb(),
         )
         await call.answer()
-#-------------------------
-#Exchange (start)
-# -------------------------
+
+    # -------------------------
+    # Exchange (start)
+    # -------------------------
     @router.callback_query(F.data == "pl:cabinet:exchange")
     async def cb_exchange_start(call: CallbackQuery, state: FSMContext) -> None:
         if call.message:
@@ -198,13 +207,10 @@ def register_cabinet(router: Router) -> None:
             )
         await call.answer()
 
-    # Якщо юзер тисне меню-кнопки під час state — просто виходимо зі state
     @router.message(ExchangeFlow.waiting_amount, F.text.in_(MENU_TEXTS))
     async def exchange_menu_pressed(message: Message, state: FSMContext) -> None:
         await state.clear()
-        # нічого не відповідаємо — меню/кнопки зловляться іншими хендлерами
 
-    # Якщо юзер ввів число
     @router.message(ExchangeFlow.waiting_amount, F.text.regexp(r"^\s*\d+\s*$"))
     async def exchange_receive_amount(message: Message, state: FSMContext) -> None:
         txt = (message.text or "").strip()
@@ -250,7 +256,6 @@ def register_cabinet(router: Router) -> None:
         except Exception:
             pass
 
-    # Якщо юзер ввів не число
     @router.message(ExchangeFlow.waiting_amount, F.text)
     async def exchange_invalid_input(message: Message) -> None:
         await message.answer("❌ Введи число в грн, напр. 200")
@@ -292,9 +297,9 @@ def register_cabinet(router: Router) -> None:
         try:
             res = await create_withdraw_request(message.from_user.id, amount_uah=amount, method="manual")
         except Exception as e:
-            log.exception("exchange failed: %s", e)
+            log.exception("withdraw failed: %s", e)
             await message.answer(
-                "⚠️ Не вийшло виконати обмін.\n"
+                "⚠️ Не вийшло створити заявку.\n"
                 "Ймовірно, недостатньо коштів на рахунку для виводу.",
                 reply_markup=back_to_menu_kb(),
             )
