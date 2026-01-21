@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import logging
-from aiogram.dispatcher.event.handler import SkipHandler
+
 from aiogram import Router, F
-from aiogram.filters import CommandStart
-from aiogram.filters import Command
+from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
@@ -80,6 +79,23 @@ router = Router()
 register_cabinet(router)
 
 
+# ======================================================================
+# MENU_TEXTS — все, що має “перебивати” будь-який FSM
+# ======================================================================
+
+MENU_TEXTS = {
+    "⬅️ В меню",
+    "В меню",
+    "Меню",
+    "/start",
+    BTN_MARKETPLACE,
+    BTN_MY_BOTS,
+    BTN_CABINET,
+    BTN_PARTNERS,
+    BTN_HELP,
+}
+
+
 class MyBotsFlow(StatesGroup):
     waiting_token = State()
 
@@ -126,35 +142,41 @@ async def _send_main_menu(message: Message) -> None:
     await message.answer(text, parse_mode="Markdown", reply_markup=main_menu_kb(is_admin=False))
 
 
-@router.message(TopUpFlow.waiting_amount, F.text)
-async def topup_receive_amount(message: Message, state: FSMContext) -> None:
-    txt = (message.text or "").strip()
+# ======================================================================
+# ✅ ГОЛОВНЕ: меню-кнопки працюють завжди, навіть у будь-якому FSM
+# ======================================================================
 
-    # ✅ якщо юзер тисне меню-кнопки або /start — пропускаємо FSM, щоб меню спрацювало
-    if txt in {"⬅️ В меню", "В меню", "Меню", "/start"} or txt in {
-        BTN_MARKETPLACE, BTN_MY_BOTS, BTN_CABINET, BTN_PARTNERS, BTN_HELP
-    }:
-        raise SkipHandler
-
-    raw = txt.replace(" ", "")
-    if not raw.isdigit():
-        await message.answer("❌ Введи число в грн, напр. 200")
-        return
-
-    amount = int(raw)
-    if amount < 10:
-        await message.answer("❌ Мінімум 10 грн. Спробуй ще раз.")
-        return
-    if amount > 200000:
-        await message.answer("❌ Забагато 😄 Введи меншу суму.")
-        return
-
+@router.message(StateFilter("*"), F.text.in_(MENU_TEXTS))
+async def menu_buttons_always_work(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await message.answer(
-        f"Обери спосіб поповнення на *{amount} грн* 👇",
-        parse_mode="Markdown",
-        reply_markup=topup_provider_kb(amount),
-    )
+
+    if message.text == BTN_MARKETPLACE:
+        await _render_marketplace_pick_bot(message)
+        return
+
+    if message.text == BTN_MY_BOTS:
+        await _render_my_bots(message)
+        return
+
+    if message.text == BTN_CABINET:
+        try:
+            await render_cabinet(message)
+        except Exception as e:
+            log.exception("cabinet failed: %s", e)
+            await message.answer("⚠️ Кабінет тимчасово впав.", reply_markup=back_to_menu_kb())
+        return
+
+    if message.text == BTN_PARTNERS:
+        await partners_text(message, state)
+        return
+
+    if message.text == BTN_HELP:
+        await support_text(message, state)
+        return
+
+    # "Меню" / "⬅️ В меню" / "/start"
+    await _send_main_menu(message)
+
 
 @router.message(Command("menu"))
 @router.message(F.text.in_(["⬅️ В меню", "В меню", "Меню"]))
@@ -168,6 +190,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.clear()
     log.info("platform /start: %s", _label(message))
     await _send_main_menu(message)
+
 
 # ======================================================================
 # Reply-кнопки (текст)
@@ -193,8 +216,7 @@ async def cabinet_text(message: Message, state: FSMContext) -> None:
 async def partners_text(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer(
-        "🤝 *Партнерська програма*\n\n..."
-        ,
+        "🤝 *Партнерська програма*\n\n...",
         parse_mode="Markdown",
         reply_markup=partners_inline_kb(),
     )
@@ -204,8 +226,7 @@ async def partners_text(message: Message, state: FSMContext) -> None:
 async def support_text(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer(
-        "🆘 *Підтримка*\n\n..."
-        ,
+        "🆘 *Підтримка*\n\n...",
         parse_mode="Markdown",
         reply_markup=about_inline_kb(),
     )
@@ -715,9 +736,28 @@ async def cb_topup_start(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
 
 
-from aiogram.fsm.context import FSMContext
-from aiogram import F
-from aiogram.types import Message
+@router.message(TopUpFlow.waiting_amount, F.text, ~F.text.in_(MENU_TEXTS))
+async def topup_receive_amount(message: Message, state: FSMContext) -> None:
+    txt = (message.text or "").strip()
+    raw = txt.replace(" ", "")
+    if not raw.isdigit():
+        await message.answer("❌ Введи число в грн, напр. 200")
+        return
+
+    amount = int(raw)
+    if amount < 10:
+        await message.answer("❌ Мінімум 10 грн. Спробуй ще раз.")
+        return
+    if amount > 200000:
+        await message.answer("❌ Забагато 😄 Введи меншу суму.")
+        return
+
+    await state.clear()
+    await message.answer(
+        f"Обери спосіб поповнення на *{amount} грн* 👇",
+        parse_mode="Markdown",
+        reply_markup=topup_provider_kb(amount),
+    )
 
 
 @router.callback_query(F.data.startswith("pl:topup:prov:"))
