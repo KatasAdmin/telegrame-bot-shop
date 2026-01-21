@@ -17,7 +17,6 @@ BTN_HELP = "🆘 Підтримка"
 
 BTN_ADMIN = "🛠 Адмінка (скоро)"
 
-
 # Common labels
 LBL_MENU = "⬅️ В меню"
 LBL_BACK = "⬅️ Назад"
@@ -57,7 +56,9 @@ def main_menu_inline_kb() -> InlineKeyboardMarkup:
 
 
 def back_to_menu_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=LBL_MENU, callback_data="pl:menu")]])
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=LBL_MENU, callback_data="pl:menu")]]
+    )
 
 
 # =========================================================
@@ -66,7 +67,7 @@ def back_to_menu_kb() -> InlineKeyboardMarkup:
 def partners_inline_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(
-        InlineKeyboardButton(text="🔗 Реф-силка", callback_data="pl:partners:link"),
+        InlineKeyboardButton(text="🔗 Моя реф-силка", callback_data="pl:partners:link"),
         InlineKeyboardButton(text="📊 Статистика", callback_data="pl:partners:stats"),
         width=2,
     )
@@ -96,7 +97,8 @@ def about_inline_kb() -> InlineKeyboardMarkup:
 
 
 # =========================================================
-# кабінет
+# Кабінет
+# =========================================================
 def cabinet_actions_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(
@@ -110,8 +112,9 @@ def cabinet_actions_kb() -> InlineKeyboardMarkup:
         width=2,
     )
     kb.row(InlineKeyboardButton(text="📋 Історія", callback_data="pl:cabinet:history"), width=1)
-    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"), width=1)
+    kb.row(InlineKeyboardButton(text=LBL_MENU, callback_data="pl:menu"), width=1)
     return kb.as_markup()
+
 
 # =========================================================
 # My bots
@@ -132,9 +135,9 @@ def _bot_badge(it: dict) -> str:
         return "🟢 активний"
     if st == "paused":
         if pr == "billing":
-            return "🔻 пауза • білінг"
+            return "🔻 пауза (білінг)"
         if pr == "manual":
-            return "🟡 пауза • вручну"
+            return "🟡 пауза (вручну)"
         return "⏸ пауза"
     if st == "deleted":
         return "🗑 видалено"
@@ -162,10 +165,7 @@ def my_bots_list_kb(items: list[dict]) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="⚙️ Конфіг", callback_data=f"pl:cfg:open:{bot_id}"),
                 InlineKeyboardButton(
                     text=("⏸ Пауза" if st == "active" else "▶️ Відновити"),
-                    callback_data=(
-                        f"pl:my_bots:pause:{bot_id}" if st == "active"
-                        else f"pl:my_bots:resume:{bot_id}"
-                    ),
+                    callback_data=(f"pl:my_bots:pause:{bot_id}" if st == "active" else f"pl:my_bots:resume:{bot_id}"),
                 ),
                 width=2,
             )
@@ -174,9 +174,7 @@ def my_bots_list_kb(items: list[dict]) -> InlineKeyboardMarkup:
                 width=1,
             )
         else:
-            kb.row(
-                InlineKeyboardButton(text="🙂 Недоступно", callback_data=f"pl:my_bots:noop:{bot_id}")
-            )
+            kb.row(InlineKeyboardButton(text="🙂 (недоступно)", callback_data=f"pl:my_bots:noop:{bot_id}"))
 
     kb.row(InlineKeyboardButton(text=LBL_BACK, callback_data="pl:my_bots"), width=1)
     return kb.as_markup()
@@ -222,7 +220,7 @@ def marketplace_buy_kb(product_key: str) -> InlineKeyboardMarkup:
 # =========================================================
 def cabinet_topup_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="💰 Поповнити баланс", callback_data="pl:topup:start"))
+    kb.row(InlineKeyboardButton(text="💰 Поповнити", callback_data="pl:topup:start"))
     kb.row(InlineKeyboardButton(text=LBL_MENU, callback_data="pl:menu"))
     return kb.as_markup()
 
