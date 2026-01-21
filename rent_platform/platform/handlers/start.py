@@ -130,10 +130,31 @@ async def _send_main_menu(message: Message) -> None:
 async def topup_receive_amount(message: Message, state: FSMContext) -> None:
     txt = (message.text or "").strip()
 
+    # ✅ якщо юзер тисне меню-кнопки або /start — пропускаємо FSM, щоб меню спрацювало
     if txt in {"⬅️ В меню", "В меню", "Меню", "/start"} or txt in {
         BTN_MARKETPLACE, BTN_MY_BOTS, BTN_CABINET, BTN_PARTNERS, BTN_HELP
     }:
         raise SkipHandler
+
+    raw = txt.replace(" ", "")
+    if not raw.isdigit():
+        await message.answer("❌ Введи число в грн, напр. 200")
+        return
+
+    amount = int(raw)
+    if amount < 10:
+        await message.answer("❌ Мінімум 10 грн. Спробуй ще раз.")
+        return
+    if amount > 200000:
+        await message.answer("❌ Забагато 😄 Введи меншу суму.")
+        return
+
+    await state.clear()
+    await message.answer(
+        f"Обери спосіб поповнення на *{amount} грн* 👇",
+        parse_mode="Markdown",
+        reply_markup=topup_provider_kb(amount),
+    )
 
 @router.message(Command("menu"))
 @router.message(F.text.in_(["⬅️ В меню", "В меню", "Меню"]))
@@ -697,29 +718,6 @@ async def cb_topup_start(call: CallbackQuery, state: FSMContext) -> None:
 from aiogram.fsm.context import FSMContext
 from aiogram import F
 from aiogram.types import Message
-
-
-@router.message(TopUpFlow.waiting_amount, F.text)
-async def topup_receive_amount(message: Message, state: FSMContext) -> None:
-    raw = (message.text or "").strip().replace(" ", "")
-    if not raw.isdigit():
-        await message.answer("❌ Введи число в грн, напр. 200")
-        return
-
-    amount = int(raw)
-    if amount < 10:
-        await message.answer("❌ Мінімум 10 грн. Спробуй ще раз.")
-        return
-    if amount > 200000:
-        await message.answer("❌ Забагато 😄 Введи меншу суму.")
-        return
-
-    await state.clear()
-    await message.answer(
-        f"Обери спосіб поповнення на *{amount} грн* 👇",
-        parse_mode="Markdown",
-        reply_markup=topup_provider_kb(amount),
-    )
 
 
 @router.callback_query(F.data.startswith("pl:topup:prov:"))
