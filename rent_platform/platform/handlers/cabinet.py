@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import os
 import logging
+from aiogram.exceptions import SkipHandler
+from rent_platform.platform.keyboards import (
+    BTN_MARKETPLACE, BTN_MY_BOTS, BTN_CABINET, BTN_PARTNERS, BTN_HELP
+)
 
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
