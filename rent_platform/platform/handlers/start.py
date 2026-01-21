@@ -126,10 +126,10 @@ async def _send_main_menu(message: Message) -> None:
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message) -> None:
+async def cmd_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
     log.info("platform /start: %s", _label(message))
     await _send_main_menu(message)
-
 
 # ======================================================================
 # Reply-кнопки (текст)
