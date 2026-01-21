@@ -812,3 +812,281 @@ class PlatformSettingsRepo:
                       updated_ts = EXCLUDED.updated_ts
         """
         await db_execute(q, {"u": (url or "").strip(), "ts": int(time.time())})
+
+class ReferralRepo:
+    @staticmethod
+    async def bind(user_id: int, referrer_id: int) -> bool:
+        """
+        Прив'язуємо реферала один раз (user_id -> referrer_id).
+        Повертає True якщо прив'язали, False якщо вже було/не можна.
+        """
+        user_id = int(user_id)
+        referrer_id = int(referrer_id)
+
+        if user_id <= 0 or referrer_id <= 0:
+            return False
+        if user_id == referrer_id:
+            return False
+
+        q = """
+        INSERT INTO ref_users (user_id, referrer_id, created_ts)
+        VALUES (:u, :r, :ts)
+        ON CONFLICT (user_id) DO NOTHING
+        """
+        await db_execute(q, {"u": user_id, "r": referrer_id, "ts": int(time.time())})
+
+        row = await db_fetch_one(
+            "SELECT 1 FROM ref_users WHERE user_id = :u AND referrer_id = :r",
+            {"u": user_id, "r": referrer_id},
+        )
+        return bool(row)
+
+    @staticmethod
+    async def get_referrer(user_id: int) -> int | None:
+        row = await db_fetch_one("SELECT referrer_id FROM ref_users WHERE user_id = :u", {"u": int(user_id)})
+        return int(row["referrer_id"]) if row else None
+
+    @staticmethod
+    async def _ensure_balance(referrer_id: int) -> None:
+        q = """
+        INSERT INTO ref_balances (referrer_id, available_kop, total_earned_kop, total_paid_kop, updated_ts)
+        VALUES (:r, 0, 0, 0, :ts)
+        ON CONFLICT (referrer_id) DO NOTHING
+        """
+        await db_execute(q, {"r": int(referrer_id), "ts": int(time.time())})
+
+    @staticmethod
+    async def get_balance(referrer_id: int) -> dict | None:
+        await ReferralRepo._ensure_balance(referrer_id)
+        q = """
+        SELECT referrer_id, available_kop, total_earned_kop, total_paid_kop, updated_ts
+        FROM ref_balances
+        WHERE referrer_id = :r
+        """
+        return await db_fetch_one(q, {"r": int(referrer_id)})
+
+    @staticmethod
+    async def get_settings() -> dict:
+        """
+        Беремо ref_json з platform_settings(id=1).
+        Якщо пусто — дефолти.
+        """
+        row = await PlatformSettingsRepo.get()
+        raw = (row.get("ref_json") if row else "") or ""
+        try:
+            data = json.loads(raw) if raw.strip() else {}
+        except Exception:
+            data = {}
+
+        # дефолти
+        return {
+            "enabled": bool(data.get("enabled", True)),
+            "percent_topup_bps": int(data.get("percent_topup_bps", 500)),     # 5%
+            "percent_billing_bps": int(data.get("percent_billing_bps", 200)), # 2%
+            "min_payout_kop": int(data.get("min_payout_kop", 10000)),         # 100 грн
+        }
+
+    @staticmethod
+    async def set_settings(payload: dict) -> None:
+        """
+        Під адмінку. Зберігаємо JSON рядком.
+        """
+        row = await PlatformSettingsRepo.get()
+        if not row:
+            # якщо нема рядка id=1 — створимо (під твій формат таблиці)
+            q = f"""
+            INSERT INTO {PlatformSettingsRepo.TABLE} (id, cabinet_banner_url, ref_json, updated_ts)
+            VALUES (1, '', :rj, :ts)
+            ON CONFLICT (id)
+            DO UPDATE SET ref_json = EXCLUDED.ref_json, updated_ts = EXCLUDED.updated_ts
+            """
+            await db_execute(q, {"rj": json.dumps(payload, ensure_ascii=False), "ts": int(time.time())})
+            return
+
+        q = f"""
+        UPDATE {PlatformSettingsRepo.TABLE}
+        SET ref_json = :rj, updated_ts = :ts
+        WHERE id = 1
+        """
+        await db_execute(q, {"rj": json.dumps(payload, ensure_ascii=False), "ts": int(time.time())})
+
+    @staticmethod
+    async def _try_mark_event_once(event_key: str) -> bool:
+        """
+        Idempotency: якщо event_key вже був — не нараховуємо вдруге.
+        """
+        ek = (event_key or "").strip()[:128]
+        if not ek:
+            return False
+
+        q = """
+        INSERT INTO ref_applied_events (event_key, created_ts)
+        VALUES (:k, :ts)
+        ON CONFLICT (event_key) DO NOTHING
+        """
+        await db_execute(q, {"k": ek, "ts": int(time.time())})
+
+        row = await db_fetch_one("SELECT 1 FROM ref_applied_events WHERE event_key = :k", {"k": ek})
+        return bool(row)
+
+    @staticmethod
+    async def apply_commission(
+        user_id: int,
+        kind: str,
+        amount_kop: int,
+        event_key: str,
+        title: str = "",
+        details: str = "",
+    ) -> int:
+        """
+        Нарахувати партнерку рефереру цього user_id.
+        kind: 'topup' або 'billing'
+        amount_kop: позитивне число (скільки user заплатив/було списано)
+        event_key: унікальний ключ події (щоб не нарахувати двічі)
+        """
+        user_id = int(user_id)
+        amount_kop = int(amount_kop)
+
+        if amount_kop <= 0:
+            return 0
+
+        settings = await ReferralRepo.get_settings()
+        if not settings["enabled"]:
+            return 0
+
+        referrer_id = await ReferralRepo.get_referrer(user_id)
+        if not referrer_id or referrer_id == user_id:
+            return 0
+
+        # idempotency: якщо вже застосовано — виходимо
+        # але! _try_mark_event_once поверне True навіть якщо був раніше.
+        # нам треба відрізнити "щойно вставив" чи "вже було":
+        # простий варіант — спочатку перевірити існування.
+        existed = await db_fetch_one("SELECT 1 FROM ref_applied_events WHERE event_key = :k", {"k": event_key})
+        if existed:
+            return 0
+
+        ok_mark = await ReferralRepo._try_mark_event_once(event_key)
+        if not ok_mark:
+            return 0
+
+        bps = settings["percent_topup_bps"] if kind == "topup" else settings["percent_billing_bps"]
+        bps = max(0, int(bps))
+
+        commission = (amount_kop * bps) // 10000
+        if commission <= 0:
+            return 0
+
+        await ReferralRepo._ensure_balance(referrer_id)
+
+        # баланс партнера
+        q = """
+        UPDATE ref_balances
+        SET available_kop = available_kop + :c,
+            total_earned_kop = total_earned_kop + :c,
+            updated_ts = :ts
+        WHERE referrer_id = :r
+        """
+        await db_execute(q, {"c": int(commission), "ts": int(time.time()), "r": int(referrer_id)})
+
+        # ledger
+        ql = """
+        INSERT INTO ref_ledger (referrer_id, user_id, kind, amount_kop, title, details, created_ts)
+        VALUES (:r, :u, :k, :a, :t, :d, :ts)
+        """
+        await db_execute(
+            ql,
+            {
+                "r": int(referrer_id),
+                "u": int(user_id),
+                "k": str(kind),
+                "a": int(commission),
+                "t": (title or "")[:128],
+                "d": (details or "")[:512],
+                "ts": int(time.time()),
+            },
+        )
+
+        return int(commission)
+
+    @staticmethod
+    async def stats(referrer_id: int) -> dict:
+        referrer_id = int(referrer_id)
+        bal = await ReferralRepo.get_balance(referrer_id) or {}
+
+        q = "SELECT COUNT(*) AS cnt FROM ref_users WHERE referrer_id = :r"
+        row = await db_fetch_one(q, {"r": referrer_id})
+        refs_cnt = int(row["cnt"]) if row else 0
+
+        q2 = """
+        SELECT kind, COALESCE(SUM(amount_kop),0) AS s
+        FROM ref_ledger
+        WHERE referrer_id = :r
+        GROUP BY kind
+        """
+        rows = await db_fetch_all(q2, {"r": referrer_id})
+        by_kind = {r["kind"]: int(r["s"]) for r in (rows or [])}
+
+        return {
+            "referrer_id": referrer_id,
+            "refs_cnt": refs_cnt,
+            "available_kop": int(bal.get("available_kop") or 0),
+            "total_earned_kop": int(bal.get("total_earned_kop") or 0),
+            "total_paid_kop": int(bal.get("total_paid_kop") or 0),
+            "by_kind": by_kind,
+        }
+
+
+class RefPayoutRepo:
+    @staticmethod
+    async def create_request(referrer_id: int, amount_kop: int, note: str = "") -> dict | None:
+        referrer_id = int(referrer_id)
+        amount_kop = int(amount_kop)
+        if amount_kop <= 0:
+            return None
+
+        settings = await ReferralRepo.get_settings()
+        if amount_kop < int(settings["min_payout_kop"]):
+            return None
+
+        bal = await ReferralRepo.get_balance(referrer_id)
+        if not bal:
+            return None
+
+        if int(bal.get("available_kop") or 0) < amount_kop:
+            return None
+
+        # списуємо з available одразу (reserve)
+        q = """
+        UPDATE ref_balances
+        SET available_kop = available_kop - :a,
+            updated_ts = :ts
+        WHERE referrer_id = :r AND available_kop >= :a
+        RETURNING available_kop
+        """
+        row = await db_fetch_one(q, {"a": amount_kop, "ts": int(time.time()), "r": referrer_id})
+        if not row:
+            return None
+
+        # створюємо заявку
+        q2 = """
+        INSERT INTO ref_payout_requests (referrer_id, amount_kop, status, note, created_ts)
+        VALUES (:r, :a, 'pending', :n, :ts)
+        RETURNING id, referrer_id, amount_kop, status, note, created_ts
+        """
+        req = await db_fetch_one(q2, {"r": referrer_id, "a": amount_kop, "n": (note or "")[:256], "ts": int(time.time())})
+
+        # ledger мінус
+        ql = """
+        INSERT INTO ref_ledger (referrer_id, user_id, kind, amount_kop, title, details, created_ts)
+        VALUES (:r, NULL, 'payout_request', :a, :t, :d, :ts)
+        """
+        await db_execute(ql, {
+            "r": referrer_id,
+            "a": -amount_kop,
+            "t": "Заявка на виплату",
+            "d": f"request_id={req['id'] if req else 0}",
+            "ts": int(time.time()),
+        })
+
+        return req
