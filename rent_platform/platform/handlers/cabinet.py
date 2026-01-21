@@ -88,18 +88,22 @@ async def render_cabinet(message: Message) -> None:
 
     banner_url = (await get_cabinet_banner_url()).strip()
     if banner_url:
-        await message.answer_photo(
-            photo=banner_url,
-            caption=caption,
-            parse_mode="Markdown",
-            reply_markup=cabinet_actions_kb(),
-        )
-    else:
-        await message.answer(
-            caption,
-            parse_mode="Markdown",
-            reply_markup=cabinet_actions_kb(),
-        )
+        try:
+            await message.answer_photo(
+                photo=banner_url,
+                caption=caption,
+                parse_mode="Markdown",
+                reply_markup=cabinet_actions_kb(),
+            )
+            return
+        except Exception as e:
+            log.warning("cabinet banner failed url=%s err=%s", banner_url, e)
+
+    await message.answer(
+        caption,
+        parse_mode="Markdown",
+        reply_markup=cabinet_actions_kb(),
+    )
 
 
 def register_cabinet(router: Router) -> None:
