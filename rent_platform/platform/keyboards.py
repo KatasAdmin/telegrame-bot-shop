@@ -8,16 +8,14 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# =========================================================
-# UI Text (B-style)
-# =========================================================
-BTN_MARKETPLACE = "🧩 Marketplace //"
-BTN_MY_BOTS = "🤖 My bots //"
-BTN_CABINET = "🧩 Cabinet //"
-BTN_PARTNERS = "🤝 Partners //"
-BTN_HELP = "🆘 Support //"
+# === Тексти кнопок (одним місцем) ===
+BTN_MARKETPLACE = "🧩 Маркетплейс"
+BTN_MY_BOTS = "🤖 Мої боти"
+BTN_CABINET = "👤 Кабінет"
+BTN_PARTNERS = "🤝 Партнери"
+BTN_HELP = "🆘 Підтримка"
 
-BTN_ADMIN = "🛠 Admin // Panel"
+BTN_ADMIN = "🛠 Адмінка (скоро)"
 
 
 # Common labels
@@ -98,25 +96,22 @@ def about_inline_kb() -> InlineKeyboardMarkup:
 
 
 # =========================================================
-# Cabinet
-# =========================================================
+# кабінет
 def cabinet_actions_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-
     kb.row(
-        InlineKeyboardButton(text="💳 TopUp //", callback_data="pl:topup:start"),
-        InlineKeyboardButton(text="💵 Withdraw //", callback_data="pl:cabinet:withdraw"),
+        InlineKeyboardButton(text="💳 Поповнити", callback_data="pl:topup:start"),
+        InlineKeyboardButton(text="💵 Вивести", callback_data="pl:cabinet:withdraw"),
         width=2,
     )
     kb.row(
-        InlineKeyboardButton(text="♻️ Exchange //", callback_data="pl:cabinet:exchange"),
-        InlineKeyboardButton(text="📈 Tariffs //", callback_data="pl:cabinet:tariffs"),
+        InlineKeyboardButton(text="♻️ Обміняти", callback_data="pl:cabinet:exchange"),
+        InlineKeyboardButton(text="📈 Тарифи", callback_data="pl:cabinet:tariffs"),
         width=2,
     )
-    kb.row(InlineKeyboardButton(text="📋 History //", callback_data="pl:cabinet:history"), width=1)
-    kb.row(InlineKeyboardButton(text=LBL_MENU, callback_data="pl:menu"), width=1)
+    kb.row(InlineKeyboardButton(text="📋 Історія", callback_data="pl:cabinet:history"), width=1)
+    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"), width=1)
     return kb.as_markup()
-
 
 # =========================================================
 # My bots
