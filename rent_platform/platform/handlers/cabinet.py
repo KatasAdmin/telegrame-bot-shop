@@ -116,14 +116,14 @@ def register_cabinet(router: Router) -> None:
     async def exchange_receive_amount(message: Message, state: FSMContext) -> None:
         txt = (message.text or "").strip()
 
-# ✅ якщо юзер тисне меню-кнопки або /start — пропускаємо FSM, щоб меню спрацювало
+        # ✅ якщо юзер тисне меню-кнопки або /start — пропускаємо FSM, щоб меню спрацювало
         if txt in {"⬅️ В меню", "В меню", "Меню", "/start"} or txt in {
             BTN_MARKETPLACE, BTN_MY_BOTS, BTN_CABINET, BTN_PARTNERS, BTN_HELP
         }:
             raise SkipHandler
 
-        raw = (message.text or "").strip().replace(" ", "")
-            if not raw.isdigit():
+        raw = txt.replace(" ", "")
+        if not raw.isdigit():
             await message.answer("❌ Введи число в грн, напр. 200")
             return
 
