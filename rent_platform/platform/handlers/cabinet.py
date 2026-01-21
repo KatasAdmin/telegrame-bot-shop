@@ -50,6 +50,9 @@ class ExchangeFlow(StatesGroup):
     waiting_amount = State()
 
 
+# =========================================================
+# Cabinet UI
+# =========================================================
 async def render_cabinet(message: Message) -> None:
     user_id = message.from_user.id
     data = await get_cabinet(user_id)
@@ -58,12 +61,21 @@ async def render_cabinet(message: Message) -> None:
     total_bots = len(bots)
 
     active_cnt = paused_cnt = deleted_cnt = other_cnt = 0
+    paused_billing = 0
+    paused_manual = 0
+
     for b in bots:
         st = (b.get("status") or "active").lower()
+        pr = (b.get("paused_reason") or "").lower()
+
         if st == "active":
             active_cnt += 1
         elif st == "paused":
             paused_cnt += 1
+            if pr == "billing":
+                paused_billing += 1
+            elif pr == "manual":
+                paused_manual += 1
         elif st == "deleted":
             deleted_cnt += 1
         else:
@@ -72,18 +84,35 @@ async def render_cabinet(message: Message) -> None:
     balance_uah = int(data.get("balance_kop") or 0) / 100.0
     withdraw_uah = int(data.get("withdraw_balance_kop") or 0) / 100.0
 
+    # --- vibe / status line
+    if total_bots == 0:
+        vibe = "🆕 *ПУСТО*  _але скоро буде жарко_"
+    elif paused_billing:
+        vibe = "🔻 *BILLING-ПАУЗА*  _не вистачає балансу_"
+    elif paused_manual:
+        vibe = "🟡 *РУЧНА ПАУЗА*  _ти керуєш_"
+    else:
+        vibe = "🟢 *ONLINE*  _все стабільно_"
+
+    hint = ""
+    if paused_billing:
+        hint = "\n\n⚠️ *Є боти на billing-паузі.* Поповни баланс — і вони піднімуться автоматом."
+
     caption = (
-        "💼 *Кабінет*\n\n"
-        f"🆔 *Ваш ID:* `{user_id}`\n"
-        "🤖 *Ваші боти:*\n"
-        f"• *Всього:* *{total_bots}*\n"
-        f"• *Запущено:* *{active_cnt}*\n"
-        f"• *На паузі:* *{paused_cnt}*\n"
-        f"• *Видалено:* *{deleted_cnt}*"
-        + (f"\n• *Інші:* *{other_cnt}*" if other_cnt else "")
+        "🧩 *КАБІНЕТ // RENT PLATFORM*\n"
+        f"{vibe}\n\n"
+        f"🆔 *ID:* `{user_id}`\n\n"
+        "🤖 *БОТИ*\n"
+        f"• Всього: *{total_bots}*\n"
+        f"• Активні: *{active_cnt}*\n"
+        f"• Пауза: *{paused_cnt}*  (💸 billing: *{paused_billing}*, ✋ manual: *{paused_manual}*)\n"
+        f"• Видалені: *{deleted_cnt}*"
+        + (f"\n• Інші: *{other_cnt}*" if other_cnt else "")
         + "\n\n"
-        f"💳 *Основний рахунок:* *{balance_uah:.2f} грн*\n"
-        f"💵 *Рахунок для виводу:* *{withdraw_uah:.2f} грн*"
+        "💳 *БАЛАНС*\n"
+        f"• Основний: *{balance_uah:.2f} грн*\n"
+        f"• Для виводу: *{withdraw_uah:.2f} грн*"
+        + hint
     )
 
     banner_url = (await get_cabinet_banner_url()).strip()
@@ -107,6 +136,7 @@ async def render_cabinet(message: Message) -> None:
 
 
 def register_cabinet(router: Router) -> None:
+
     # -------------------------
     # Open cabinet
     # -------------------------
@@ -132,22 +162,21 @@ def register_cabinet(router: Router) -> None:
         items = await cabinet_get_history(call.from_user.id, limit=20)
         if not items:
             await call.message.answer(
-                "📋 *Історія*\n\nПоки що порожньо 🙂",
+                "📋 *ІСТОРІЯ*\n\nПоки що порожньо 🙂",
                 parse_mode="Markdown",
                 reply_markup=back_to_menu_kb(),
             )
             await call.answer()
             return
 
-        lines = ["📋 *Історія (останні 20)*", ""]
+        lines = ["📋 *ІСТОРІЯ // ОСТАННІ 20*", ""]
         for it in items:
-            # it: {"ts":.., "title":.., "amount_str":.., "details":..}
             lines.append(f"• {it['title']}")
             if it.get("details"):
                 lines.append(f"  _{it['details']}_")
             if it.get("amount_str") is not None:
                 lines.append(f"  💰 *{it['amount_str']}*")
-            lines.append("")  # пустий рядок між подіями
+            lines.append("")
 
         await call.message.answer(
             "\n".join(lines).strip(),
@@ -171,19 +200,16 @@ def register_cabinet(router: Router) -> None:
             await call.answer()
             return
 
-        lines = ["📈 *Тарифи*", ""]
-        lines.append("Списання йде *1 раз на добу о 00:00* (сумарно за день).")
-        lines.append("Якщо бот на паузі — *не списуємо*.")
-        lines.append("Баланс може піти до *-3.00 грн* (тестовий мінус).")
+        lines = ["📈 *ТАРИФИ*", ""]
+        lines.append("⏱ Списання: *1 раз на добу (00:00)*")
+        lines.append("⏸ Пауза = *0 списань*")
+        lines.append("🔻 Мінус-ліміт: *-3.00 грн*")
         lines.append("")
 
         for b in data["bots"]:
-            # b: {"name","id","status","rate_per_min_uah","rate_per_day_uah","note"}
             lines.append(f"• *{b['name']}*  (`{b['id']}`)")
             lines.append(f"  Статус: *{b['status']}*")
-            lines.append(
-                f"  Тариф: *{b['rate_per_min_uah']:.2f} грн/хв*  (~*{b['rate_per_day_uah']:.2f} грн/день*)"
-            )
+            lines.append(f"  Тариф: *{b['rate_per_min_uah']:.2f} грн/хв*  (~*{b['rate_per_day_uah']:.2f} грн/день*)")
             if b.get("note"):
                 lines.append(f"  _{b['note']}_")
             lines.append("")
@@ -203,9 +229,9 @@ def register_cabinet(router: Router) -> None:
         if call.message:
             await state.set_state(ExchangeFlow.waiting_amount)
             await call.message.answer(
-                "♻️ *Обмін коштів*\n\n"
-                "Переведемо кошти з *рахунку для виводу* → на *основний рахунок*.\n\n"
-                "Введи суму в гривнях (цілим числом), наприклад: `200`",
+                "♻️ *ОБМІН КОШТІВ*\n\n"
+                "Для виводу → Основний рахунок\n\n"
+                "Введи суму (грн), напр.: `200`",
                 parse_mode="Markdown",
                 reply_markup=back_to_menu_kb(),
             )
@@ -217,8 +243,7 @@ def register_cabinet(router: Router) -> None:
 
     @router.message(ExchangeFlow.waiting_amount, F.text.regexp(r"^\s*\d+\s*$"))
     async def exchange_receive_amount(message: Message, state: FSMContext) -> None:
-        txt = (message.text or "").strip()
-        amount = int(txt)
+        amount = int((message.text or "0").strip())
 
         if amount < 1:
             await message.answer("❌ Мінімум 1 грн. Спробуй ще раз.")
@@ -227,7 +252,7 @@ def register_cabinet(router: Router) -> None:
             await message.answer("❌ Забагато 😄 Введи меншу суму.")
             return
 
-        await message.answer("⏳ Обробляю...")
+        await message.answer("⏳ Роблю обмін...")
 
         try:
             res = await exchange_withdraw_to_main(message.from_user.id, amount_uah=amount)
@@ -240,6 +265,10 @@ def register_cabinet(router: Router) -> None:
             )
             return
 
+        if not res:
+            await message.answer("❌ Недостатньо коштів на рахунку для виводу.", reply_markup=back_to_menu_kb())
+            return
+
         await state.clear()
 
         new_main = int(res.get("new_balance_kop") or 0) / 100.0
@@ -247,10 +276,10 @@ def register_cabinet(router: Router) -> None:
         moved = int(res.get("amount_kop") or (amount * 100)) / 100.0
 
         await message.answer(
-            "✅ *Обмін виконано*\n\n"
+            "✅ *ГОТОВО*\n\n"
             f"♻️ Переведено: *{moved:.2f} грн*\n"
-            f"💳 Основний рахунок: *{new_main:.2f} грн*\n"
-            f"💵 Рахунок для виводу: *{new_withdraw:.2f} грн*",
+            f"💳 Основний: *{new_main:.2f} грн*\n"
+            f"💵 Для виводу: *{new_withdraw:.2f} грн*",
             parse_mode="Markdown",
             reply_markup=back_to_menu_kb(),
         )
@@ -272,9 +301,9 @@ def register_cabinet(router: Router) -> None:
         if call.message:
             await state.set_state(WithdrawFlow.waiting_amount)
             await call.message.answer(
-                "💵 *Вивід коштів*\n\n"
-                "Введи суму в гривнях (цілим числом), наприклад: `200`\n\n"
-                "⚠️ Вивід можливий тільки з *рахунку для виводу*.",
+                "💵 *ВИВІД КОШТІВ*\n\n"
+                "Введи суму (грн), напр.: `200`\n\n"
+                "⚠️ Вивід можливий тільки з рахунку *для виводу*.",
                 parse_mode="Markdown",
                 reply_markup=back_to_menu_kb(),
             )
@@ -286,8 +315,7 @@ def register_cabinet(router: Router) -> None:
 
     @router.message(WithdrawFlow.waiting_amount, F.text.regexp(r"^\s*\d+\s*$"))
     async def withdraw_receive_amount(message: Message, state: FSMContext) -> None:
-        txt = (message.text or "").strip()
-        amount = int(txt)
+        amount = int((message.text or "0").strip())
 
         if amount < 10:
             await message.answer("❌ Мінімум 10 грн. Спробуй ще раз.")
@@ -311,8 +339,7 @@ def register_cabinet(router: Router) -> None:
 
         if not res:
             await message.answer(
-                "⚠️ Не вийшло створити заявку.\n"
-                "Перевір, чи вистачає коштів на рахунку для виводу.",
+                "❌ Недостатньо коштів на рахунку для виводу.",
                 reply_markup=back_to_menu_kb(),
             )
             return
@@ -323,12 +350,12 @@ def register_cabinet(router: Router) -> None:
         withdraw_id = int(res.get("withdraw_id") or 0)
 
         await message.answer(
-            "✅ *Заявку на вивід створено*\n\n"
-            f"🧾 ID заявки: `{withdraw_id}`\n"
+            "✅ *ЗАЯВКУ СТВОРЕНО*\n\n"
+            f"🧾 ID: `{withdraw_id}`\n"
             f"💵 Сума: *{int(res.get('amount_uah') or amount)} грн*\n"
             "⏳ Статус: *pending*\n\n"
-            f"💼 Новий баланс для виводу: *{new_withdraw:.2f} грн*\n\n"
-            "_Далі заявка потрапить в адмін-панель для обробки (approve/reject/paid)._",
+            f"💼 Баланс для виводу: *{new_withdraw:.2f} грн*\n\n"
+            "_Далі адмін обробить: approve / reject / paid._",
             parse_mode="Markdown",
             reply_markup=back_to_menu_kb(),
         )
