@@ -96,32 +96,19 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
 def cabinet_actions_kb() -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-
-    # Поповнити + Вивести (в один ряд)
-    kb.row(
-        InlineKeyboardButton(text="💳 Поповнити", callback_data="pl:topup:start"),
-        InlineKeyboardButton(text="💵 Вивід коштів", callback_data="pl:cabinet:withdraw"),
-        width=2,
-    )
-
-    # Обмін
-    kb.row(
-        InlineKeyboardButton(text="♻️ Обміняти кошти", callback_data="pl:cabinet:exchange"),
-        width=1,
-    )
-
-    # Історія
-    kb.row(
-        InlineKeyboardButton(text="📋 Історія транзакцій", callback_data="pl:cabinet:history"),
-        width=1,
-    )
-
-    # В меню
-    kb.row(
-        InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"),
-        width=1,
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="💳 Поповнити", callback_data="pl:cabinet:topup"),
+                InlineKeyboardButton(text="💵 Вивести", callback_data="pl:cabinet:withdraw"),
+            ],
+            [InlineKeyboardButton(text="♻️ Обміняти", callback_data="pl:cabinet:exchange")],
+            [InlineKeyboardButton(text="📋 Історія", callback_data="pl:cabinet:history")],
+            [InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu")],
+        ]
     )
 
     return kb.as_markup()
