@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from aiogram.exceptions import SkipHandler
+from aiogram.dispatcher.event.handler import SkipHandler
 from aiogram import Router, F
 from aiogram.filters import CommandStart
 from aiogram.filters import Command
