@@ -456,7 +456,24 @@ async def _render_cabinet(message: Message) -> None:
     user_id = message.from_user.id
     data = await get_cabinet(user_id)
 
-    bots = data.get("bots") or []   # ✅ ОЦЕ БУЛО ВІДСУТНЄ
+    bots = data.get("bots") or []
+
+    total_bots = len(bots)
+    active_cnt = 0
+    paused_cnt = 0
+    deleted_cnt = 0
+    other_cnt = 0
+
+    for b in bots:
+        st = (b.get("status") or "active").lower()
+        if st == "active":
+            active_cnt += 1
+        elif st == "paused":
+            paused_cnt += 1
+        elif st == "deleted":
+            deleted_cnt += 1
+        else:
+            other_cnt += 1
 
     balance_uah = int(data.get("balance_kop") or 0) / 100.0
     withdraw_uah = int(data.get("withdraw_balance_kop") or 0) / 100.0
@@ -465,7 +482,13 @@ async def _render_cabinet(message: Message) -> None:
     caption = (
         "💼 *Кабінет*\n\n"
         f"🆔 *Ваш ID:* `{user_id}`\n"
-        f"🦾 *Ваші боти:* *{active_bots}*\n\n"
+        "🤖 *Ваші боти:*\n"
+        f"• *Всього:* *{total_bots}*\n"
+        f"• *Запущено:* *{active_cnt}*\n"
+        f"• *На паузі:* *{paused_cnt}*\n"
+        f"• *Видалено:* *{deleted_cnt}*"
+        + (f"\n• *Інші:* *{other_cnt}*" if other_cnt else "")
+        + "\n\n"
         f"💳 *Основний рахунок:* *{balance_uah:.2f} грн*\n"
         f"💵 *Рахунок для виводу:* *{withdraw_uah:.2f} грн*"
     )
