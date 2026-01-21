@@ -5,7 +5,7 @@ import time
 import datetime
 import logging
 from typing import Any
-
+from rent_platform.db.repo import PlatformSettingsRepo
 from aiogram import Bot
 
 from rent_platform.config import settings
