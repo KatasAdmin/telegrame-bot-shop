@@ -155,13 +155,9 @@ def register_cabinet(router: Router) -> None:
             res = await exchange_withdraw_to_main(message.from_user.id, amount_uah=amount)
         except Exception as e:
             log.exception("exchange failed: %s", e)
-            await message.answer("⚠️ Помилка під час обміну. Дивись логи.", reply_markup=back_to_menu_kb())
-            return
-
-        if not res:
             await message.answer(
-                "⚠️ Не вийшло зробити обмін.\n"
-                "Перевір, чи вистачає коштів на рахунку для виводу.",
+                "⚠️ Не вийшло виконати обмін.\n"
+                "Ймовірно, недостатньо коштів на рахунку для виводу.",
                 reply_markup=back_to_menu_kb(),
             )
             return
