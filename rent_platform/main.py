@@ -1,12 +1,10 @@
 # rent_platform/main.py
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
-import asyncio
-from rent_platform.platform.admin_router import router as admin_router
-from rent_platform.core.billing import billing_daemon_daily_midnight
-from rent_platform.core.billing import billing_loop
+
 from fastapi import FastAPI, Request, HTTPException
 from aiogram import Bot, Dispatcher
 from aiogram.types import Update
@@ -17,6 +15,9 @@ from rent_platform.core.tenant_ctx import init_tenants
 from rent_platform.db.repo import TenantRepo, ModuleRepo
 from rent_platform.core.registry import get_module
 
+from rent_platform.platform.admin_router import router as admin_router
+from rent_platform.core.billing import billing_daemon_daily_midnight, billing_loop
+
 # ✅ напряму в БД (щоб НЕ ламати repo методами з owner_user_id)
 from rent_platform.db.session import db_execute
 
@@ -24,6 +25,7 @@ log = logging.getLogger(__name__)
 
 app = FastAPI()
 app.include_router(admin_router)
+
 # Platform bot (керує SaaS-меню)
 platform_bot = Bot(token=settings.BOT_TOKEN)
 dp = Dispatcher()
@@ -36,9 +38,11 @@ _webhook_inited = False
 
 # ✅ кеш tenant Bot-ів (на процес)
 _TENANT_BOTS: dict[str, Bot] = {}
+
 _BILL_STOP = asyncio.Event()
 _BILL_TASK: asyncio.Task | None = None
 _DAILY_TASK: asyncio.Task | None = None
+
 
 def _get_tenant_bot(tenant_id: str, token: str) -> Bot:
     bot = _TENANT_BOTS.get(tenant_id)
@@ -117,7 +121,7 @@ async def on_startup():
     init_tenants()
     init_modules()
 
-    # daily billing daemon (12:00 ночі)
+    # daily billing daemon (00:00)
     if _DAILY_TASK is None:
         _DAILY_TASK = asyncio.create_task(billing_daemon_daily_midnight(platform_bot, _BILL_STOP))
         log.info("billing daily daemon started")
@@ -159,16 +163,27 @@ async def on_startup():
         _BILL_TASK = asyncio.create_task(billing_loop(platform_bot, _BILL_STOP))
         log.info("billing loop started")
 
+
 @app.on_event("shutdown")
 async def on_shutdown():
-    # ✅ stop billing loop
+    global _BILL_TASK, _DAILY_TASK
+
+    # ✅ stop billing tasks
     _BILL_STOP.set()
-    global _BILL_TASK
+
     if _BILL_TASK:
         try:
             await _BILL_TASK
         except Exception:
             pass
+        _BILL_TASK = None
+
+    if _DAILY_TASK:
+        try:
+            await _DAILY_TASK
+        except Exception:
+            pass
+        _DAILY_TASK = None
 
     # platform bot session
     await platform_bot.session.close()
