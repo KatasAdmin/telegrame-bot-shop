@@ -8,7 +8,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
-from rent_platform.platform.handlers.cabinet import register_cabinet
+from rent_platform.platform.handlers.cabinet import register_cabinet, render_cabinet
 
 from rent_platform.platform.keyboards import (
     # my bots
@@ -144,16 +144,11 @@ async def marketplace_text(message: Message, state: FSMContext) -> None:
 
 @router.message(F.text == BTN_CABINET)
 async def cabinet_text(message: Message) -> None:
-    # ✅ Кабінет тепер повністю в cabinet.py -> просто тригеримо callback
-    await message.answer("Відкриваю кабінет…")
-    await message.bot.send_chat_action(message.chat.id, "typing")
-    await message.bot.send_message(message.chat.id, " ", reply_markup=back_to_menu_kb())
-    # найпростіше — просто викликати рендер через callback handler:
-    # але напряму викликати handler не треба — зробимо так:
-    await message.answer(" ", reply_markup=back_to_menu_kb())
-    # Кидаємо inline callback кнопкою? Ні. Тому просто просимо натиснути inline:
-    # (Але у тебе є inline-меню. Тому зробимо правильно нижче:)
-    await message.answer("Натисни 👤 Кабінет в швидких кнопках 👇", reply_markup=main_menu_inline_kb())
+    try:
+        await render_cabinet(message)
+    except Exception as e:
+        log.exception("cabinet failed: %s", e)
+        await message.answer("⚠️ Кабінет тимчасово впав.", reply_markup=back_to_menu_kb())
 
 
 @router.message(F.text == BTN_PARTNERS)
