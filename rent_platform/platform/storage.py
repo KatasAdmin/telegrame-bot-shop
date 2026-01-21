@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 import datetime
+import ReferralRepo, RefPayoutRepo
 import logging
 from typing import Any
 
@@ -713,3 +714,34 @@ async def create_withdraw_request(user_id: int, amount_uah: int, method: str = "
         "new_withdraw_balance_kop": new_withdraw,
         "created_ts": int(req.get("created_ts") or 0),
     }
+
+def _kop_to_uah(kop: int) -> float:
+    return float(int(kop)) / 100.0
+
+
+async def partners_get_link(user_id: int, bot_username: str) -> str:
+    return f"https://t.me/{bot_username}?start=ref_{int(user_id)}"
+
+
+async def partners_get_stats(user_id: int) -> dict:
+    st = await ReferralRepo.stats(user_id)
+    settings = await ReferralRepo.get_settings()
+    last = await ReferralRepo.list_last_ledger(user_id, limit=10)
+    reqs = await RefPayoutRepo.list_requests(user_id, limit=10)
+
+    return {
+        "settings": settings,
+        "stats": st,
+        "last_ledger": last,
+        "last_payouts": reqs,
+    }
+
+
+async def partners_create_payout(user_id: int, amount_uah: int, note: str = "") -> dict | None:
+    amount_uah = int(amount_uah)
+    if amount_uah < 1:
+        return None
+    if amount_uah > 200000:
+        return None
+    amount_kop = amount_uah * 100
+    return await RefPayoutRepo.create_request(user_id, amount_kop, note=note)
