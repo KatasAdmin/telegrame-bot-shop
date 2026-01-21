@@ -143,7 +143,8 @@ async def marketplace_text(message: Message, state: FSMContext) -> None:
 
 
 @router.message(F.text == BTN_CABINET)
-async def cabinet_text(message: Message) -> None:
+async def cabinet_text(message: Message, state: FSMContext) -> None:
+    await state.clear()
     try:
         await render_cabinet(message)
     except Exception as e:
@@ -152,24 +153,22 @@ async def cabinet_text(message: Message) -> None:
 
 
 @router.message(F.text == BTN_PARTNERS)
-async def partners_text(message: Message) -> None:
+async def partners_text(message: Message, state: FSMContext) -> None:
+    await state.clear()
     await message.answer(
-        "🤝 *Партнерська програма*\n\n"
-        "Тут буде рефералка, статистика та виплати.\n"
-        "Обери дію нижче 👇",
+        "🤝 *Партнерська програма*\n\n..."
+        ,
         parse_mode="Markdown",
         reply_markup=partners_inline_kb(),
     )
 
 
 @router.message(F.text == BTN_HELP)
-async def support_text(message: Message) -> None:
+async def support_text(message: Message, state: FSMContext) -> None:
+    await state.clear()
     await message.answer(
-        "🆘 *Підтримка*\n\n"
-        "Напиши, що не працює, і додай:\n"
-        "• що натискав\n"
-        "• скрін/лог (якщо є)\n\n"
-        "Також є розділ «Загальна інформація» 👇",
+        "🆘 *Підтримка*\n\n..."
+        ,
         parse_mode="Markdown",
         reply_markup=about_inline_kb(),
     )
