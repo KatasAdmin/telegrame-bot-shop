@@ -56,6 +56,10 @@ async def list_bots(user_id: int) -> list[dict]:
     return await TenantRepo.list_by_owner(user_id)
 
 
+async def get_cabinet_banner_url() -> str:
+    s = await PlatformSettingsRepo.get()
+    return str((s or {}).get("cabinet_banner_url") or "").strip()
+
 async def add_bot(user_id: int, token: str, name: str = "Bot", product_key: str | None = None) -> dict:
     """
     Створює tenant (орендованого бота), вмикає базові модулі та модуль продукту,
