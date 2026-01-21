@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from typing import Any
 
 from aiogram import Bot
 
@@ -11,8 +12,11 @@ from rent_platform.products.catalog import PRODUCT_CATALOG
 
 log = logging.getLogger(__name__)
 
-# дозволяємо баланс йти в мінус до -3 грн
-MIN_BALANCE_KOP = -300
+# Дозволяємо мінус до -3 грн (для тесту купівлі / “пережити” день)
+NEGATIVE_LIMIT_KOP = -300
+
+# Для “порожнього” лупа (поки не потрібен) — щоб main не ламався імпортом
+BILL_TICK_SECONDS = 60
 
 
 def _product_rate_kop(product_key: str) -> int:
@@ -33,10 +37,10 @@ def _product_rate_kop(product_key: str) -> int:
     return max(0, int(round(uah * 100)))
 
 
-def _tenant_rate_kop(t: dict) -> int:
+def _tenant_rate_kop(t: dict[str, Any]) -> int:
     """
     Пріоритет тарифу:
-    1) tenant.rate_per_min_kop (override) якщо > 0
+    1) tenants.rate_per_min_kop (override) якщо > 0
     2) PRODUCT_CATALOG[product_key] rate (kop або uah)
     """
     pk = t.get("product_key")
@@ -61,45 +65,37 @@ async def _send(platform_bot: Bot, user_id: int, text: str) -> None:
         log.warning("billing notify failed user=%s err=%s", user_id, e)
 
 
-def _next_midnight_ts(now_ts: int | None = None) -> int:
+def _seconds_to_next_midnight_local() -> int:
     """
-    Наступна "північ" у локальному часі сервера.
-    (Якщо Railway/сервер в UTC — то буде UTC-північ.)
+    Скільки секунд до наступної 00:00 (локальний час процеса/сервера).
     """
-    now_ts = int(now_ts or time.time())
-    lt = time.localtime(now_ts)
+    now = time.time()
+    lt = time.localtime(now)
 
-    # сьогоднішня дата 00:00
-    today_midnight = int(
-        time.mktime(
-            (lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, lt.tm_wday, lt.tm_yday, lt.tm_isdst)
-        )
+    # завтра 00:00
+    tomorrow = time.mktime(
+        (lt.tm_year, lt.tm_mon, lt.tm_mday + 1, 0, 0, 0, 0, 0, -1)
     )
-
-    # якщо вже після півночі — беремо завтра
-    if now_ts >= today_midnight:
-        return today_midnight + 24 * 3600
-
-    return today_midnight
+    sec = int(tomorrow - now)
+    return max(1, sec)
 
 
 async def billing_run_daily(platform_bot: Bot) -> None:
     """
-    Запуск раз на добу (о 00:00):
-    - беремо всі active tenants з product_key
-    - рахуємо скільки хвилин пройшло з last_billed_ts
-    - списуємо одним платежем за день (або за кілька днів, якщо відстав)
-    - дозволяємо мінус до -3 грн, потім billing pause
-    - пишемо Ledger: kind='daily_charge'
+    Раз на добу:
+    - беремо активні tenants (status='active' AND product_key not null)
+    - списуємо повну добу тарифу (rate_per_min * 1440)
+    - дозволяємо мінус до -3 грн
+    - якщо не вистачає — частково списуємо до ліміту і ставимо pause billing
+    - пишемо ledger по кожному tenant
     """
     now = int(time.time())
-
     tenants = await TenantRepo.list_active_for_billing()
     if not tenants:
         return
 
-    # групуємо по власнику
-    by_owner: dict[int, list[dict]] = {}
+    # згрупуємо по owner
+    by_owner: dict[int, list[dict[str, Any]]] = {}
     for t in tenants:
         by_owner.setdefault(int(t["owner_user_id"]), []).append(t)
 
@@ -108,106 +104,108 @@ async def billing_run_daily(platform_bot: Bot) -> None:
         acc = await AccountRepo.get(owner_id)
         balance = int((acc or {}).get("balance_kop") or 0)
 
-        # 1) проходимось по кожному tenant
+        # для повідомлення — покажемо сумарний денний burn
+        day_total_need = 0
+
+        # списання по кожному tenant
         for t in items:
-            tenant_id = t["id"]
+            tenant_id = str(t["id"])
             pk = t.get("product_key")
             if not pk:
                 continue
 
             rate = _tenant_rate_kop(t)
             if rate <= 0:
-                # нульовий тариф — просто оновимо last_billed, щоб не накопичувати "борг часу"
-                lb0 = int(t.get("last_billed_ts") or 0)
-                if lb0 <= 0:
-                    await TenantRepo.set_rate_and_last_billed(owner_id, tenant_id, 0, now)
-                else:
-                    await TenantRepo.set_rate_and_last_billed(owner_id, tenant_id, 0, now)
+                # безкоштовний
+                await TenantRepo.set_rate_and_last_billed(owner_id, tenant_id, 0, now)
                 continue
 
-            last_billed = int(t.get("last_billed_ts") or 0)
-            if last_billed <= 0:
-                # перший запуск — стартуємо "зараз", щоб не списати заднім числом
-                await TenantRepo.set_rate_and_last_billed(owner_id, tenant_id, rate, now)
-                continue
+            need = int(rate) * 1440  # за добу
+            day_total_need += need
 
-            elapsed_min = max(0, (now - last_billed) // 60)
-            if elapsed_min <= 0:
-                continue
-
-            need = elapsed_min * rate  # коп
-
-            # 2) дозволяємо баланс до MIN_BALANCE_KOP
-            # Якщо можемо списати повністю і не впасти нижче мінімуму — списуємо.
-            if (balance - need) >= MIN_BALANCE_KOP:
+            # якщо можемо списати повністю і не впасти нижче -3 грн
+            if (balance - need) >= NEGATIVE_LIMIT_KOP:
                 balance -= need
                 await AccountRepo.set_balance(owner_id, balance)
+
                 await LedgerRepo.add(
                     owner_id,
                     "daily_charge",
                     -need,
                     tenant_id=tenant_id,
-                    meta={"product_key": pk, "minutes": elapsed_min, "rate_kop": rate},
+                    meta={"product_key": pk, "minutes": 1440, "rate_kop": int(rate)},
                 )
-                await TenantRepo.set_rate_and_last_billed(owner_id, tenant_id, rate, last_billed + elapsed_min * 60)
+                await TenantRepo.set_rate_and_last_billed(owner_id, tenant_id, int(rate), now)
                 continue
 
-            # 3) інакше списуємо МАКСИМУМ до мінімального балансу і ставимо паузу billing
-            max_charge = balance - MIN_BALANCE_KOP  # скільки ще можна списати, щоб дійти до мінімуму
+            # інакше — списуємо максимум до ліміту і ставимо pause billing
+            max_charge = balance - NEGATIVE_LIMIT_KOP  # скільки можемо списати, щоб не піти нижче -3 грн
             if max_charge > 0:
-                # скільки хвилин реально можемо покрити
-                affordable_min = max_charge // rate if rate > 0 else 0
-                if affordable_min > 0:
-                    charge = affordable_min * rate
-                    balance -= charge
-                    await AccountRepo.set_balance(owner_id, balance)
-                    await LedgerRepo.add(
-                        owner_id,
-                        "daily_charge",
-                        -charge,
-                        tenant_id=tenant_id,
-                        meta={"product_key": pk, "minutes": affordable_min, "rate_kop": rate, "partial": True},
-                    )
-                    await TenantRepo.set_rate_and_last_billed(owner_id, tenant_id, rate, last_billed + affordable_min * 60)
+                balance -= max_charge
+                await AccountRepo.set_balance(owner_id, balance)
 
-            # ставимо на паузу billing (далі НЕ списуватиметься, бо list_active_for_billing бере тільки active)
+                minutes_paid = int(max_charge // rate) if rate > 0 else 0
+                await LedgerRepo.add(
+                    owner_id,
+                    "daily_charge_partial",
+                    -max_charge,
+                    tenant_id=tenant_id,
+                    meta={"product_key": pk, "minutes": minutes_paid, "rate_kop": int(rate), "limit_kop": NEGATIVE_LIMIT_KOP},
+                )
+
+            # пауза саме billing (manual не чіпаємо — але тут tenant був active)
             await TenantRepo.system_pause_billing(tenant_id)
+            await TenantRepo.set_rate_and_last_billed(owner_id, tenant_id, int(rate), now)
+
             await _send(
                 platform_bot,
                 owner_id,
-                f"⏸ Оренда зупинена через недостатній баланс.\n"
-                f"Бот: {tenant_id}\n"
-                f"Продукт: {pk}\n"
-                f"Мінімальний баланс: -3 грн",
+                f"⏸ Оренда зупинена через недостатній баланс.\nБот: {tenant_id}\nПродукт: {pk}\nЛіміт мінуса: 3 грн.",
             )
 
-        # (опційно) один короткий лог по власнику
-        log.info("daily billing done owner=%s balance_kop=%s", owner_id, balance)
+        # опційно: коротке зведення раз на день, якщо щось списували
+        if day_total_need > 0:
+            try:
+                uah = day_total_need / 100.0
+                await _send(platform_bot, owner_id, f"🧾 Списання тарифів за добу виконано. Орієнтовно: {uah:.2f} грн/день (за активні оренди).")
+            except Exception:
+                pass
 
 
-async def billing_daemon_daily_midnight(platform_bot: Bot, stop_event: asyncio.Event | None = None) -> None:
+async def billing_daemon_daily_midnight(platform_bot: Bot, stop_event: asyncio.Event) -> None:
     """
-    Демон: чекає до 00:00 і запускає billing_run_daily(), повторює щодня.
+    Фоновий демон: чекає до 00:00 і запускає billing_run_daily().
     """
-    log.info("billing daemon (daily midnight) started")
-    stop_event = stop_event or asyncio.Event()
-
+    log.info("billing daily daemon started")
     while not stop_event.is_set():
-        now = int(time.time())
-        next_midnight = _next_midnight_ts(now)
-        sleep_s = max(1, next_midnight - now)
-
-        log.info("billing daemon sleeping %s sec until midnight", sleep_s)
-
         try:
-            await asyncio.wait_for(stop_event.wait(), timeout=sleep_s)
+            sec = _seconds_to_next_midnight_local()
+            log.info("billing daily daemon sleeping %s sec until midnight", sec)
+            await asyncio.wait_for(stop_event.wait(), timeout=sec)
             break
         except asyncio.TimeoutError:
             pass
 
+        if stop_event.is_set():
+            break
+
         try:
             await billing_run_daily(platform_bot)
         except Exception as e:
-            log.exception("daily billing failed: %s", e)
+            log.exception("billing daily run failed: %s", e)
 
-    log.info("billing daemon stopped")
+    log.info("billing daily daemon stopped")
+
+
+async def billing_loop(platform_bot: Bot, stop_event: asyncio.Event) -> None:
+    """
+    Зараз “порожній” loop (лише щоб main.py не падав на імпорті).
+    Якщо захочеш — сюди можна додати попередження/моніторинг кожні N хв.
+    """
+    log.info("billing loop started (noop)")
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=BILL_TICK_SECONDS)
+        except asyncio.TimeoutError:
+            pass
+    log.info("billing loop stopped (noop)")
