@@ -790,3 +790,25 @@ async def billing_daemon_daily_midnight() -> None:
             log.info("DAILY BILLING: %s", res)
         except Exception as e:
             log.exception("DAILY BILLING FAILED: %s", e)
+class PlatformSettingsRepo:
+    TABLE = "platform_settings"
+
+    @staticmethod
+    async def get() -> dict | None:
+        q = f"""
+        SELECT id, cabinet_banner_url, updated_ts
+        FROM {PlatformSettingsRepo.TABLE}
+        WHERE id = 1
+        """
+        return await db_fetch_one(q, {})
+
+    @staticmethod
+    async def upsert_cabinet_banner(url: str) -> None:
+        q = f"""
+        INSERT INTO {PlatformSettingsRepo.TABLE} (id, cabinet_banner_url, updated_ts)
+        VALUES (1, :u, :ts)
+        ON CONFLICT (id)
+        DO UPDATE SET cabinet_banner_url = EXCLUDED.cabinet_banner_url,
+                      updated_ts = EXCLUDED.updated_ts
+        """
+        await db_execute(q, {"u": (url or "").strip(), "ts": int(time.time())})
