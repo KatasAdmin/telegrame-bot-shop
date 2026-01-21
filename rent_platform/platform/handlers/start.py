@@ -4,6 +4,7 @@ import logging
 
 from aiogram import Router, F
 from aiogram.filters import CommandStart
+from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
@@ -125,6 +126,13 @@ async def _send_main_menu(message: Message) -> None:
     await message.answer(text, parse_mode="Markdown", reply_markup=main_menu_kb(is_admin=False))
 
 
+@router.message(Command("menu"))
+@router.message(F.text.in_(["⬅️ В меню", "В меню", "Меню"]))
+async def back_to_menu_text(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await _send_main_menu(message)
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.clear()
@@ -184,7 +192,8 @@ async def my_bots_text(message: Message, state: FSMContext) -> None:
 # ======================================================================
 
 @router.callback_query(F.data == "pl:menu")
-async def cb_menu(call: CallbackQuery) -> None:
+async def cb_menu(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
     if call.message:
         await _send_main_menu(call.message)
     await call.answer()
