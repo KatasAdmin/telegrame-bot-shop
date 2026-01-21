@@ -8,7 +8,7 @@ import logging
 from typing import Any
 
 from aiogram import Bot
-
+from rent_platform.db.repo import ReferralRepo, RefPayoutRepo
 from rent_platform.config import settings
 from rent_platform.db.repo import PlatformSettingsRepo
 from rent_platform.db.repo import (
@@ -742,6 +742,23 @@ async def partners_create_payout(user_id: int, amount_uah: int, note: str = "") 
     if amount_uah < 1:
         return None
     if amount_uah > 200000:
+        return None
+    amount_kop = amount_uah * 100
+    return await RefPayoutRepo.create_request(user_id, amount_kop, note=note)
+
+async def partners_get_link(user_id: int, bot_username: str) -> str:
+    return f"https://t.me/{bot_username}?start=ref_{int(user_id)}"
+
+
+async def partners_get_stats(user_id: int) -> dict:
+    st = await ReferralRepo.stats(user_id)
+    settings = await ReferralRepo.get_settings()
+    return {"stats": st, "settings": settings}
+
+
+async def partners_create_payout(user_id: int, amount_uah: int, note: str = "") -> dict | None:
+    amount_uah = int(amount_uah)
+    if amount_uah < 1:
         return None
     amount_kop = amount_uah * 100
     return await RefPayoutRepo.create_request(user_id, amount_kop, note=note)
