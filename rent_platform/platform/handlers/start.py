@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-
+from aiogram.exceptions import SkipHandler
 from aiogram import Router, F
 from aiogram.filters import CommandStart
 from aiogram.filters import Command
@@ -125,6 +125,15 @@ async def _send_main_menu(message: Message) -> None:
     )
     await message.answer(text, parse_mode="Markdown", reply_markup=main_menu_kb(is_admin=False))
 
+
+@router.message(TopUpFlow.waiting_amount, F.text)
+async def topup_receive_amount(message: Message, state: FSMContext) -> None:
+    txt = (message.text or "").strip()
+
+    if txt in {"⬅️ В меню", "В меню", "Меню", "/start"} or txt in {
+        BTN_MARKETPLACE, BTN_MY_BOTS, BTN_CABINET, BTN_PARTNERS, BTN_HELP
+    }:
+        raise SkipHandler
 
 @router.message(Command("menu"))
 @router.message(F.text.in_(["⬅️ В меню", "В меню", "Меню"]))
@@ -689,32 +698,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram import F
 from aiogram.types import Message
 
-@router.message(F.text.in_({BTN_MARKETPLACE, BTN_MY_BOTS, BTN_CABINET, BTN_PARTNERS, BTN_HELP}))
-async def menu_buttons_always_work(message: Message, state: FSMContext) -> None:
-    """
-    Гарантуємо, що кнопки меню працюють навіть якщо юзер застряг у будь-якому FSM flow (waiting_amount і т.п.)
-    """
-    await state.clear()
-
-    if message.text == BTN_MARKETPLACE:
-        await _render_marketplace_pick_bot(message)
-        return
-
-    if message.text == BTN_MY_BOTS:
-        await _render_my_bots(message)
-        return
-
-    if message.text == BTN_CABINET:
-        await render_cabinet(message)
-        return
-
-    if message.text == BTN_PARTNERS:
-        await partners_text(message)
-        return
-
-    if message.text == BTN_HELP:
-        await support_text(message)
-        return
 
 @router.message(TopUpFlow.waiting_amount, F.text)
 async def topup_receive_amount(message: Message, state: FSMContext) -> None:
