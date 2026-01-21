@@ -89,28 +89,42 @@ def about_inline_kb() -> InlineKeyboardMarkup:
 
 
 # ======================================================================
+# Cabinet
+# ======================================================================
+
+def cabinet_actions_kb() -> InlineKeyboardMarkup:
+    """
+    Порядок кнопок як ти хотів:
+    1 ряд: Поповнити + Вивести
+    2 ряд: Обміняти
+    3 ряд: Історія
+    4 ряд: В меню
+
+    IMPORTANT:
+    - "Поповнити" веде на pl:topup:start (бо у тебе хендлер саме на нього)
+    - Інші 3 callback'и поки заглушки (хендлери додамо у start.py)
+    """
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text="💳 Поповнити", callback_data="pl:topup:start"),
+        InlineKeyboardButton(text="💵 Вивести", callback_data="pl:cabinet:withdraw"),
+        width=2,
+    )
+    kb.row(InlineKeyboardButton(text="♻️ Обміняти", callback_data="pl:cabinet:exchange"), width=1)
+    kb.row(InlineKeyboardButton(text="📋 Історія", callback_data="pl:cabinet:history"), width=1)
+    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"), width=1)
+    return kb.as_markup()
+
+
+# ======================================================================
 # My bots
 # ======================================================================
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.utils.keyboard import InlineKeyboardBuilder
-
-
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-
-def cabinet_actions_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="💳 Поповнити", callback_data="pl:cabinet:topup"),
-                InlineKeyboardButton(text="💵 Вивести", callback_data="pl:cabinet:withdraw"),
-            ],
-            [InlineKeyboardButton(text="♻️ Обміняти", callback_data="pl:cabinet:exchange")],
-            [InlineKeyboardButton(text="📋 Історія", callback_data="pl:cabinet:history")],
-            [InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu")],
-        ]
-    )
-
+def my_bots_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="➕ Додати бота", callback_data="pl:my_bots:add"), width=1)
+    kb.row(InlineKeyboardButton(text="🔄 Оновити", callback_data="pl:my_bots:refresh"), width=1)
+    kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"), width=1)
     return kb.as_markup()
 
 
@@ -184,8 +198,9 @@ def marketplace_buy_kb(product_key: str) -> InlineKeyboardMarkup:
 
 
 # ======================================================================
-# Cabinet pay
+# TopUp (баланс)
 # ======================================================================
+
 def cabinet_topup_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="💰 Поповнити рахунок", callback_data="pl:topup:start"))
@@ -207,6 +222,11 @@ def topup_confirm_kb(invoice_id: int) -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="✅ Я оплатив (тест)", callback_data=f"pl:topup:confirm:{invoice_id}"))
     kb.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"))
     return kb.as_markup()
+
+
+# ======================================================================
+# Cabinet pay (старе / можна лишити)
+# ======================================================================
 
 def cabinet_pay_kb(bot_id: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
