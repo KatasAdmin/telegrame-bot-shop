@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import datetime
 import logging
 from typing import Any
 
@@ -305,6 +306,105 @@ async def exchange_withdraw_to_main(user_id: int, amount_uah: int) -> dict | Non
         "new_withdraw_balance_kop": int(row.get("withdraw_balance_kop") or 0),
     }
 
+def _fmt_dt(ts: int) -> str:
+    # YYYY-MM-DD HH:MM
+    return datetime.datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d %H:%M")
+
+
+async def cabinet_get_history(user_id: int, limit: int = 20) -> list[dict]:
+    await AccountRepo.ensure(user_id)
+    rows = await LedgerRepo.list_last(user_id, limit=limit)
+
+    out: list[dict] = []
+    for r in rows or []:
+        kind = (r.get("kind") or "").lower()
+        amount_kop = int(r.get("amount_kop") or 0)
+        ts = int(r.get("created_ts") or 0)
+        tenant_id = r.get("tenant_id")
+        meta = r.get("meta") or {}
+
+        # якщо meta з БД приходить рядком — пробуємо розпарсити
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except Exception:
+                meta = {}
+
+        sign = "+" if amount_kop > 0 else ""
+        amount_str = f"{sign}{amount_kop/100:.2f} грн"
+
+        title = kind
+        details = _fmt_dt(ts)
+
+        if kind == "topup":
+            title = "💳 Поповнення"
+            details = f"{_fmt_dt(ts)} • {meta.get('provider','')}".strip(" •")
+        elif kind == "daily_billing":
+            title = "⏱ Списання за тариф"
+            # meta може містити tenant_id/product_key/rate/days/...
+            tname = ""
+            if tenant_id:
+                tname = f"бот: {tenant_id}"
+            details = f"{_fmt_dt(ts)} • {tname}".strip(" •")
+        elif kind == "exchange_withdraw_to_main":
+            title = "♻️ Обмін (вивід → основний)"
+            details = _fmt_dt(ts)
+        elif kind == "withdraw_request":
+            title = "💵 Заявка на вивід"
+            wid = meta.get("withdraw_id")
+            details = f"{_fmt_dt(ts)} • id: {wid}" if wid else _fmt_dt(ts)
+
+        out.append(
+            {
+                "ts": ts,
+                "title": title,
+                "details": details,
+                "amount_str": amount_str,
+            }
+        )
+
+    return out
+
+
+async def cabinet_get_tariffs(user_id: int) -> dict | None:
+    items = await TenantRepo.list_by_owner(user_id)
+    if not items:
+        return None
+
+    bots_out: list[dict] = []
+    for it in items:
+        st = (it.get("status") or "active").lower()
+        name = it.get("name") or "Bot"
+
+        # rate беремо з tenants.rate_per_min_kop якщо є, інакше — з PRODUCT_CATALOG по product_key
+        rate_per_min_kop = it.get("rate_per_min_kop")
+        if rate_per_min_kop is None:
+            pk = it.get("product_key")
+            meta = PRODUCT_CATALOG.get(pk or "")
+            rpm_uah = float((meta or {}).get("rate_per_min_uah") or 0)
+            rate_per_min_kop = int(rpm_uah * 100)
+        else:
+            rate_per_min_kop = int(rate_per_min_kop)
+
+        rate_per_min_uah = rate_per_min_kop / 100.0
+        rate_per_day_uah = rate_per_min_uah * 60.0 * 24.0
+
+        note = None
+        if st != "active":
+            note = "На паузі тариф не списується."
+
+        bots_out.append(
+            {
+                "id": it["id"],
+                "name": name,
+                "status": st,
+                "rate_per_min_uah": rate_per_min_uah,
+                "rate_per_day_uah": rate_per_day_uah,
+                "note": note,
+            }
+        )
+
+    return {"bots": bots_out}
 
 # ======================================================================
 # TopUp (інвойси)
