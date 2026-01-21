@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from rent_platform.platform.handlers.cabinet import register_cabinet
 import logging
 import os
 import time
