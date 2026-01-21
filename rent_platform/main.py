@@ -4,7 +4,8 @@ from __future__ import annotations
 import logging
 import time
 import asyncio
-
+import asyncio
+from rent_platform.platform.storage import billing_daemon_daily_midnight
 from rent_platform.core.billing import billing_loop
 from fastapi import FastAPI, Request, HTTPException
 from aiogram import Bot, Dispatcher
@@ -22,6 +23,10 @@ from rent_platform.db.session import db_execute
 log = logging.getLogger(__name__)
 
 app = FastAPI()
+
+@app.on_event("startup")
+async def _startup():
+    asyncio.create_task(billing_daemon_daily_midnight())
 
 # Platform bot (керує SaaS-меню)
 platform_bot = Bot(token=settings.BOT_TOKEN)
