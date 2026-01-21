@@ -56,9 +56,15 @@ async def list_bots(user_id: int) -> list[dict]:
     return await TenantRepo.list_by_owner(user_id)
 
 
-async def get_cabinet_banner_text() -> str:
-    s = await PlatformSettingsRepo.get()
-    return str((s or {}).get("cabinet_banner_text") or "").strip()
+async def get_cabinet_banner_url() -> str:
+    """
+    Повертає URL картинки-банера для Кабінету (якщо задано в адмінці).
+    """
+    try:
+        s = await PlatformSettingsRepo.get()
+        return str((s or {}).get("cabinet_banner_url") or "").strip()
+    except Exception:
+        return ""
 
 async def add_bot(user_id: int, token: str, name: str = "Bot", product_key: str | None = None) -> dict:
     """
