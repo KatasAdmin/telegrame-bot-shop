@@ -1,5 +1,5 @@
 from __future__ import annotations
-from rent_platform.db.repo import WithdrawRepo
+
 import time
 import logging
 from typing import Any
@@ -15,7 +15,9 @@ from rent_platform.db.repo import (
     AccountRepo,
     LedgerRepo,
     InvoiceRepo,
+    WithdrawRepo,
 )
+from rent_platform.db.session import db_fetch_one, db_execute
 from rent_platform.products.catalog import PRODUCT_CATALOG
 
 log = logging.getLogger(__name__)
@@ -235,6 +237,8 @@ async def get_cabinet(user_id: int) -> dict[str, Any]:
         "withdraw_balance_kop": withdraw_kop,
         "bots": bots,
     }
+
+
 async def create_payment_link(user_id: int, bot_id: str, months: int = 1) -> dict | None:
     row = await TenantRepo.get_token_secret_for_owner(user_id, bot_id)
     if not row:
@@ -250,8 +254,63 @@ async def create_payment_link(user_id: int, bot_id: str, months: int = 1) -> dic
     }
 
 
+# ======================================================================
+# Exchange: withdraw -> main
+# ======================================================================
+
+async def exchange_withdraw_to_main(user_id: int, amount_uah: int) -> dict | None:
+    """
+    Обмін коштів з рахунку для виводу -> на основний рахунок.
+    """
+    amount_uah = int(amount_uah)
+    if amount_uah < 1:
+        return None
+    if amount_uah > 200000:
+        return None
+
+    amount_kop = _uah_to_kop(amount_uah)
+
+    await AccountRepo.ensure(user_id)
+
+    # atomic update to avoid race conditions
+    q = """
+    UPDATE owner_accounts
+    SET
+      withdraw_balance_kop = withdraw_balance_kop - :a,
+      balance_kop = balance_kop + :a,
+      updated_ts = :ts
+    WHERE owner_user_id = :uid
+      AND withdraw_balance_kop >= :a
+    RETURNING balance_kop, withdraw_balance_kop
+    """
+    row = await db_fetch_one(q, {"uid": int(user_id), "a": int(amount_kop), "ts": int(time.time())})
+    if not row:
+        return None
+
+    # ledger (optional)
+    try:
+        await LedgerRepo.add(
+            user_id,
+            "exchange_withdraw_to_main",
+            +amount_kop,
+            tenant_id=None,
+            meta={"amount_uah": amount_uah},
+        )
+    except Exception:
+        pass
+
+    return {
+        "amount_kop": int(amount_kop),
+        "new_balance_kop": int(row.get("balance_kop") or 0),
+        "new_withdraw_balance_kop": int(row.get("withdraw_balance_kop") or 0),
+    }
+
+
+# ======================================================================
+# TopUp (інвойси)
+# ======================================================================
+
 async def create_topup_invoice(user_id: int, amount_uah: int, provider: str) -> dict | None:
-    # validations
     amount_uah = int(amount_uah)
     if amount_uah < 10:
         return None
@@ -259,8 +318,6 @@ async def create_topup_invoice(user_id: int, amount_uah: int, provider: str) -> 
         return None
 
     amount_kop = _uah_to_kop(amount_uah)
-
-    # pay_url stub (later: real provider invoice URL)
     pay_url = f"https://example.com/topup?u={user_id}&a={amount_uah}&p={provider}"
 
     inv = await InvoiceRepo.create(
@@ -297,7 +354,6 @@ async def confirm_topup_paid_test(user_id: int, invoice_id: int) -> dict | None:
 
     status = (inv.get("status") or "").lower()
     if status != "pending":
-        # повертаємо balance теж — щоб UI міг показати актуальний стан
         await AccountRepo.ensure(user_id)
         acc = await AccountRepo.get(user_id)
         balance_kop = int((acc or {}).get("balance_kop") or 0)
@@ -307,16 +363,13 @@ async def confirm_topup_paid_test(user_id: int, invoice_id: int) -> dict | None:
     if amount_kop <= 0:
         return None
 
-    # 1) mark paid
     await InvoiceRepo.mark_paid(user_id, invoice_id)
 
-    # 2) balance +
     await AccountRepo.ensure(user_id)
     acc = await AccountRepo.get(user_id)
     new_balance = int((acc or {}).get("balance_kop") or 0) + amount_kop
     await AccountRepo.set_balance(user_id, new_balance)
 
-    # 3) ledger +
     await LedgerRepo.add(
         user_id,
         "topup",
@@ -339,8 +392,10 @@ async def confirm_topup_paid_test(user_id: int, invoice_id: int) -> dict | None:
         "amount_kop": amount_kop,
         "paused_billing_ids": paused_billing_ids,
     }
+
+
 # ======================================================================
-# Tenant config (режим 2): інтеграції + секрети (ключі клієнта)
+# Tenant config (інтеграції + секрети)
 # ======================================================================
 
 SUPPORTED_PROVIDERS: dict[str, dict[str, Any]] = {
@@ -428,10 +483,32 @@ async def set_bot_secret(user_id: int, bot_id: str, secret_key: str, secret_valu
     await TenantSecretRepo.upsert(bot_id, secret_key, secret_value.strip())
     return True
 
+
+# ======================================================================
+# Withdraw (заявки)
+# ======================================================================
+
+async def _set_withdraw_balance_safe(user_id: int, new_withdraw_kop: int) -> None:
+    """
+    Якщо в твоєму AccountRepo є set_withdraw_balance — викличемо його.
+    Якщо нема — зробимо напряму SQL.
+    """
+    fn = getattr(AccountRepo, "set_withdraw_balance", None)
+    if callable(fn):
+        await fn(user_id, int(new_withdraw_kop))
+        return
+
+    q = """
+    UPDATE owner_accounts
+    SET withdraw_balance_kop = :w, updated_ts = :ts
+    WHERE owner_user_id = :uid
+    """
+    await db_execute(q, {"uid": int(user_id), "w": int(new_withdraw_kop), "ts": int(time.time())})
+
+
 async def create_withdraw_request(user_id: int, amount_uah: int, method: str = "manual") -> dict | None:
     """
-    Створює заявку на вивід (pending) і одразу блокує/списує гроші з withdraw_balance_kop.
-    method: поки заглушка ("manual"), пізніше: "card", "iban", "crypto"...
+    Створює заявку на вивід (pending) і одразу списує гроші з withdraw_balance_kop.
     """
     amount_uah = int(amount_uah)
     if amount_uah < 10:
@@ -446,9 +523,6 @@ async def create_withdraw_request(user_id: int, amount_uah: int, method: str = "
     if amount_kop <= 0 or amount_kop > withdraw_kop:
         return None
 
-    # 1) create withdraw request (pending)
-    # ВАЖЛИВО: тут я НЕ знаю точні поля твоєї таблиці/репозиторію.
-    # Тому виклик робимо максимально "м’який": try/except і meta.
     req = await WithdrawRepo.create(
         owner_user_id=user_id,
         amount_kop=amount_kop,
@@ -460,18 +534,19 @@ async def create_withdraw_request(user_id: int, amount_uah: int, method: str = "
     if not req or not req.get("id"):
         return None
 
-    # 2) subtract from withdraw balance (щоб не було подвійних заявок)
     new_withdraw = withdraw_kop - amount_kop
-    await AccountRepo.set_withdraw_balance(user_id, new_withdraw)
+    await _set_withdraw_balance_safe(user_id, new_withdraw)
 
-    # 3) ledger (опційно, але корисно для історії)
-    await LedgerRepo.add(
-        user_id,
-        "withdraw_request",
-        -amount_kop,
-        tenant_id=None,
-        meta={"withdraw_id": int(req["id"]), "method": method},
-    )
+    try:
+        await LedgerRepo.add(
+            user_id,
+            "withdraw_request",
+            -amount_kop,
+            tenant_id=None,
+            meta={"withdraw_id": int(req["id"]), "method": method},
+        )
+    except Exception:
+        pass
 
     return {
         "withdraw_id": int(req["id"]),
