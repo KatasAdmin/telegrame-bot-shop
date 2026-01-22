@@ -828,13 +828,50 @@ class PlatformSettingsRepo:
         # гарантуємо рядок id=1
         q = f"""
         INSERT INTO {PlatformSettingsRepo.TABLE} (id, cabinet_banner_url, ref_json, updated_ts)
-        VALUES (1, '', :rj, :ts)
+        VALUES (1, COALESCE((SELECT cabinet_banner_url FROM platform_settings WHERE id=1), ''), :rj, :ts)
         ON CONFLICT (id)
         DO UPDATE SET ref_json = EXCLUDED.ref_json,
                       updated_ts = EXCLUDED.updated_ts
         """
         await db_execute(q, {"rj": json.dumps(payload or {}, ensure_ascii=False), "ts": int(time.time())})
 
+    @staticmethod
+    async def get_marketplace_overrides() -> dict:
+        row = await PlatformSettingsRepo.get()
+        raw = (row.get("ref_json") if row else "") or ""
+        try:
+            data = json.loads(raw) if raw.strip() else {}
+        except Exception:
+            data = {}
+        ov = data.get("marketplace_overrides") or {}
+        return ov if isinstance(ov, dict) else {}
+
+    @staticmethod
+    async def set_marketplace_overrides(overrides: dict) -> None:
+        row = await PlatformSettingsRepo.get()
+        raw = (row.get("ref_json") if row else "") or ""
+        try:
+            data = json.loads(raw) if raw.strip() else {}
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+
+        data["marketplace_overrides"] = overrides if isinstance(overrides, dict) else {}
+
+        q = f"""
+        INSERT INTO {PlatformSettingsRepo.TABLE} (id, cabinet_banner_url, ref_json, updated_ts)
+        VALUES (
+            1,
+            COALESCE((SELECT cabinet_banner_url FROM {PlatformSettingsRepo.TABLE} WHERE id=1), ''),
+            :rj,
+            :ts
+        )
+        ON CONFLICT (id)
+        DO UPDATE SET ref_json = EXCLUDED.ref_json,
+                      updated_ts = EXCLUDED.updated_ts
+        """
+        await db_execute(q, {"rj": json.dumps(data, ensure_ascii=False), "ts": int(time.time())})
 
 class ReferralRepo:
     @staticmethod
@@ -940,30 +977,7 @@ class ReferralRepo:
 
     # далі — твій apply_commission/stats без змін
 
-    @staticmethod
-    async def set_settings(payload: dict) -> None:
-        """
-        Під адмінку. Зберігаємо JSON рядком.
-        """
-        row = await PlatformSettingsRepo.get()
-        if not row:
-            # якщо нема рядка id=1 — створимо (під твій формат таблиці)
-            q = f"""
-            INSERT INTO {PlatformSettingsRepo.TABLE} (id, cabinet_banner_url, ref_json, updated_ts)
-            VALUES (1, '', :rj, :ts)
-            ON CONFLICT (id)
-            DO UPDATE SET ref_json = EXCLUDED.ref_json, updated_ts = EXCLUDED.updated_ts
-            """
-            await db_execute(q, {"rj": json.dumps(payload, ensure_ascii=False), "ts": int(time.time())})
-            return
-
-        q = f"""
-        UPDATE {PlatformSettingsRepo.TABLE}
-        SET ref_json = :rj, updated_ts = :ts
-        WHERE id = 1
-        """
-        await db_execute(q, {"rj": json.dumps(payload, ensure_ascii=False), "ts": int(time.time())})
-
+  
     @staticmethod
     async def _try_mark_event_once(event_key: str) -> bool:
         """
