@@ -1039,6 +1039,94 @@ class ReferralRepo:
 
 class RefPayoutRepo:
     @staticmethod
+    async def list_pending(limit: int = 20) -> list[dict]:
+        q = """
+        SELECT id, referrer_id, amount_kop, status, note, created_ts
+        FROM ref_payout_requests
+        WHERE status = 'pending'
+        ORDER BY created_ts ASC
+        LIMIT :lim
+        """
+        return await db_fetch_all(q, {"lim": int(limit)})
+
+    @staticmethod
+    async def approve(request_id: int) -> bool:
+        # pending -> approved, плюс total_paid_kop
+        q = """
+        UPDATE ref_payout_requests
+        SET status = 'approved'
+        WHERE id = :id AND status = 'pending'
+        RETURNING referrer_id, amount_kop
+        """
+        row = await db_fetch_one(q, {"id": int(request_id)})
+        if not row:
+            return False
+
+        referrer_id = int(row["referrer_id"])
+        amount_kop = int(row["amount_kop"])
+
+        q2 = """
+        UPDATE ref_balances
+        SET total_paid_kop = total_paid_kop + :a,
+            updated_ts = :ts
+        WHERE referrer_id = :r
+        """
+        await db_execute(q2, {"a": amount_kop, "r": referrer_id, "ts": int(time.time())})
+
+        # ledger запис (службовий)
+        ql = """
+        INSERT INTO ref_ledger (referrer_id, user_id, kind, amount_kop, title, details, created_ts)
+        VALUES (:r, NULL, 'payout_approved', :a, :t, :d, :ts)
+        """
+        await db_execute(ql, {
+            "r": referrer_id,
+            "a": -amount_kop,
+            "t": "Виплата підтверджена",
+            "d": f"request_id={int(request_id)}",
+            "ts": int(time.time()),
+        })
+
+        return True
+
+    @staticmethod
+    async def reject(request_id: int, reason: str = "") -> bool:
+        # pending -> rejected, і повертаємо гроші в available_kop
+        q = """
+        UPDATE ref_payout_requests
+        SET status = 'rejected'
+        WHERE id = :id AND status = 'pending'
+        RETURNING referrer_id, amount_kop
+        """
+        row = await db_fetch_one(q, {"id": int(request_id)})
+        if not row:
+            return False
+
+        referrer_id = int(row["referrer_id"])
+        amount_kop = int(row["amount_kop"])
+
+        q2 = """
+        UPDATE ref_balances
+        SET available_kop = available_kop + :a,
+            updated_ts = :ts
+        WHERE referrer_id = :r
+        """
+        await db_execute(q2, {"a": amount_kop, "r": referrer_id, "ts": int(time.time())})
+
+        ql = """
+        INSERT INTO ref_ledger (referrer_id, user_id, kind, amount_kop, title, details, created_ts)
+        VALUES (:r, NULL, 'payout_rejected', :a, :t, :d, :ts)
+        """
+        await db_execute(ql, {
+            "r": referrer_id,
+            "a": amount_kop,  # повернення
+            "t": "Виплату відхилено",
+            "d": (reason or f"request_id={int(request_id)}")[:512],
+            "ts": int(time.time()),
+        })
+
+        return True
+
+    @staticmethod
     async def create_request(referrer_id: int, amount_kop: int, note: str = "") -> dict | None:
         referrer_id = int(referrer_id)
         amount_kop = int(amount_kop)
