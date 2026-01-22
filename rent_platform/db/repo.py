@@ -511,6 +511,52 @@ class AccountRepo:
         """
         await db_execute(q, {"uid": int(owner_user_id), "w": int(new_withdraw_kop), "ts": int(time.time())})
 
+    @staticmethod
+    async def charge_with_ledger(
+        owner_user_id: int,
+        charge_kop: int,
+        min_balance_kop: int,
+        kind: str,
+        tenant_id: str | None,
+        meta_json: str,
+        created_ts: int,
+    ) -> int | None:
+        """
+        Атомарно: (1) списати баланс з лімітом, (2) додати ledger.
+        Повертає новий balance_kop або None якщо не вистачає.
+        meta_json — вже json.dumps(...)
+        """
+        await AccountRepo.ensure(owner_user_id)
+        q = """
+        WITH updated AS (
+          UPDATE owner_accounts
+          SET balance_kop = balance_kop - :c,
+              updated_ts = :ts
+          WHERE owner_user_id = :uid
+            AND (balance_kop - :c) >= :min_bal
+          RETURNING balance_kop
+        )
+        INSERT INTO billing_ledger (owner_user_id, tenant_id, kind, amount_kop, meta, created_ts)
+        SELECT :uid, :tid, :k, :amount, :m, :ts
+        FROM updated
+        RETURNING (SELECT balance_kop FROM updated) AS balance_kop
+        """
+        row = await db_fetch_one(
+            q,
+            {
+                "uid": int(owner_user_id),
+                "c": int(charge_kop),
+                "min_bal": int(min_balance_kop),
+                "ts": int(created_ts),
+                "tid": tenant_id,
+                "k": str(kind),
+                "amount": -int(charge_kop),
+                "m": meta_json,
+            },
+        )
+        return int(row["balance_kop"]) if row and row.get("balance_kop") is not None else None
+
+
 class LedgerRepo:
 
     @staticmethod
