@@ -73,6 +73,7 @@ def partners_inline_kb() -> InlineKeyboardMarkup:
     )
     kb.row(
         InlineKeyboardButton(text="💸 Виплати", callback_data="pl:partners:payouts"),
+        InlineKeyboardButton(text="➕ Заявка на виплату", callback_data="pl:partners:payout_create"),
         InlineKeyboardButton(text="📜 Правила", callback_data="pl:partners:rules"),
     )
     kb.row(
