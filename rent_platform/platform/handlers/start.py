@@ -112,6 +112,9 @@ class TopUpFlow(StatesGroup):
     waiting_amount = State()
 
 
+class RefPayoutFlow(StatesGroup):
+    waiting_amount = State()
+
 def _label(message: Message) -> str:
     chat_id = message.chat.id if message.chat else None
     user_id = message.from_user.id if message.from_user else None
