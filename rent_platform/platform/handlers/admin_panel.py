@@ -24,19 +24,20 @@ def is_admin(user_id: int) -> bool:
     return int(user_id) in allowed
 
 
-# ---------- platform settings helpers ----------
+# ---------- platform settings helpers (ref_json as single config store) ----------
 
 async def _ps_get() -> dict[str, Any]:
-    s = await PlatformSettingsRepo.get()
-    if not s:
+    # ref_json містить і рефералку, і marketplace_overrides
+    s = await PlatformSettingsRepo.get_ref_settings()
+    if not isinstance(s, dict):
         return {}
-    # якщо з БД прийшов json-рядок (малоймовірно у тебе, але залишимо)
-    if isinstance(s, str):
-        try:
-            s = json.loads(s)
-        except Exception:
-            s = {}
     return dict(s)
+
+
+async def _ps_set(s: dict[str, Any]) -> None:
+    if not isinstance(s, dict):
+        s = {}
+    await PlatformSettingsRepo.set_ref_settings(s)
 
 
 def _get_overrides(s: dict[str, Any]) -> dict[str, Any]:
@@ -107,12 +108,12 @@ async def adm_open_payouts(call: CallbackQuery) -> None:
     if not call.message or not is_admin(call.from_user.id):
         await call.answer()
         return
-    await call.message.answer("👉 Pending виплати: відкрий команду /admin_ref та натисни «📥 Pending заявки»")
+    await call.message.answer("👉 Pending виплати: відкрий /admin_ref і натисни «📥 Pending заявки»")
     await call.answer()
 
 
 # ======================================================================
-# Banner cabinet (PHOTO + URL fallback)
+# Banner cabinet (PHOTO + URL fallback) -> stored in platform_settings.cabinet_banner_url
 # ======================================================================
 
 class AdminBannerFlow(StatesGroup):
@@ -125,8 +126,8 @@ async def adm_banner(call: CallbackQuery, state: FSMContext) -> None:
         await call.answer()
         return
 
-    s = await _ps_get()
-    cur = (s.get("cabinet_banner_url") or "").strip()
+    row = await PlatformSettingsRepo.get() or {}
+    cur = (row.get("cabinet_banner_url") or "").strip()
 
     txt = "🖼 *Банер кабінету*\n\n"
     txt += f"Поточне значення:\n`{cur or '—'}`\n\n"
@@ -155,13 +156,12 @@ async def adm_banner_receive_text(message: Message, state: FSMContext) -> None:
         await message.answer("✅ Банер прибрано. Перевір у «Кабінет».", reply_markup=admin_menu_kb())
         return
 
-    # URL fallback
     if not (raw.startswith("http://") or raw.startswith("https://")):
         await message.answer("❌ Надішли *фото* або URL який починається з http:// чи https:// (або `-`).", parse_mode="Markdown")
         return
 
     await PlatformSettingsRepo.upsert_cabinet_banner(raw)
-    await message.answer("✅ Збережено. Перевір у «Кабінет».", reply_markup=admin_menu_kb())
+    await message.answer("✅ Банер оновлено. Перевір у «Кабінет».", reply_markup=admin_menu_kb())
 
 
 @router.message(AdminBannerFlow.waiting_banner, F.photo)
@@ -185,7 +185,7 @@ async def adm_banner_wrong_type(message: Message) -> None:
 
 
 # ======================================================================
-# Marketplace products
+# Marketplace products (stored in ref_json.marketplace_overrides)
 # ======================================================================
 
 class AdminProductFlow(StatesGroup):
@@ -194,7 +194,7 @@ class AdminProductFlow(StatesGroup):
 
 def _product_title(key: str, meta: dict, ov: dict) -> str:
     title = meta.get("title") or key
-    enabled = ov.get(key, {}).get("enabled", True)
+    enabled = bool(ov.get(key, {}).get("enabled", True))
     mark = "✅" if enabled else "⛔️"
     return f"{mark} {title}"
 
@@ -261,6 +261,16 @@ def product_actions_kb(key: str, enabled: bool) -> Any:
     return kb.as_markup()
 
 
+def _rate_current_for(key: str, ov: dict) -> float:
+    meta = PRODUCT_CATALOG.get(key, {}) or {}
+    base_rate = float(meta.get("rate_per_min_uah", 0) or 0)
+    cur = ov.get(key, {}).get("rate_per_min_uah", base_rate)
+    try:
+        return float(cur)
+    except Exception:
+        return base_rate
+
+
 @router.callback_query(F.data.startswith("adm:prod:"))
 async def adm_product_open(call: CallbackQuery, state: FSMContext) -> None:
     if not call.message or not is_admin(call.from_user.id):
@@ -268,7 +278,8 @@ async def adm_product_open(call: CallbackQuery, state: FSMContext) -> None:
         return
 
     parts = call.data.split(":")
-    key = parts[2]
+    # adm:prod:<key>  або adm:prod:<key>:action
+    key = parts[2] if len(parts) > 2 else ""
     action = parts[3] if len(parts) > 3 else ""
 
     if key not in PRODUCT_CATALOG:
@@ -284,34 +295,49 @@ async def adm_product_open(call: CallbackQuery, state: FSMContext) -> None:
     if action == "toggle":
         ov[key]["enabled"] = not enabled
         s["marketplace_overrides"] = ov
-        # ⚠️ overrides зараз зберігаються в platform_settings,
-        # але в repo у тебе немає універсального set() — тож це поки MVP "в пам'яті".
-        # Якщо хочеш зберігати overrides у БД — скажи, я додам repo метод.
-        await call.message.answer("⚠️ Для overrides потрібен метод збереження в PlatformSettingsRepo (додамо).")
+        await _ps_set(s)
+
+        enabled2 = bool(ov[key].get("enabled", True))
+        await call.message.answer("✅ Оновлено.")
+        await call.message.answer(
+            f"🧩 *{PRODUCT_CATALOG[key].get('title', key)}*",
+            parse_mode="Markdown",
+            reply_markup=product_actions_kb(key, enabled2),
+        )
         await call.answer()
         return
 
     if action == "reset":
-        await call.message.answer("⚠️ Для overrides потрібен метод збереження в PlatformSettingsRepo (додамо).")
+        keep_enabled = bool(ov[key].get("enabled", True))
+        ov[key] = {"enabled": keep_enabled}
+        s["marketplace_overrides"] = ov
+        await _ps_set(s)
+
+        await call.message.answer("♻️ Override скинуто (тариф з PRODUCT_CATALOG).")
+        await call.message.answer(
+            f"🧩 *{PRODUCT_CATALOG[key].get('title', key)}*",
+            parse_mode="Markdown",
+            reply_markup=product_actions_kb(key, keep_enabled),
+        )
         await call.answer()
         return
 
     if action == "rate":
         await state.set_state(AdminProductFlow.waiting_rate)
         await state.update_data(prod_key=key)
-        cur_rate = ov[key].get("rate_per_min_uah", PRODUCT_CATALOG[key].get("rate_per_min_uah", 0))
+        cur_rate = _rate_current_for(key, ov)
         await call.message.answer(
             f"✏️ Введи *новий тариф* для `{key}` в грн/хв.\n"
-            f"Поточний: *{float(cur_rate):.2f}*\n\n"
+            f"Поточний: *{cur_rate:.2f}*\n\n"
             f"Напр: `1` або `0.5`",
             parse_mode="Markdown",
         )
         await call.answer()
         return
 
+    # default: show product card
     meta = PRODUCT_CATALOG[key]
-    base_rate = float(meta.get("rate_per_min_uah", 0) or 0)
-    cur_rate = float(ov.get(key, {}).get("rate_per_min_uah", base_rate) or 0)
+    cur_rate = _rate_current_for(key, ov)
 
     txt = (
         f"🧩 *{meta.get('title', key)}*\n"
@@ -346,5 +372,20 @@ async def adm_product_set_rate(message: Message, state: FSMContext) -> None:
         await message.answer("❌ Невалідне число. Приклад: 1 або 0.5")
         return
 
-    # ⚠️ Тут теж потрібен метод збереження overrides у БД
-    await message.answer("⚠️ Для збереження тарифів overrides у БД додамо метод в PlatformSettingsRepo.")
+    s = await _ps_get()
+    ov = _get_overrides(s)
+    ov.setdefault(key, {})
+    ov[key]["rate_per_min_uah"] = float(val)
+    if "enabled" not in ov[key]:
+        ov[key]["enabled"] = True
+
+    s["marketplace_overrides"] = ov
+    await _ps_set(s)
+
+    enabled = bool(ov[key].get("enabled", True))
+    await message.answer("✅ Тариф оновлено.")
+    await message.answer(
+        f"🧩 *{PRODUCT_CATALOG[key].get('title', key)}*\nТариф: *{val:.2f} грн/хв*",
+        parse_mode="Markdown",
+        reply_markup=product_actions_kb(key, enabled),
+    )
