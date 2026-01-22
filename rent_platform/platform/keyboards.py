@@ -66,17 +66,18 @@ def back_to_menu_kb() -> InlineKeyboardMarkup:
 # =========================================================
 def partners_inline_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+
     kb.row(
         InlineKeyboardButton(text="🔗 Моя реф-силка", callback_data="pl:partners:link"),
         InlineKeyboardButton(text="📊 Статистика", callback_data="pl:partners:stats"),
-        width=2,
     )
     kb.row(
         InlineKeyboardButton(text="💸 Виплати", callback_data="pl:partners:payouts"),
         InlineKeyboardButton(text="📜 Правила", callback_data="pl:partners:rules"),
-        width=2,
     )
-    kb.row(InlineKeyboardButton(text=LBL_MENU, callback_data="pl:menu"))
+    kb.row(
+        InlineKeyboardButton(text="⬅️ В меню", callback_data="pl:menu"),
+    )
     return kb.as_markup()
 
 
