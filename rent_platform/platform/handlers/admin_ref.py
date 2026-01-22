@@ -181,3 +181,38 @@ async def adm_payout_rej(call: CallbackQuery) -> None:
     ok = await RefPayoutRepo.reject(rid)
     await call.message.answer("❌ Rejected" if ok else "⚠️ Не вийшло (може вже не pending).")
     await call.answer()
+
+@router.callback_query(F.data == "adm:open:ref")
+async def adm_open_ref(call: CallbackQuery) -> None:
+    if not call.message or not is_admin(call.from_user.id):
+        await call.answer()
+        return
+    await _render(call.message)
+    await call.answer()
+
+@router.callback_query(F.data == "adm:open:payouts")
+async def adm_open_payouts(call: CallbackQuery) -> None:
+    if not call.message or not is_admin(call.from_user.id):
+        await call.answer()
+        return
+    # відкриваємо pending так само, як кнопка в рефералці
+    items = await RefPayoutRepo.list_pending(limit=20)
+    if not items:
+        await call.message.answer("📭 Нема pending заявок.")
+        await call.answer()
+        return
+
+    lines = ["📥 *Pending заявки* (до 20 шт)\n"]
+    kb = InlineKeyboardBuilder()
+    for it in items:
+        rid = int(it["id"])
+        referrer_id = int(it["referrer_id"])
+        amount = int(it["amount_kop"]) / 100
+        lines.append(f"• #{rid} — user `{referrer_id}` — *{amount:.2f} грн*")
+        kb.row(
+            InlineKeyboardButton(text=f"✅ Approve #{rid}", callback_data=f"adm:ref:payout:ok:{rid}"),
+            InlineKeyboardButton(text=f"❌ Reject #{rid}", callback_data=f"adm:ref:payout:rej:{rid}"),
+        )
+
+    await call.message.answer("\n".join(lines), parse_mode="Markdown", reply_markup=kb.as_markup())
+    await call.answer()
