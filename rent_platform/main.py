@@ -12,32 +12,29 @@ from aiogram.types import Update
 from rent_platform.config import settings
 from rent_platform.core.modules import init_modules
 from rent_platform.core.tenant_ctx import init_tenants
-from rent_platform.db.repo import TenantRepo, ModuleRepo
 from rent_platform.core.registry import get_module
-from rent_platform.db.migrations import run_migrations
 
-from rent_platform.platform.admin_router import router as admin_router
+from rent_platform.db.repo import TenantRepo, ModuleRepo
+from rent_platform.db.migrations import run_migrations
+from rent_platform.db.session import db_execute  # ✅ напряму в БД (без owner_user_id)
+
 from rent_platform.core.billing import billing_daemon_daily_midnight, billing_loop
 
-# ✅ напряму в БД (щоб НЕ ламати repo методами з owner_user_id)
-from rent_platform.db.session import db_execute
+from rent_platform.platform.admin_router import router as admin_router  # FastAPI router
 
 log = logging.getLogger(__name__)
 
 app = FastAPI()
-from rent_platform.db.migrations import run_migrations
-
-@app.on_event("startup")
-async def _startup():
-    await run_migrations()
 app.include_router(admin_router)
 
 # Platform bot (керує SaaS-меню)
 platform_bot = Bot(token=settings.BOT_TOKEN)
 dp = Dispatcher()
 
+# ✅ Aiogram routers
+from rent_platform.platform.handlers.admin_ref import router as admin_ref_router  # noqa: E402
 from rent_platform.platform.handlers.start import router as start_router  # noqa: E402
-from rent_platform.platform.handlers.admin_ref import router as admin_ref_router
+
 dp.include_router(admin_ref_router)
 dp.include_router(start_router)
 
@@ -91,18 +88,13 @@ async def _maybe_apply_billing_pause(tenant: dict) -> tuple[bool, str | None]:
 
     # Якщо прострочено — авто-пауза billing (але manual не чіпаємо)
     if expired:
-        # якщо вже paused billing — просто блокуємо
         if st == "paused" and pr == "billing":
             return True, "billing"
-
-        # якщо manual paused — залишаємо як є і блокуємо
         if st == "paused" and pr == "manual":
             return True, "manual"
 
-        # якщо active (або інше) — ставимо paused billing
         if st != "paused":
             await _system_set_status(tenant["id"], "paused", "billing")
-            # локально теж оновимо, щоб нижче не було сюрпризів
             tenant["status"] = "paused"
             tenant["paused_reason"] = "billing"
         return True, "billing"
@@ -125,17 +117,21 @@ async def _maybe_apply_billing_pause(tenant: dict) -> tuple[bool, str | None]:
 async def on_startup():
     global _BILL_TASK, _DAILY_TASK, _webhook_inited
 
+    # ✅ Міграції 1 раз
+    await run_migrations()
+
+    # ✅ Ініт
     init_tenants()
     init_modules()
 
-    # daily billing daemon (00:00)
+    # ✅ Daily billing daemon (00:00)
     if _DAILY_TASK is None:
         _DAILY_TASK = asyncio.create_task(billing_daemon_daily_midnight(platform_bot, _BILL_STOP))
         log.info("billing daily daemon started")
 
-    log.info("Префикс арендатора: %s", settings.TENANT_WEBHOOK_PREFIX)
-
     webhook_full = settings.WEBHOOK_URL.rstrip("/") + settings.WEBHOOK_PATH
+    log.info("Platform webhook target: %s", webhook_full)
+    log.info("Tenant prefix: %s", settings.TENANT_WEBHOOK_PREFIX)
 
     if _webhook_inited:
         log.info("Startup: webhook already inited in this worker")
@@ -147,13 +143,12 @@ async def on_startup():
     try:
         info = await platform_bot.get_webhook_info()
         if (info.url or "").strip() == webhook_full:
-            log.info("Webhook уже корректен: %s", webhook_full)
+            log.info("Webhook already correct: %s", webhook_full)
             _webhook_inited = True
 
             if _BILL_TASK is None:
                 _BILL_TASK = asyncio.create_task(billing_loop(platform_bot, _BILL_STOP))
                 log.info("billing loop started")
-
             return
     except Exception as e:
         log.warning("getWebhookInfo failed: %s", e)
@@ -175,7 +170,6 @@ async def on_startup():
 async def on_shutdown():
     global _BILL_TASK, _DAILY_TASK
 
-    # ✅ stop billing tasks
     _BILL_STOP.set()
 
     if _BILL_TASK:
@@ -192,10 +186,8 @@ async def on_shutdown():
             pass
         _DAILY_TASK = None
 
-    # platform bot session
     await platform_bot.session.close()
 
-    # tenant bot sessions
     for bot in _TENANT_BOTS.values():
         try:
             await bot.session.close()
@@ -203,7 +195,6 @@ async def on_shutdown():
             pass
     _TENANT_BOTS.clear()
 
-    # db engine dispose (якщо є)
     try:
         from rent_platform.db.session import engine
         await engine.dispose()
@@ -244,22 +235,17 @@ async def tenant_webhook(bot_id: str, secret: str, req: Request):
     if not tenant:
         raise HTTPException(status_code=404, detail="tenant not found")
 
-    # секрет — щоб старі URL помирали після rotate_secret
     if tenant.get("secret") != secret:
         raise HTTPException(status_code=403, detail="bad secret")
 
-    # 1) deleted → 410
     st = (tenant.get("status") or "active").lower()
     if st == "deleted":
         raise HTTPException(status_code=410, detail="tenant deleted")
 
-    # 2) Billing auto-pause / auto-resume
     blocked, reason = await _maybe_apply_billing_pause(tenant)
     if blocked:
-        # paused/manual/billing — просто 200, без ретраїв
         return {"ok": True, "blocked": True, "reason": reason}
 
-    # 3) Якщо активний — проганяємо по модулях
     tenant_bot = _get_tenant_bot(bot_id, tenant["bot_token"])
 
     enabled = await ModuleRepo.list_enabled(bot_id)
