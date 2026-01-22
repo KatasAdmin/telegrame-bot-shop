@@ -34,6 +34,8 @@ dp = Dispatcher()
 # ✅ Aiogram routers
 from rent_platform.platform.handlers.admin_ref import router as admin_ref_router  # noqa: E402
 from rent_platform.platform.handlers.start import router as start_router  # noqa: E402
+from rent_platform.platform.handlers.admin_panel import router as admin_panel_router
+dp.include_router(admin_panel_router)
 
 dp.include_router(admin_ref_router)
 dp.include_router(start_router)
