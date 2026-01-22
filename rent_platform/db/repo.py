@@ -317,6 +317,18 @@ class TenantRepo:
         await db_execute(q, {"uid": owner_user_id, "pk": product_key, "ts": int(first_used_ts)})
 
 
+    @staticmethod
+    async def system_resume_all_billing_for_owner(owner_user_id: int) -> int:
+        q = """
+        UPDATE tenants
+        SET status='active', paused_reason=NULL
+        WHERE owner_user_id = :uid
+          AND status='paused'
+          AND paused_reason='billing'
+        """
+        return await db_execute(q, {"uid": int(owner_user_id)})
+
+
 class ModuleRepo:
     @staticmethod
     async def list_enabled(tenant_id: str) -> list[str]:
