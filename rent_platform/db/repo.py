@@ -870,6 +870,56 @@ class ReferralRepo:
         return int(row["referrer_id"]) if row else None
 
     @staticmethod
+    async def get_settings() -> dict:
+        """
+        Беремо ref_json з platform_settings(id=1).
+        Якщо пусто — дефолти.
+        """
+        row = await PlatformSettingsRepo.get()
+        raw = (row.get("ref_json") if row else "") or ""
+        try:
+            data = json.loads(raw) if raw.strip() else {}
+        except Exception:
+            data = {}
+
+        return {
+            "enabled": bool(data.get("enabled", True)),
+            "percent_topup_bps": int(data.get("percent_topup_bps", 500)),     # 5%
+            "percent_billing_bps": int(data.get("percent_billing_bps", 200)), # 2%
+            "min_payout_kop": int(data.get("min_payout_kop", 10000)),         # 100 грн
+        }
+
+    @staticmethod
+    async def set_settings(payload: dict) -> None:
+        """
+        Часткове оновлення ref_json (merge), щоб не затерти marketplace_overrides та інші поля.
+        """
+        row = await PlatformSettingsRepo.get()
+        raw = (row.get("ref_json") if row else "") or ""
+
+        try:
+            cur = json.loads(raw) if raw.strip() else {}
+        except Exception:
+            cur = {}
+
+        if not isinstance(cur, dict):
+            cur = {}
+
+        # оновлюємо ТІЛЬКИ поля рефералки
+        cur["enabled"] = bool(payload.get("enabled", True))
+        cur["percent_topup_bps"] = int(payload.get("percent_topup_bps", 500))
+        cur["percent_billing_bps"] = int(payload.get("percent_billing_bps", 200))
+        cur["min_payout_kop"] = int(payload.get("min_payout_kop", 10000))
+
+        q = f"""
+        INSERT INTO {PlatformSettingsRepo.TABLE} (id, cabinet_banner_url, ref_json, updated_ts)
+        VALUES (1, COALESCE((SELECT cabinet_banner_url FROM {PlatformSettingsRepo.TABLE} WHERE id=1), ''), :rj, :ts)
+        ON CONFLICT (id)
+        DO UPDATE SET ref_json = EXCLUDED.ref_json, updated_ts = EXCLUDED.updated_ts
+        """
+        await db_execute(q, {"rj": json.dumps(cur, ensure_ascii=False), "ts": int(time.time())})
+
+    @staticmethod
     async def _ensure_balance(referrer_id: int) -> None:
         q = """
         INSERT INTO ref_balances (referrer_id, available_kop, total_earned_kop, total_paid_kop, updated_ts)
@@ -888,26 +938,7 @@ class ReferralRepo:
         """
         return await db_fetch_one(q, {"r": int(referrer_id)})
 
-    @staticmethod
-    async def get_settings() -> dict:
-        """
-        Беремо ref_json з platform_settings(id=1).
-        Якщо пусто — дефолти.
-        """
-        row = await PlatformSettingsRepo.get()
-        raw = (row.get("ref_json") if row else "") or ""
-        try:
-            data = json.loads(raw) if raw.strip() else {}
-        except Exception:
-            data = {}
-
-        # дефолти
-        return {
-            "enabled": bool(data.get("enabled", True)),
-            "percent_topup_bps": int(data.get("percent_topup_bps", 500)),     # 5%
-            "percent_billing_bps": int(data.get("percent_billing_bps", 200)), # 2%
-            "min_payout_kop": int(data.get("min_payout_kop", 10000)),         # 100 грн
-        }
+    # далі — твій apply_commission/stats без змін
 
     @staticmethod
     async def set_settings(payload: dict) -> None:
