@@ -148,6 +148,64 @@ async def _send_main_menu(message: Message) -> None:
 # ======================================================================
 # ✅ Меню-кнопки працюють завжди, навіть у будь-якому FSM
 # ======================================================================
+@router.callback_query(F.data == "pl:partners:payout_create")
+async def cb_ref_payout_create(call: CallbackQuery, state: FSMContext) -> None:
+    if not call.message:
+        await call.answer()
+        return
+
+    await state.set_state(RefPayoutFlow.waiting_amount)
+
+    s = await ReferralRepo.get_settings()
+    min_payout = int(s.get("min_payout_kop") or 0) / 100
+
+    await call.message.answer(
+        "➕ *Заявка на виплату*\n\n"
+        f"Введи суму в грн (мінімум *{min_payout:.2f}*).\n"
+        "Напр: `250`",
+        parse_mode="Markdown",
+        reply_markup=partners_inline_kb(),
+    )
+    await call.answer()
+
+
+@router.message(RefPayoutFlow.waiting_amount, F.text)
+async def ref_payout_receive_amount(message: Message, state: FSMContext) -> None:
+    raw = (message.text or "").strip().replace(",", ".").replace(" ", "")
+    await state.clear()
+
+    try:
+        uah = float(raw)
+        if uah <= 0:
+            raise ValueError
+    except Exception:
+        await message.answer("❌ Введи число в грн, напр 250", reply_markup=partners_inline_kb())
+        return
+
+    amount_kop = int(round(uah * 100))
+    req = await RefPayoutRepo.create_request(message.from_user.id, amount_kop, note="tg_bot")
+    if not req:
+        s = await ReferralRepo.get_settings()
+        min_payout = int(s.get("min_payout_kop") or 0) / 100
+        await message.answer(
+            "⚠️ Не вийшло створити заявку.\n\n"
+            f"Перевір: мін. виплата *{min_payout:.2f} грн* і наявність балансу.",
+            parse_mode="Markdown",
+            reply_markup=partners_inline_kb(),
+        )
+        return
+
+    await message.answer(
+        "✅ *Заявку створено!*\n\n"
+        f"ID: `#{req['id']}`\n"
+        f"Сума: *{int(req['amount_kop'])/100:.2f} грн*\n"
+        "Статус: *pending*\n\n"
+        "_Адмін підтвердить виплату — і статус зміниться._",
+        parse_mode="Markdown",
+        reply_markup=partners_inline_kb(),
+    )
+
+
 @router.message(StateFilter("*"), F.text.in_(MENU_TEXTS))
 async def menu_buttons_always_work(message: Message, state: FSMContext) -> None:
     await state.clear()
@@ -885,6 +943,9 @@ async def cfg_receive_secret(message: Message, state: FSMContext) -> None:
 # ======================================================================
 # TopUp (баланс) — MVP
 # ======================================================================
+# ======================================================================
+# TopUp (баланс) — MVP
+# ======================================================================
 @router.callback_query(F.data == "pl:topup:start")
 async def cb_topup_start(call: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(TopUpFlow.waiting_amount)
@@ -976,6 +1037,23 @@ async def cb_topup_confirm(call: CallbackQuery) -> None:
         await call.answer()
         return
 
+    # ✅ РЕФЕРАЛКА З ПОПОВНЕННЯ (4.1) — ідемпотентно
+    try:
+        amount_kop = int(res.get("amount_kop") or 0)
+        if amount_kop > 0:
+            event_key = f"topup:{call.from_user.id}:{invoice_id}"
+            await ReferralRepo.apply_commission(
+                user_id=call.from_user.id,
+                kind="topup",
+                amount_kop=amount_kop,
+                event_key=event_key,
+                title="Поповнення балансу",
+                details=f"invoice_id={invoice_id}",
+            )
+    except Exception:
+        # не ламаємо поповнення, якщо партнерка впала
+        pass
+
     new_balance = int(res["new_balance_kop"]) / 100.0
     added = int(res["amount_kop"]) / 100.0
     await call.message.answer(
@@ -985,35 +1063,45 @@ async def cb_topup_confirm(call: CallbackQuery) -> None:
     )
     await call.answer("✅")
 
+
+# ======================================================================
+# Ref payout (заявка) — тільки ОДИН handler, без дубля
+# ======================================================================
 @router.message(RefPayoutFlow.waiting_amount, F.text, ~F.text.in_(MENU_TEXTS))
 async def ref_payout_receive_amount(message: Message, state: FSMContext) -> None:
-    txt = (message.text or "").strip().replace(" ", "")
-    if not txt.isdigit():
-        await message.answer("❌ Введи число в грн, напр. 200")
-        return
-
-    amount_uah = int(txt)
+    txt = (message.text or "").strip().replace(" ", "").replace(",", ".")
     await state.clear()
 
-    req = await partners_create_payout(message.from_user.id, amount_uah=amount_uah, note="manual")
+    # приймаємо як int або float (250 / 250.5)
+    try:
+        uah = float(txt)
+        if uah <= 0:
+            raise ValueError
+    except Exception:
+        await message.answer("❌ Введи число в грн, напр. 250", reply_markup=partners_inline_kb())
+        return
+
+    amount_kop = int(round(uah * 100))
+    req = await partners_create_payout(message.from_user.id, amount_kop=amount_kop, note="manual")
     if not req:
+        s = await ReferralRepo.get_settings()
+        min_payout = int(s.get("min_payout_kop") or 0) / 100
         await message.answer(
-            "⚠️ Не вийшло створити заявку.\n"
-            "Причини: недостатньо доступно або сума менша за мінімальну.",
-            reply_markup=back_to_menu_kb(),
+            "⚠️ Не вийшло створити заявку.\n\n"
+            f"Перевір: мін. виплата *{min_payout:.2f} грн* і наявність балансу.",
+            parse_mode="Markdown",
+            reply_markup=partners_inline_kb(),
         )
         return
 
     await message.answer(
         "✅ *Заявку створено*\n\n"
-        f"ID: `{int(req.get('id') or 0)}`\n"
-        f"Сума: *{amount_uah} грн*\n"
+        f"ID: `#{int(req.get('id') or 0)}`\n"
+        f"Сума: *{amount_kop/100:.2f} грн*\n"
         "Статус: `pending`",
         parse_mode="Markdown",
-        reply_markup=back_to_menu_kb(),
+        reply_markup=partners_inline_kb(),
     )
-
-
 
 @router.message(RefPayoutFlow.waiting_amount, F.text, ~F.text.in_(MENU_TEXTS))
 async def ref_payout_receive_amount(message: Message, state: FSMContext) -> None:
