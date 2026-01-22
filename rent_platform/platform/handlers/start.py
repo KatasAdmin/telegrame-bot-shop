@@ -340,19 +340,28 @@ async def cb_commitments(call: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("pl:partners:"))
-async def cb_partners_sub(call: CallbackQuery, state: FSMContext) -> None:
+async def cb_partners_sub(call: CallbackQuery) -> None:
     if not call.message:
         await call.answer()
         return
 
     key = call.data.split("pl:partners:", 1)[1]
 
-    if key == "link":
-        bot_username = (await call.bot.me()).username
-        ref_link = await partners_get_link(call.from_user.id, bot_username)
+    # дістанемо username бота для реф-лінка
+    me = await call.bot.get_me()
+    bot_username = me.username or ""
 
+    if key == "link":
+        if not bot_username:
+            await call.message.answer("⚠️ Не зміг отримати username бота.")
+            await call.answer()
+            return
+
+        ref_link = f"https://t.me/{bot_username}?start=ref_{call.from_user.id}"
         await call.message.answer(
-            "🔗 *Твоя реферальна силка*\n\n"
+            "🔗 *Твоя реф-силка*\n\n"
+            "Надсилай її друзям. Коли вони зайдуть по посиланню і почнуть користуватись платформою — "
+            "ти отримуватимеш партнерські %.\n\n"
             f"`{ref_link}`",
             parse_mode="Markdown",
             reply_markup=partners_inline_kb(),
@@ -361,43 +370,81 @@ async def cb_partners_sub(call: CallbackQuery, state: FSMContext) -> None:
         return
 
     if key == "stats":
-        data = await partners_get_stats(call.from_user.id)
-        st = data["stats"]
-        s = data["settings"]
+        try:
+            st = await ReferralRepo.stats(call.from_user.id)
+            refs_cnt = int(st.get("refs_cnt") or 0)
+            available = int(st.get("available_kop") or 0) / 100
+            earned = int(st.get("total_earned_kop") or 0) / 100
+            paid = int(st.get("total_paid_kop") or 0) / 100
+
+            by_kind = st.get("by_kind") or {}
+            topup_s = int(by_kind.get("topup") or 0) / 100
+            billing_s = int(by_kind.get("billing") or 0) / 100
+
+            await call.message.answer(
+                "📊 *Статистика партнера*\n\n"
+                f"👥 Рефералів: *{refs_cnt}*\n"
+                f"💰 Доступно: *{available:.2f} грн*\n"
+                f"🏆 Зароблено всього: *{earned:.2f} грн*\n"
+                f"💸 Виплачено: *{paid:.2f} грн*\n\n"
+                "Джерела:\n"
+                f"• з поповнень: *{topup_s:.2f} грн*\n"
+                f"• з білінгу: *{billing_s:.2f} грн*",
+                parse_mode="Markdown",
+                reply_markup=partners_inline_kb(),
+            )
+        except Exception:
+            await call.message.answer("⚠️ Не зміг завантажити статистику.", reply_markup=partners_inline_kb())
+
+        await call.answer()
+        return
+
+    if key == "payouts":
+        settings = await ReferralRepo.get_settings()
+        min_payout = int(settings.get("min_payout_kop") or 0) / 100
+
+        bal = await ReferralRepo.get_balance(call.from_user.id) or {}
+        available = int(bal.get("available_kop") or 0) / 100
 
         await call.message.answer(
-            "📊 *Статистика*\n\n"
-            f"👥 Рефералів: *{int(st['refs_cnt'])}*\n"
-            f"💰 Доступно: *{int(st['available_kop'])/100:.2f} грн*\n"
-            f"🏦 Зароблено: *{int(st['total_earned_kop'])/100:.2f} грн*\n"
-            f"✅ Виплачено: *{int(st['total_paid_kop'])/100:.2f} грн*\n\n"
-            "⚙️ *Умови*\n"
-            f"• з поповнень: *{int(s['percent_topup_bps'])/100:.2f}%*\n"
-            f"• з білінгу: *{int(s['percent_billing_bps'])/100:.2f}%*\n"
-            f"• мін. виплата: *{int(s['min_payout_kop'])/100:.2f} грн*",
+            "💸 *Виплати*\n\n"
+            f"Доступно: *{available:.2f} грн*\n"
+            f"Мін. виплата: *{min_payout:.2f} грн*\n\n"
+            "MVP-логіка зараз така:\n"
+            "1) Ти накопичуєш баланс\n"
+            "2) Далі ми додамо створення заявки (сума + реквізити)\n"
+            "3) Адмін підтверджує — і виплата проводиться\n\n"
+            "_Хочеш — наступним кроком зробимо форму заявки прямо в боті._",
             parse_mode="Markdown",
             reply_markup=partners_inline_kb(),
         )
         await call.answer()
         return
 
-    if key == "payouts":
-        data = await partners_get_stats(call.from_user.id)
-        min_payout = int(data["settings"]["min_payout_kop"]) / 100.0
+    if key == "rules":
+        s = await ReferralRepo.get_settings()
+        pct_topup = int(s.get("percent_topup_bps") or 0) / 100  # bps -> %
+        pct_billing = int(s.get("percent_billing_bps") or 0) / 100
+        min_payout = int(s.get("min_payout_kop") or 0) / 100
 
-        await state.set_state(RefPayoutFlow.waiting_amount)
         await call.message.answer(
-            "💸 *Виплата партнерки*\n\n"
-            f"Введи суму в грн (ціле число).\n"
-            f"Мінімум: *{min_payout:.2f} грн*\n\n"
-            "Приклад: `200`",
+            "📜 *Правила партнерської програми*\n\n"
+            f"• З поповнень рефералів: *{pct_topup:.2f}%*\n"
+            f"• З білінгу (списань): *{pct_billing:.2f}%*\n"
+            f"• Мінімальна виплата: *{min_payout:.2f} грн*\n\n"
+            "Умови:\n"
+            "1) Реферал зараховується, якщо зайшов по твоєму старт-лінку.\n"
+            "2) Нарахування йдуть автоматично та прозоро (ledger).\n"
+            "3) При накрутці/спамі — можемо обнулити бонуси.\n\n"
+            "Порада: кидай реф-силку тим, хто реально буде запускати бота/оренду 🙂",
             parse_mode="Markdown",
-            reply_markup=back_to_menu_kb(),
+            reply_markup=partners_inline_kb(),
         )
         await call.answer()
         return
 
-    await call.answer("Пункт у розробці")
+    await call.message.answer("Пункт у розробці.", reply_markup=partners_inline_kb())
+    await call.answer()
 
 # ======================================================================
 # Marketplace
