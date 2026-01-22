@@ -1080,7 +1080,52 @@ async def cb_topup_confirm(call: CallbackQuery) -> None:
 # ======================================================================
 # Debug fallback
 # ======================================================================
-@router.message(F.text)
+from rent_platform.config import settings
+
+def _is_admin(user_id: int) -> bool:
+    # Підтримка різних варіантів, щоб не паритись:
+    # ADMIN_USER_IDS="1,2,3" або ADMIN_ID="1"
+    ids = []
+
+    v = getattr(settings, "ADMIN_USER_IDS", None)
+    if v:
+        if isinstance(v, (list, tuple, set)):
+            ids = [int(x) for x in v]
+        else:
+            # якщо раптом рядок "1,2,3"
+            ids = [int(x.strip()) for x in str(v).split(",") if x.strip().isdigit()]
+
+    one = getattr(settings, "ADMIN_ID", None)
+    if one:
+        try:
+            ids.append(int(one))
+        except Exception:
+            pass
+
+    return int(user_id) in set(ids)
+
+
+@router.message(Command("admin"))
+async def cmd_admin(message: Message, state: FSMContext) -> None:
+    await state.clear()
+
+    if not _is_admin(message.from_user.id):
+        await message.answer("⛔ Нема доступу.")
+        return
+
+    await message.answer(
+        "⚙️ *Адмін-панель (MVP)*\n\n"
+        "Обери дію 👇\n"
+        "• 🤝 Партнерка: % / мін. виплата\n"
+        "• 🧩 Продукти маркетплейсу\n"
+        "• 📢 Банер кабінету\n"
+        "• 💸 Підтвердження виплат (скоро)\n",
+        parse_mode="Markdown",
+        reply_markup=back_to_menu_kb(),
+    )
+
+
+@router.message(F.text, ~F.text.startswith("/"))
 async def _debug_unhandled_text(message: Message, state: FSMContext) -> None:
     st = await state.get_state()
     if st:
