@@ -1062,20 +1062,33 @@ async def cb_topup_confirm(call: CallbackQuery) -> None:
         await call.answer("Не знайдено інвойс", show_alert=True)
         return
 
+    # навіть якщо already=True — ми могли auto-resume зробити
+    resumed_cnt = int(res.get("resumed_cnt") or 0)
+
     if res.get("already"):
-        await call.message.answer("ℹ️ Цей інвойс вже не pending.")
+        new_balance = int(res.get("new_balance_kop") or 0) / 100.0
+        msg = (
+            "ℹ️ Інвойс вже підтверджений або не pending.\n"
+            f"💰 Баланс: {new_balance:.2f} грн"
+        )
+        if resumed_cnt > 0:
+            msg += f"\n✅ Підняв ботів з білінг-паузи: {resumed_cnt}"
+        await call.message.answer(msg, reply_markup=back_to_menu_kb())
         await call.answer()
         return
 
     new_balance = int(res["new_balance_kop"]) / 100.0
     added = int(res["amount_kop"]) / 100.0
-    await call.message.answer(
-        f"✅ Оплату підтверджено (тест). Баланс +{added:.2f} грн.\n"
-        f"💰 Новий баланс: {new_balance:.2f} грн",
-        reply_markup=back_to_menu_kb(),
-    )
-    await call.answer("✅")
 
+    msg = (
+        f"✅ Оплату підтверджено (тест). Баланс +{added:.2f} грн.\n"
+        f"💰 Новий баланс: {new_balance:.2f} грн"
+    )
+    if resumed_cnt > 0:
+        msg += f"\n✅ Підняв ботів з білінг-паузи: {resumed_cnt}"
+
+    await call.message.answer(msg, reply_markup=back_to_menu_kb())
+    await call.answer("✅")
 
 # ======================================================================
 # Debug fallback
