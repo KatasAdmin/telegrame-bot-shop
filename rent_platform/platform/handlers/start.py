@@ -673,15 +673,30 @@ async def mkp_receive_token(message: Message, state: FSMContext) -> None:
 # ======================================================================
 # My Bots — дуже просто: список кнопок з ботами -> деталі -> конфіг
 # ======================================================================
-def _my_bots_list_buttons(items: list[dict]) -> InlineKeyboardBuilder:
+def _my_bots_list_buttons(items: list[dict], show_deleted: bool = False) -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
+
+    visible = []
+    deleted = []
     for it in items:
+        st = (it.get("status") or "active").lower()
+        if st == "deleted":
+            deleted.append(it)
+        else:
+            visible.append(it)
+
+    # список активних/paused
+    for it in visible:
         bot_id = str(it["id"])
         name = (it.get("name") or "Bot").strip()
         st = (it.get("status") or "active").lower()
-        icon = "🟢" if st == "active" else ("⏸" if st == "paused" else "🗑" if st == "deleted" else "⚪️")
+        icon = "🟢" if st == "active" else ("⏸" if st == "paused" else "⚪️")
         kb.button(text=f"{icon} {name}", callback_data=f"pl:my_bot:open:{bot_id}")
-    kb.button(text="➕ Додати бота", callback_data="pl:my_bot:add")
+
+    # кнопка показу видалених
+    if deleted and not show_deleted:
+        kb.button(text=f"🗑 Показати видалені ({len(deleted)})", callback_data="pl:my_bots:deleted")
+
     kb.button(text="⬅️ В меню", callback_data="pl:menu")
     kb.adjust(1)
     return kb
@@ -689,6 +704,12 @@ def _my_bots_list_buttons(items: list[dict]) -> InlineKeyboardBuilder:
 
 def _my_bot_detail_kb(bot_id: str, status: str) -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
+
+    if status == "deleted":
+        kb.button(text="⬅️ Назад до списку", callback_data="pl:my_bots")
+        kb.adjust(1)
+        return kb
+
     kb.button(text="⚙️ Конфіг", callback_data=f"pl:cfg:open:{bot_id}")
 
     if status == "active":
@@ -733,6 +754,36 @@ async def cb_my_bots_add(call: CallbackQuery, state: FSMContext) -> None:
             parse_mode="Markdown",
             reply_markup=back_to_menu_kb(),
         )
+    await call.answer()
+
+
+@router.callback_query(F.data == "pl:my_bots:deleted")
+async def cb_my_bots_deleted(call: CallbackQuery) -> None:
+    if not call.message:
+        await call.answer()
+        return
+
+    items = await list_bots(call.from_user.id)
+    deleted = [x for x in items if (x.get("status") or "").lower() == "deleted"]
+
+    if not deleted:
+        await call.message.answer("🗑 Видалених ботів немає.")
+        await call.answer()
+        return
+
+    kb = InlineKeyboardBuilder()
+    for it in deleted:
+        bot_id = str(it["id"])
+        name = (it.get("name") or "Bot").strip()
+        kb.button(text=f"🗑 {name}", callback_data=f"pl:my_bot:open:{bot_id}")
+    kb.button(text="⬅️ Назад", callback_data="pl:my_bots")
+    kb.adjust(1)
+
+    await call.message.answer(
+        "🗑 *Видалені боти*\n\nОбери бота (для перегляду інформації):",
+        parse_mode="Markdown",
+        reply_markup=kb.as_markup(),
+    )
     await call.answer()
 
 
