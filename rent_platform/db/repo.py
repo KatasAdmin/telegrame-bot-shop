@@ -1068,7 +1068,7 @@ class ReferralRepo:
     @staticmethod
     async def _try_mark_event_once(event_key: str) -> bool:
         """
-        Idempotency: якщо event_key вже був — не нараховуємо вдруге.
+        Idempotency: True тільки якщо ми ВПЕРШЕ вставили event_key.
         """
         ek = (event_key or "").strip()[:128]
         if not ek:
@@ -1078,10 +1078,9 @@ class ReferralRepo:
         INSERT INTO ref_applied_events (event_key, created_ts)
         VALUES (:k, :ts)
         ON CONFLICT (event_key) DO NOTHING
+        RETURNING event_key
         """
-        await db_execute(q, {"k": ek, "ts": int(time.time())})
-
-        row = await db_fetch_one("SELECT 1 FROM ref_applied_events WHERE event_key = :k", {"k": ek})
+        row = await db_fetch_one(q, {"k": ek, "ts": int(time.time())})
         return bool(row)
 
     @staticmethod
@@ -1117,10 +1116,6 @@ class ReferralRepo:
         # але! _try_mark_event_once поверне True навіть якщо був раніше.
         # нам треба відрізнити "щойно вставив" чи "вже було":
         # простий варіант — спочатку перевірити існування.
-        existed = await db_fetch_one("SELECT 1 FROM ref_applied_events WHERE event_key = :k", {"k": event_key})
-        if existed:
-            return 0
-
         ok_mark = await ReferralRepo._try_mark_event_once(event_key)
         if not ok_mark:
             return 0
