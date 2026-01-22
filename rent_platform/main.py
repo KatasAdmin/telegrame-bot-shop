@@ -74,30 +74,30 @@ async def _system_set_status(tenant_id: str, status: str, paused_reason: str | N
 
 async def _maybe_apply_billing_pause(tenant: dict) -> tuple[bool, str | None]:
     """
-    Повертає (blocked, reason_text)
-    blocked=True означає: цей tenant зараз НЕ обробляємо (200 OK).
+    blocked=True: tenant webhook не обробляємо (віддаємо 200 OK).
+    ВАЖЛИВО: тут НЕ робимо auto-resume для billing pause.
+    Auto-resume робиться після поповнення балансу/оплати.
     """
-    now = int(time.time())
     st = (tenant.get("status") or "active").lower()
-    pr = tenant.get("paused_reason")
+    pr = (tenant.get("paused_reason") or "").lower()
 
     if st == "deleted":
         return True, "deleted"
 
+    if st == "paused":
+        return True, pr or "paused"
+
+    # legacy: якщо paid_until_ts ще використовується
+    now = int(time.time())
     paid_until = int(tenant.get("paid_until_ts") or 0)
     expired = paid_until > 0 and paid_until <= now
-
     if expired:
-        if st == "paused" and pr == "billing":
-            return True, "billing"
-        if st == "paused" and pr == "manual":
-            return True, "manual"
-
-        if st != "paused":
-            await _system_set_status(tenant["id"], "paused", "billing")
-            tenant["status"] = "paused"
-            tenant["paused_reason"] = "billing"
+        await _system_set_status(tenant["id"], "paused", "billing")
+        tenant["status"] = "paused"
+        tenant["paused_reason"] = "billing"
         return True, "billing"
+
+    return False, None
 
     # якщо баланс/оплата знову ок — авто-resume після billing pause
     if st == "paused" and pr == "billing":
