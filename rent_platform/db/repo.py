@@ -81,6 +81,7 @@ class TenantRepo:
 
     @staticmethod
     async def system_resume_if_billing(tenant_id: str) -> None:
+
         q = """
         UPDATE tenants
         SET status = 'active',
@@ -88,6 +89,27 @@ class TenantRepo:
         WHERE id = :id AND status='paused' AND paused_reason='billing'
         """
         await db_execute(q, {"id": tenant_id})
+
+    @staticmethod
+    async def system_resume_all_billing_for_owner(owner_user_id: int) -> int:
+        """
+        Auto-resume всіх tenant-ботів цього owner, які на pause через billing.
+        Повертає кількість піднятих ботів.
+        """
+        q = """
+        UPDATE tenants
+        SET status = 'active',
+            paused_reason = NULL
+        WHERE owner_user_id = :uid
+          AND status = 'paused'
+          AND paused_reason = 'billing'
+        """
+        res = await db_execute(q, {"uid": int(owner_user_id)})
+
+        try:
+            return int(res or 0)
+        except Exception:
+            return 0
 
 
     @staticmethod
