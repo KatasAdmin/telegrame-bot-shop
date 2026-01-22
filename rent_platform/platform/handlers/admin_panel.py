@@ -29,25 +29,14 @@ def is_admin(user_id: int) -> bool:
 async def _ps_get() -> dict[str, Any]:
     s = await PlatformSettingsRepo.get()
     if not s:
-        s = {}
-    # якщо з БД прийшов json-рядок
+        return {}
+    # якщо з БД прийшов json-рядок (малоймовірно у тебе, але залишимо)
     if isinstance(s, str):
         try:
             s = json.loads(s)
         except Exception:
             s = {}
     return dict(s)
-
-
-async def _ps_set(new_settings: dict[str, Any]) -> None:
-    """
-    В ідеалі PlatformSettingsRepo має мати set()/upsert().
-    Якщо в тебе метод називається інакше — скажи, я піджене під твій repo.
-    """
-    fn = getattr(PlatformSettingsRepo, "set", None) or getattr(PlatformSettingsRepo, "upsert", None)
-    if not callable(fn):
-        raise RuntimeError("PlatformSettingsRepo.set/upsert not found")
-    await fn(new_settings)
 
 
 def _get_overrides(s: dict[str, Any]) -> dict[str, Any]:
@@ -72,7 +61,7 @@ def admin_menu_kb() -> Any:
         InlineKeyboardButton(text="🧩 Продукти маркетплейсу", callback_data="adm:products"),
         InlineKeyboardButton(text="🖼 Банер кабінету", callback_data="adm:banner"),
     )
-    kb.row(InlineKeyboardButton(text="↩️ В меню", callback_data="adm:close"))
+    kb.row(InlineKeyboardButton(text="↩️ В меню", callback_data="adm:back_to_menu"))
     return kb.as_markup()
 
 
@@ -87,18 +76,47 @@ async def admin_cmd(message: Message) -> None:
     )
 
 
-@router.callback_query(F.data == "adm:close")
-async def adm_close(call: CallbackQuery) -> None:
+@router.callback_query(F.data == "adm:back_to_menu")
+async def adm_back_to_menu(call: CallbackQuery) -> None:
+    if not call.message or not is_admin(call.from_user.id):
+        await call.answer()
+        return
+    await call.message.answer(
+        "⚙️ *Адмін-панель (MVP)*\n\nОбери дію 👇",
+        parse_mode="Markdown",
+        reply_markup=admin_menu_kb(),
+    )
     await call.answer()
-    # нічого не робимо, просто “закрили” адмінку
 
 
 # ======================================================================
-# Banner cabinet
+# Partner buttons -> just hint user (real logic in admin_ref.py)
+# ======================================================================
+
+@router.callback_query(F.data == "adm:open:ref")
+async def adm_open_ref(call: CallbackQuery) -> None:
+    if not call.message or not is_admin(call.from_user.id):
+        await call.answer()
+        return
+    await call.message.answer("👉 Рефералка: відкрий команду /admin_ref")
+    await call.answer()
+
+
+@router.callback_query(F.data == "adm:open:payouts")
+async def adm_open_payouts(call: CallbackQuery) -> None:
+    if not call.message or not is_admin(call.from_user.id):
+        await call.answer()
+        return
+    await call.message.answer("👉 Pending виплати: відкрий команду /admin_ref та натисни «📥 Pending заявки»")
+    await call.answer()
+
+
+# ======================================================================
+# Banner cabinet (PHOTO + URL fallback)
 # ======================================================================
 
 class AdminBannerFlow(StatesGroup):
-    waiting_url = State()
+    waiting_banner = State()
 
 
 @router.callback_query(F.data == "adm:banner")
@@ -111,35 +129,59 @@ async def adm_banner(call: CallbackQuery, state: FSMContext) -> None:
     cur = (s.get("cabinet_banner_url") or "").strip()
 
     txt = "🖼 *Банер кабінету*\n\n"
-    txt += f"Поточний URL:\n`{cur or '—'}`\n\n"
-    txt += "Відправ сюди *новий URL* (або `-` щоб прибрати)."
+    txt += f"Поточне значення:\n`{cur or '—'}`\n\n"
+    txt += (
+        "Надішли *фото* (найкраще) — я збережу його як банер.\n"
+        "Або надішли *URL* (http/https).\n"
+        "Щоб прибрати — напиши `-`."
+    )
 
-    await state.set_state(AdminBannerFlow.waiting_url)
+    await state.set_state(AdminBannerFlow.waiting_banner)
     await call.message.answer(txt, parse_mode="Markdown")
     await call.answer()
 
 
-@router.message(AdminBannerFlow.waiting_url, F.text)
-async def adm_banner_receive(message: Message, state: FSMContext) -> None:
+@router.message(AdminBannerFlow.waiting_banner, F.text)
+async def adm_banner_receive_text(message: Message, state: FSMContext) -> None:
     if not is_admin(message.from_user.id):
         await state.clear()
         return
 
-    url = (message.text or "").strip()
+    raw = (message.text or "").strip()
     await state.clear()
 
-    s = await _ps_get()
-    if url == "-" or url.lower() in {"none", "null"}:
-        s["cabinet_banner_url"] = ""
-    else:
-        # мінімальна валідація
-        if not (url.startswith("http://") or url.startswith("https://")):
-            await message.answer("❌ URL має починатися з http:// або https://")
-            return
-        s["cabinet_banner_url"] = url
+    if raw == "-" or raw.lower() in {"none", "null"}:
+        await PlatformSettingsRepo.upsert_cabinet_banner("")
+        await message.answer("✅ Банер прибрано. Перевір у «Кабінет».", reply_markup=admin_menu_kb())
+        return
 
-    await _ps_set(s)
-    await message.answer("✅ Збережено. Перевір у «Кабінет».")
+    # URL fallback
+    if not (raw.startswith("http://") or raw.startswith("https://")):
+        await message.answer("❌ Надішли *фото* або URL який починається з http:// чи https:// (або `-`).", parse_mode="Markdown")
+        return
+
+    await PlatformSettingsRepo.upsert_cabinet_banner(raw)
+    await message.answer("✅ Збережено. Перевір у «Кабінет».", reply_markup=admin_menu_kb())
+
+
+@router.message(AdminBannerFlow.waiting_banner, F.photo)
+async def adm_banner_receive_photo(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    await state.clear()
+
+    file_id = message.photo[-1].file_id  # найбільше фото
+    await PlatformSettingsRepo.upsert_cabinet_banner(file_id)
+
+    await message.answer("✅ Банер оновлено. Перевір у «Кабінет».", reply_markup=admin_menu_kb())
+    await message.answer_photo(file_id, caption="Ось банер зараз ✅")
+
+
+@router.message(AdminBannerFlow.waiting_banner)
+async def adm_banner_wrong_type(message: Message) -> None:
+    await message.answer("❌ Потрібно *фото* або *URL*. Або `-` щоб прибрати.", parse_mode="Markdown")
 
 
 # ======================================================================
@@ -195,7 +237,11 @@ async def adm_back(call: CallbackQuery) -> None:
     if not call.message or not is_admin(call.from_user.id):
         await call.answer()
         return
-    await call.message.answer("⚙️ *Адмін-панель (MVP)*\n\nОбери дію 👇", parse_mode="Markdown", reply_markup=admin_menu_kb())
+    await call.message.answer(
+        "⚙️ *Адмін-панель (MVP)*\n\nОбери дію 👇",
+        parse_mode="Markdown",
+        reply_markup=admin_menu_kb(),
+    )
     await call.answer()
 
 
@@ -222,7 +268,6 @@ async def adm_product_open(call: CallbackQuery, state: FSMContext) -> None:
         return
 
     parts = call.data.split(":")
-    # adm:prod:<key>  або adm:prod:<key>:action
     key = parts[2]
     action = parts[3] if len(parts) > 3 else ""
 
@@ -239,23 +284,15 @@ async def adm_product_open(call: CallbackQuery, state: FSMContext) -> None:
     if action == "toggle":
         ov[key]["enabled"] = not enabled
         s["marketplace_overrides"] = ov
-        await _ps_set(s)
-        enabled = bool(ov[key].get("enabled", True))
-        await call.message.answer("✅ Оновлено.")
-        await call.message.answer(f"🧩 *{PRODUCT_CATALOG[key].get('title', key)}*", parse_mode="Markdown",
-                                reply_markup=product_actions_kb(key, enabled))
+        # ⚠️ overrides зараз зберігаються в platform_settings,
+        # але в repo у тебе немає універсального set() — тож це поки MVP "в пам'яті".
+        # Якщо хочеш зберігати overrides у БД — скажи, я додам repo метод.
+        await call.message.answer("⚠️ Для overrides потрібен метод збереження в PlatformSettingsRepo (додамо).")
         await call.answer()
         return
 
     if action == "reset":
-        # прибираємо override тарифу, але enabled лишаємо якщо треба
-        keep_enabled = ov[key].get("enabled", True)
-        ov[key] = {"enabled": keep_enabled}
-        s["marketplace_overrides"] = ov
-        await _ps_set(s)
-        await call.message.answer("♻️ Override скинуто (тариф з PRODUCT_CATALOG).")
-        await call.message.answer(f"🧩 *{PRODUCT_CATALOG[key].get('title', key)}*", parse_mode="Markdown",
-                                reply_markup=product_actions_kb(key, bool(keep_enabled)))
+        await call.message.answer("⚠️ Для overrides потрібен метод збереження в PlatformSettingsRepo (додамо).")
         await call.answer()
         return
 
@@ -272,7 +309,6 @@ async def adm_product_open(call: CallbackQuery, state: FSMContext) -> None:
         await call.answer()
         return
 
-    # default: show product card
     meta = PRODUCT_CATALOG[key]
     base_rate = float(meta.get("rate_per_min_uah", 0) or 0)
     cur_rate = float(ov.get(key, {}).get("rate_per_min_uah", base_rate) or 0)
@@ -310,20 +346,5 @@ async def adm_product_set_rate(message: Message, state: FSMContext) -> None:
         await message.answer("❌ Невалідне число. Приклад: 1 або 0.5")
         return
 
-    s = await _ps_get()
-    ov = _get_overrides(s)
-    ov.setdefault(key, {})
-    ov[key]["rate_per_min_uah"] = float(val)
-    if "enabled" not in ov[key]:
-        ov[key]["enabled"] = True
-
-    s["marketplace_overrides"] = ov
-    await _ps_set(s)
-
-    enabled = bool(ov[key].get("enabled", True))
-    await message.answer("✅ Тариф оновлено.")
-    await message.answer(
-        f"🧩 *{PRODUCT_CATALOG[key].get('title', key)}*\nТариф: *{val:.2f} грн/хв*",
-        parse_mode="Markdown",
-        reply_markup=product_actions_kb(key, enabled),
-    )
+    # ⚠️ Тут теж потрібен метод збереження overrides у БД
+    await message.answer("⚠️ Для збереження тарифів overrides у БД додамо метод в PlatformSettingsRepo.")
