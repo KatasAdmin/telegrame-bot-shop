@@ -1,3 +1,8 @@
+from __future__ import annotations
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
 class Settings(BaseSettings):
     BOT_TOKEN: str
     WEBHOOK_URL: str
@@ -7,7 +12,8 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str
 
-    ADMIN_USER_IDS: str = ""  # "123,456,789"
+    # ✅ Admins (comma-separated ids)
+    ADMIN_USER_IDS: str = ""  # приклад: "123,456"
 
     PORT: int = 8080
     DEBUG: bool = False
@@ -18,8 +24,5 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    @property
-    def admin_ids(self) -> set[int]:
-        if not self.ADMIN_USER_IDS:
-            return set()
-        return {int(x.strip()) for x in self.ADMIN_USER_IDS.split(",") if x.strip()}
+
+settings = Settings()
