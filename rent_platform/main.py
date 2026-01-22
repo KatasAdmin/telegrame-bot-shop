@@ -13,14 +13,11 @@ from rent_platform.config import settings
 from rent_platform.core.modules import init_modules
 from rent_platform.core.tenant_ctx import init_tenants
 from rent_platform.core.registry import get_module
-from rent_platform.platform.handlers.admin_panel import router as admin_panel_router
-dp.include_router(admin_panel_router)
 from rent_platform.db.repo import TenantRepo, ModuleRepo
 from rent_platform.db.migrations import run_migrations
 from rent_platform.db.session import db_execute  # ✅ напряму в БД (без owner_user_id)
 
 from rent_platform.core.billing import billing_daemon_daily_midnight, billing_loop
-
 from rent_platform.platform.admin_router import router as admin_router  # FastAPI router
 
 log = logging.getLogger(__name__)
@@ -28,16 +25,18 @@ log = logging.getLogger(__name__)
 app = FastAPI()
 app.include_router(admin_router)
 
-# Platform bot (керує SaaS-меню)
+# =========================================================
+# Platform bot + dispatcher
+# =========================================================
 platform_bot = Bot(token=settings.BOT_TOKEN)
 dp = Dispatcher()
 
-# ✅ Aiogram routers
+# ✅ Aiogram routers (ВАЖЛИВО: імпорт ПІСЛЯ dp)
+from rent_platform.platform.handlers.admin_panel import router as admin_panel_router  # noqa: E402
 from rent_platform.platform.handlers.admin_ref import router as admin_ref_router  # noqa: E402
 from rent_platform.platform.handlers.start import router as start_router  # noqa: E402
-from rent_platform.platform.handlers.admin_panel import router as admin_panel_router
-dp.include_router(admin_panel_router)
 
+dp.include_router(admin_panel_router)
 dp.include_router(admin_ref_router)
 dp.include_router(start_router)
 
@@ -82,14 +81,12 @@ async def _maybe_apply_billing_pause(tenant: dict) -> tuple[bool, str | None]:
     st = (tenant.get("status") or "active").lower()
     pr = tenant.get("paused_reason")
 
-    # deleted — завжди блокуємо (і краще 410)
     if st == "deleted":
         return True, "deleted"
 
     paid_until = int(tenant.get("paid_until_ts") or 0)
     expired = paid_until > 0 and paid_until <= now
 
-    # Якщо прострочено — авто-пауза billing (але manual не чіпаємо)
     if expired:
         if st == "paused" and pr == "billing":
             return True, "billing"
@@ -102,7 +99,7 @@ async def _maybe_apply_billing_pause(tenant: dict) -> tuple[bool, str | None]:
             tenant["paused_reason"] = "billing"
         return True, "billing"
 
-    # Якщо НЕ прострочено, але раніше було paused billing — авто-resume
+    # якщо баланс/оплата знову ок — авто-resume після billing pause
     if st == "paused" and pr == "billing":
         await _system_set_status(tenant["id"], "active", None)
         tenant["status"] = "active"
@@ -120,10 +117,10 @@ async def _maybe_apply_billing_pause(tenant: dict) -> tuple[bool, str | None]:
 async def on_startup():
     global _BILL_TASK, _DAILY_TASK, _webhook_inited
 
-    # ✅ Міграції 1 раз
+    # ✅ міграції
     await run_migrations()
 
-    # ✅ Ініт
+    # ✅ ініт
     init_tenants()
     init_modules()
 
@@ -137,7 +134,6 @@ async def on_startup():
     log.info("Tenant prefix: %s", settings.TENANT_WEBHOOK_PREFIX)
 
     if _webhook_inited:
-        log.info("Startup: webhook already inited in this worker")
         if _BILL_TASK is None:
             _BILL_TASK = asyncio.create_task(billing_loop(platform_bot, _BILL_STOP))
             log.info("billing loop started")
@@ -221,7 +217,6 @@ async def telegram_webhook(req: Request):
     try:
         await dp.feed_update(platform_bot, update)
     except Exception as e:
-        # щоб Telegram не спамив ретраями — повертаємо 200
         log.exception("platform feed_update failed: %s", e)
 
     return {"ok": True}
