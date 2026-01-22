@@ -37,7 +37,8 @@ platform_bot = Bot(token=settings.BOT_TOKEN)
 dp = Dispatcher()
 
 from rent_platform.platform.handlers.start import router as start_router  # noqa: E402
-
+from rent_platform.platform.handlers.admin_ref import router as admin_ref_router
+dp.include_router(admin_ref_router)
 dp.include_router(start_router)
 
 _webhook_inited = False
