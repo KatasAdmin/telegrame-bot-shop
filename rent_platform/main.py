@@ -13,7 +13,8 @@ from rent_platform.config import settings
 from rent_platform.core.modules import init_modules
 from rent_platform.core.tenant_ctx import init_tenants
 from rent_platform.core.registry import get_module
-
+from rent_platform.platform.handlers.admin_panel import router as admin_panel_router
+dp.include_router(admin_panel_router)
 from rent_platform.db.repo import TenantRepo, ModuleRepo
 from rent_platform.db.migrations import run_migrations
 from rent_platform.db.session import db_execute  # ✅ напряму в БД (без owner_user_id)
