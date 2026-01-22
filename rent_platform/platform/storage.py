@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 import time
 import datetime
-import ReferralRepo, RefPayoutRepo
+from rent_platform.db.repo import ReferralRepo, RefPayoutRepo
 import logging
 from typing import Any
 
 from aiogram import Bot
-from rent_platform.db.repo import ReferralRepo, RefPayoutRepo
+from rent_platform.db.repo
 from rent_platform.config import settings
 from rent_platform.db.repo import PlatformSettingsRepo
 from rent_platform.db.repo import (
