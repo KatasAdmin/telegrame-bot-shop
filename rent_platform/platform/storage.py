@@ -726,7 +726,6 @@ async def partners_get_link(user_id: int, bot_username: str) -> str:
 
 
 async def partners_get_stats(user_id: int) -> dict:
-    # мінімальний набір для UI
     st = await ReferralRepo.stats(int(user_id))
     settings = await ReferralRepo.get_settings()
     return {"stats": st, "settings": settings}
@@ -739,38 +738,19 @@ async def partners_create_payout(
     note: str = "",
 ) -> dict | None:
     """
-    Приймає АБО amount_kop, АБО amount_uah (для сумісності).
-    start.py може слати amount_kop — так і треба.
+    Приймає або amount_kop, або amount_uah (сумісність).
+    start.py зараз шле amount_kop — це ок.
     """
     if amount_kop is None:
-        # fallback якщо викликають по-старому
         amount_uah = int(amount_uah or 0)
-        if amount_uah < 1:
-            return None
-        if amount_uah > 200000:
+        if amount_uah < 1 or amount_uah > 200000:
             return None
         amount_kop = amount_uah * 100
 
     amount_kop = int(amount_kop)
-    if amount_kop < 100:  # менше 1 грн
+    if amount_kop < 100:  # < 1 грн
         return None
     if amount_kop > 200000 * 100:
         return None
 
     return await RefPayoutRepo.create_request(int(user_id), amount_kop, note=note)
-async def partners_get_link(user_id: int, bot_username: str) -> str:
-    return f"https://t.me/{bot_username}?start=ref_{int(user_id)}"
-
-
-async def partners_get_stats(user_id: int) -> dict:
-    st = await ReferralRepo.stats(user_id)
-    settings = await ReferralRepo.get_settings()
-    return {"stats": st, "settings": settings}
-
-
-async def partners_create_payout(user_id: int, amount_uah: int, note: str = "") -> dict | None:
-    amount_uah = int(amount_uah)
-    if amount_uah < 1:
-        return None
-    amount_kop = amount_uah * 100
-    return await RefPayoutRepo.create_request(user_id, amount_kop, note=note)
