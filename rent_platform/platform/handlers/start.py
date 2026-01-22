@@ -967,6 +967,36 @@ async def ref_payout_receive_amount(message: Message, state: FSMContext) -> None
     )
 
 
+
+@router.message(RefPayoutFlow.waiting_amount, F.text, ~F.text.in_(MENU_TEXTS))
+async def ref_payout_receive_amount(message: Message, state: FSMContext) -> None:
+    txt = (message.text or "").strip().replace(" ", "")
+    if not txt.isdigit():
+        await message.answer("❌ Введи число в грн, напр. 200")
+        return
+
+    amount_uah = int(txt)
+    await state.clear()
+
+    req = await partners_create_payout(message.from_user.id, amount_uah=amount_uah, note="manual")
+    if not req:
+        await message.answer(
+            "⚠️ Не вийшло створити заявку.\n"
+            "Причини: недостатньо доступно або сума менша за мінімальну.",
+            reply_markup=back_to_menu_kb(),
+        )
+        return
+
+    await message.answer(
+        "✅ *Заявку створено*\n\n"
+        f"ID: `{int(req.get('id') or 0)}`\n"
+        f"Сума: *{amount_uah} грн*\n"
+        "Статус: `pending`",
+        parse_mode="Markdown",
+        reply_markup=back_to_menu_kb(),
+    )
+
+
 @router.message(F.text)
 async def _debug_unhandled_text(message: Message, state: FSMContext) -> None:
     st = await state.get_state()
