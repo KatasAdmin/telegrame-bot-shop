@@ -527,10 +527,9 @@ async def confirm_topup_paid_test(user_id: int, invoice_id: int) -> dict | None:
             user_id=user_id,
             kind="topup",
             amount_kop=amount_kop,
-            event_key=f"topup:{invoice_id}",  # ключ унікальності (щоб не дублювалось)
+            event_key=f"topup:{invoice_id}",
             title="Партнерка з поповнення",
             details=f"invoice_id={invoice_id}, provider={inv.get('provider')}",
-            meta={"invoice_id": invoice_id, "provider": inv.get("provider")},
         )
     except Exception:
         # партнерка не повинна ламати поповнення
