@@ -491,102 +491,96 @@ async def create_topup_invoice(user_id: int, amount_uah: int, provider: str) -> 
 async def confirm_topup_paid_test(user_id: int, invoice_id: int) -> dict | None:
     """
     Тестовий confirm: імітуємо оплату інвойса.
-    ВАЖЛИВО:
-    - ідемпотентність: повторний confirm не дає подвійний баланс
-    - balance додаємо через AccountRepo.add_balance (атомарно)
-    - після зарахування робимо auto-resume всіх paused_reason='billing'
+
+    Гарантії:
+    - no double credit: only the FIRST call can flip invoice pending->paid (UPDATE ... WHERE status='pending')
+    - idempotent: all other calls return already=True without changing balance
+    - after credit: auto-resume tenants paused by billing
     """
     invoice_id = int(invoice_id)
 
+    # 0) Перевіряємо, що інвойс існує і належить юзеру (для UI/статусу)
     inv = await InvoiceRepo.get_for_owner(user_id, invoice_id)
     log.info("TOPUP confirm requested: uid=%s invoice_id=%s inv=%s", user_id, invoice_id, inv)
-
     if not inv:
         return None
 
-    amount_kop = int(inv.get("amount_kop") or 0)
-    if amount_kop <= 0:
-        return None
+    # helper: збирає баланс + пробує auto-resume + список paused billing
+    async def _build_already_response(status: str) -> dict:
+        await AccountRepo.ensure(user_id)
+        acc = await AccountRepo.get(user_id)
+        balance_kop = int((acc or {}).get("balance_kop") or 0)
 
-    # 0) Ідемпотентність по ledger: якщо вже є topup з цим invoice_id — нічого не додаємо вдруге
+        resumed_cnt = 0
+        try:
+            resumed_cnt = int(await TenantRepo.system_resume_all_billing_for_owner(user_id) or 0)
+        except Exception:
+            resumed_cnt = 0
+
+        bots = await TenantRepo.list_by_owner(user_id)
+        paused_billing_ids: list[str] = []
+        for b in bots or []:
+            st = (b.get("status") or "").lower()
+            reason = (b.get("paused_reason") or "").lower()
+            if st == "paused" and reason == "billing":
+                paused_billing_ids.append(b["id"])
+
+        return {
+            "already": True,
+            "status": (status or "").lower(),
+            "new_balance_kop": balance_kop,
+            "amount_kop": 0,
+            "resumed_cnt": resumed_cnt,
+            "paused_billing_ids": paused_billing_ids,
+        }
+
+    # 1) Швидка ідемпотентність по ledger (дешево і корисно)
+    #    Але це НЕ основний захист (основний — UPDATE pending->paid).
     try:
-        already = await LedgerRepo.has_topup_invoice(user_id, invoice_id)
+        if await LedgerRepo.has_topup_invoice(user_id, invoice_id):
+            return await _build_already_response((inv.get("status") or "").lower())
     except Exception:
-        already = False
+        pass
 
-    if already:
-        await AccountRepo.ensure(user_id)
-        acc = await AccountRepo.get(user_id)
-        balance_kop = int((acc or {}).get("balance_kop") or 0)
+    # 2) ОСНОВНИЙ захист від double credit:
+    #    намагаємось атомарно pending -> paid.
+    q = """
+    UPDATE billing_invoices
+    SET status = 'paid',
+        paid_ts = :ts
+    WHERE id = :id
+      AND owner_user_id = :uid
+      AND status = 'pending'
+    RETURNING id, owner_user_id, provider, amount_kop, status
+    """
+    paid_row = await db_fetch_one(q, {"id": invoice_id, "uid": int(user_id), "ts": int(time.time())})
 
-        # можна все одно спробувати підняти ботів (це безпечно)
-        resumed_cnt = 0
-        try:
-            resumed_cnt = await TenantRepo.system_resume_all_billing_for_owner(user_id)
-        except Exception:
-            pass
+    if not paid_row:
+        # або вже paid / canceled / не pending — НІЧОГО не донараховуємо
+        return await _build_already_response((inv.get("status") or "").lower())
 
-        bots = await TenantRepo.list_by_owner(user_id)
-        paused_billing_ids: list[str] = []
-        for b in bots or []:
-            st = (b.get("status") or "").lower()
-            reason = (b.get("paused_reason") or "").lower()
-            if st == "paused" and reason == "billing":
-                paused_billing_ids.append(b["id"])
+    amount_kop = int(paid_row.get("amount_kop") or 0)
+    provider = paid_row.get("provider") or inv.get("provider")
+    if amount_kop <= 0:
+        # дуже дивно, але безпечніше не нараховувати
+        return await _build_already_response("paid")
 
-        return {
-            "already": True,
-            "status": (inv.get("status") or "").lower(),
-            "new_balance_kop": balance_kop,
-            "amount_kop": 0,
-            "resumed_cnt": resumed_cnt,
-            "paused_billing_ids": paused_billing_ids,
-        }
-
-    # 1) Перевіряємо статус інвойса (якщо вже не pending — теж не донараховуємо)
-    status = (inv.get("status") or "").lower()
-    if status != "pending":
-        await AccountRepo.ensure(user_id)
-        acc = await AccountRepo.get(user_id)
-        balance_kop = int((acc or {}).get("balance_kop") or 0)
-
-        resumed_cnt = 0
-        try:
-            resumed_cnt = await TenantRepo.system_resume_all_billing_for_owner(user_id)
-        except Exception:
-            pass
-
-        bots = await TenantRepo.list_by_owner(user_id)
-        paused_billing_ids: list[str] = []
-        for b in bots or []:
-            st = (b.get("status") or "").lower()
-            reason = (b.get("paused_reason") or "").lower()
-            if st == "paused" and reason == "billing":
-                paused_billing_ids.append(b["id"])
-
-        return {
-            "already": True,
-            "status": status,
-            "new_balance_kop": balance_kop,
-            "amount_kop": 0,
-            "resumed_cnt": resumed_cnt,
-            "paused_billing_ids": paused_billing_ids,
-        }
-
-    # 2) Позначаємо paid
-    await InvoiceRepo.mark_paid(user_id, invoice_id)
-
-    # 3) Атомарно додаємо баланс
+    # 3) Зарахування балансу (після того як інвойс вже "зафіксовано" як paid)
     await AccountRepo.add_balance(user_id, +amount_kop)
 
-    # 4) Ledger topup
-    await LedgerRepo.add(
-        user_id,
-        "topup",
-        +amount_kop,
-        tenant_id=None,
-        meta={"invoice_id": invoice_id, "provider": inv.get("provider")},
-    )
+    # 4) Ledger topup (тепер уже точно один раз)
+    try:
+        await LedgerRepo.add(
+            user_id,
+            "topup",
+            +amount_kop,
+            tenant_id=None,
+            meta={"invoice_id": invoice_id, "provider": provider},
+        )
+    except Exception:
+        # якщо ledger впав — баланс вже поповнений.
+        # для MVP ок, але в логах хай буде видно
+        log.exception("Ledger topup insert failed: uid=%s invoice_id=%s", user_id, invoice_id)
 
     # 5) Рефералка (не ламає топап)
     try:
@@ -596,19 +590,19 @@ async def confirm_topup_paid_test(user_id: int, invoice_id: int) -> dict | None:
             amount_kop=amount_kop,
             event_key=f"topup:{invoice_id}",
             title="Партнерка з поповнення",
-            details=f"invoice_id={invoice_id}, provider={inv.get('provider')}",
+            details=f"invoice_id={invoice_id}, provider={provider}",
         )
     except Exception:
         log.exception("Referral commission failed for topup invoice_id=%s uid=%s", invoice_id, user_id)
 
-    # 6) ✅ Auto-resume після поповнення
+    # 6) Auto-resume після поповнення
     resumed_cnt = 0
     try:
-        resumed_cnt = await TenantRepo.system_resume_all_billing_for_owner(user_id)
+        resumed_cnt = int(await TenantRepo.system_resume_all_billing_for_owner(user_id) or 0)
     except Exception:
-        pass
+        resumed_cnt = 0
 
-    # 7) Повернемо баланс і список тих, хто ще лишився на billing pause (як правило, буде порожній)
+    # 7) Повертаємо баланс і список тих, хто ще на billing pause
     await AccountRepo.ensure(user_id)
     acc = await AccountRepo.get(user_id)
     new_balance = int((acc or {}).get("balance_kop") or 0)
