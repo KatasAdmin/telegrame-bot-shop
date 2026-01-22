@@ -872,8 +872,9 @@ async def cb_my_bot_delete(call: CallbackQuery) -> None:
 # ======================================================================
 # Config (tenant keys)
 # ======================================================================
-async def _render_config(message: Message, bot_id: str) -> None:
-    data = await get_bot_config(message.from_user.id, bot_id)
+async def _render_config(user_id: int, message: Message, bot_id: str) -> None:
+    # ВАЖЛИВО: user_id беремо з call.from_user.id, а не з message.from_user.id
+    data = await get_bot_config(user_id, bot_id)
     if not data:
         await message.answer("⚠️ Не знайшов бота або нема доступу.", reply_markup=back_to_menu_kb())
         return
@@ -898,7 +899,7 @@ async def _render_config(message: Message, bot_id: str) -> None:
 async def cb_cfg_open(call: CallbackQuery) -> None:
     if call.message:
         bot_id = call.data.split("pl:cfg:open:", 1)[1]
-        await _render_config(call.message, bot_id)
+        await _render_config(call.from_user.id, call.message, bot_id)
     await call.answer()
 
 
@@ -919,7 +920,7 @@ async def cb_cfg_toggle(call: CallbackQuery) -> None:
     await call.answer("Ок ✅" if ok else "Не можна", show_alert=not ok)
 
     if ok:
-        await _render_config(call.message, bot_id)
+        await _render_config(call.from_user.id, call.message, bot_id)
 
 
 @router.callback_query(F.data.startswith("pl:cfg:set:"))
@@ -947,7 +948,7 @@ async def cb_cfg_set(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
 
 
-@router.message(ConfigFlow.waiting_secret_value, F.text, ~F.text.in_(MENU_TEXTS))
+@router.message(ConfigFlow.waiting_secret_value, F.text)
 async def cfg_receive_secret(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     bot_id = data.get("cfg_bot_id")
@@ -970,8 +971,7 @@ async def cfg_receive_secret(message: Message, state: FSMContext) -> None:
         return
 
     await message.answer("✅ Зберіг.", reply_markup=back_to_menu_kb())
-    await _render_config(message, bot_id)
-
+    await _render_config(message.from_user.id, message, bot_id)
 
 # ======================================================================
 # TopUp (баланс) — MVP
