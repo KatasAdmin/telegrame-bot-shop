@@ -813,6 +813,29 @@ class PlatformSettingsRepo:
         """
         await db_execute(q, {"u": (url or "").strip(), "ts": int(time.time())})
 
+    # ✅ ДОДАТИ ОЦЕ:
+    @staticmethod
+    async def get_ref_settings() -> dict:
+        row = await PlatformSettingsRepo.get()
+        raw = (row.get("ref_json") if row else "") or ""
+        try:
+            return json.loads(raw) if raw.strip() else {}
+        except Exception:
+            return {}
+
+    @staticmethod
+    async def set_ref_settings(payload: dict) -> None:
+        # гарантуємо рядок id=1
+        q = f"""
+        INSERT INTO {PlatformSettingsRepo.TABLE} (id, cabinet_banner_url, ref_json, updated_ts)
+        VALUES (1, '', :rj, :ts)
+        ON CONFLICT (id)
+        DO UPDATE SET ref_json = EXCLUDED.ref_json,
+                      updated_ts = EXCLUDED.updated_ts
+        """
+        await db_execute(q, {"rj": json.dumps(payload or {}, ensure_ascii=False), "ts": int(time.time())})
+
+
 class ReferralRepo:
     @staticmethod
     async def bind(user_id: int, referrer_id: int) -> bool:
