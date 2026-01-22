@@ -556,6 +556,25 @@ class AccountRepo:
         )
         return int(row["balance_kop"]) if row and row.get("balance_kop") is not None else None
 
+    @staticmethod
+    async def try_charge(owner_user_id: int, charge_kop: int, min_balance_kop: int) -> int | None:
+        await AccountRepo.ensure(owner_user_id)
+        q = """
+        UPDATE owner_accounts
+        SET balance_kop = balance_kop - :c,
+            updated_ts = :ts
+        WHERE owner_user_id = :uid
+          AND (balance_kop - :c) >= :min_bal
+        RETURNING balance_kop
+        """
+        row = await db_fetch_one(q, {
+            "uid": int(owner_user_id),
+            "c": int(charge_kop),
+            "min_bal": int(min_balance_kop),
+            "ts": int(time.time()),
+        })
+        return int(row["balance_kop"]) if row else None
+
 
 class LedgerRepo:
 
