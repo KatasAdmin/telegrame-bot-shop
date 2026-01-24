@@ -174,3 +174,80 @@ class LunaShopRepo:
         LIMIT :lim
         """
         return await db_fetch_all(q, {"tid": tenant_id, "uid": int(user_id), "lim": int(limit)})
+        
+        
+    # ---------- hits / sale ----------
+    @staticmethod
+    async def list_hits(tenant_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        q = """
+        SELECT id, name, price_kop
+        FROM luna_shop_products
+        WHERE tenant_id = :tid
+          AND is_active = true
+          AND is_hit = true
+        ORDER BY id DESC
+        LIMIT :lim
+        """
+        return await db_fetch_all(q, {"tid": tenant_id, "lim": int(limit)})
+
+    @staticmethod
+    async def list_sale(tenant_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        q = """
+        SELECT id, name, price_kop
+        FROM luna_shop_products
+        WHERE tenant_id = :tid
+          AND is_active = true
+          AND is_sale = true
+        ORDER BY id DESC
+        LIMIT :lim
+        """
+        return await db_fetch_all(q, {"tid": tenant_id, "lim": int(limit)})
+
+    # ---------- favorites ----------
+    @staticmethod
+    async def favorites_toggle(tenant_id: str, user_id: int, product_id: int) -> bool:
+        """
+        Якщо товар в обраному — прибрати.
+        Якщо нема — додати.
+        Повертає True якщо тепер в обраному, False якщо прибрали.
+        """
+        # чи є зараз?
+        q0 = """
+        SELECT 1
+        FROM luna_shop_favorites
+        WHERE tenant_id = :tid AND user_id = :uid AND product_id = :pid
+        LIMIT 1
+        """
+        exists = await db_fetch_one(q0, {"tid": tenant_id, "uid": int(user_id), "pid": int(product_id)})
+
+        if exists:
+            qd = """
+            DELETE FROM luna_shop_favorites
+            WHERE tenant_id = :tid AND user_id = :uid AND product_id = :pid
+            """
+            await db_execute(qd, {"tid": tenant_id, "uid": int(user_id), "pid": int(product_id)})
+            return False
+
+        qi = """
+        INSERT INTO luna_shop_favorites (tenant_id, user_id, product_id, created_ts)
+        VALUES (:tid, :uid, :pid, :ts)
+        ON CONFLICT (tenant_id, user_id, product_id) DO NOTHING
+        """
+        await db_execute(qi, {"tid": tenant_id, "uid": int(user_id), "pid": int(product_id), "ts": int(time.time())})
+        return True
+
+    @staticmethod
+    async def favorites_list(tenant_id: str, user_id: int, limit: int = 50) -> list[dict[str, Any]]:
+        q = """
+        SELECT p.id, p.name, p.price_kop
+        FROM luna_shop_favorites f
+        JOIN luna_shop_products p
+          ON p.tenant_id = f.tenant_id AND p.id = f.product_id
+        WHERE f.tenant_id = :tid
+          AND f.user_id = :uid
+          AND p.is_active = true
+        ORDER BY f.created_ts DESC
+        LIMIT :lim
+        """
+        return await db_fetch_all(q, {"tid": tenant_id, "uid": int(user_id), "lim": int(limit)})
+
