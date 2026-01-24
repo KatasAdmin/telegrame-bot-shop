@@ -374,13 +374,19 @@ class ModuleRepo:
     async def ensure_defaults(tenant_id: str, product_key: str | None = None) -> None:
         """
         core — завжди
-        product_key — якщо оренда через маркетплейс, то увімкнути модуль продукту
+        product_key — якщо оренда через маркетплейс, то увімкнути модуль продукту (module_key)
         fallback — якщо руками додали токен без продукту -> shop
         """
         await ModuleRepo.enable(tenant_id, "core")
 
         if product_key:
-            await ModuleRepo.enable(tenant_id, product_key)
+            meta = PRODUCT_CATALOG.get(product_key) or {}
+            module_key = meta.get("module_key")
+
+            if not module_key:
+                raise RuntimeError(f"Product '{product_key}' missing module_key in PRODUCT_CATALOG")
+
+            await ModuleRepo.enable(tenant_id, str(module_key))
         else:
             await ModuleRepo.enable(tenant_id, "shop")
 
