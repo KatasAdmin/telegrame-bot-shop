@@ -1,4 +1,3 @@
-# rent_platform/products/catalog.py
 from __future__ import annotations
 
 from typing import Any
@@ -6,7 +5,7 @@ from typing import Any
 PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
     "telegram_shop": {
         "title": "🛒 Телеграм магазин",
-        "short": "Готовий каркас магазину (каталог/категорії/товари + адмін-команди)",
+        "short": "Каркас магазину + адмін-додавання товарів",
         "desc": (
             "🛒 <b>Телеграм магазин</b>\n\n"
             "Готовий каркас магазину:\n"
@@ -16,8 +15,13 @@ PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         ),
         "rate_per_min_uah": 0.02,
 
-        # ✅ ключ всюди один і той самий
+        # ВАЖЛИВО: module_key == product_key
         "module_key": "telegram_shop",
-        "handler": "rent_platform.modules.telegram_shop.router:handle_update",
+
+        # handler продукту
+        "handler": "rent_platform.modules.luna_shop.router:handle_update",
+
+        # welcome для /start (викликає core)
+        "welcome": "rent_platform.modules.luna_shop.manifest:get_welcome_text",
     }
 }
