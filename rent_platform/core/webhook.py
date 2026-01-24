@@ -9,15 +9,17 @@ from rent_platform.core.registry import get_module
 
 
 async def handle_webhook(tenant: Tenant, update: dict[str, Any]) -> None:
-    bot = Bot(token=tenant.bot_token)
-    try:
-        for module_name in tenant.active_modules:
-            module = get_module(module_name)
-            if not module:
-                continue
+    mods = list(tenant.active_modules)
 
-            handled = await module(tenant, update, bot)
-            if handled:
-                return
-    finally:
-        await bot.session.close()
+    # core — завжди в кінець
+    if "core" in mods:
+        mods = [m for m in mods if m != "core"] + ["core"]
+
+    for module_name in mods:
+        module = get_module(module_name)
+        if not module:
+            continue
+
+        handled = await module(tenant, update)
+        if handled:
+            return
