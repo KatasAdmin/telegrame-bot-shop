@@ -1,6 +1,6 @@
 """luna_shop tables
 
-Revision ID: 2026_01_25_luna_shop_tables
+Revision ID: luna_shop_tables
 Revises: add_withdraw_balance_kop
 Create Date: 2026-01-25
 """
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = "2026_01_25_luna_shop_tables"
+revision = "luna_shop_tables"
 down_revision = "add_withdraw_balance_kop"
 branch_labels = None
 depends_on = None
