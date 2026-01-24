@@ -1,0 +1,1 @@
+# rent_platform/modules/telegram_shop/__init__.py
