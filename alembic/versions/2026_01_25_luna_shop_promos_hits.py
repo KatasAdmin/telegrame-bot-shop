@@ -1,7 +1,7 @@
 """luna_shop promos & hits
 
-Revision ID: 2026_01_25_luna_shop_promos_hits
-Revises: 2026_01_25_luna_shop_tables
+Revision ID: luna_shop_promos_hits
+Revises: luna_shop_tables
 Create Date: 2026-01-25
 """
 from __future__ import annotations
@@ -11,8 +11,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = "2026_01_25_luna_shop_promos_hits"
-down_revision = "2026_01_25_luna_shop_tables"
+revision = "luna_shop_promos_hits"
+down_revision = "luna_shop_tables"
 branch_labels = None
 depends_on = None
 
@@ -42,7 +42,6 @@ def upgrade() -> None:
     )
 
     # --- HITS (хіти) ---
-    # хіти привʼязані до товарів (product_id), можна виводити окремою вкладкою
     op.create_table(
         "luna_shop_hits",
         sa.Column("tenant_id", sa.Text(), nullable=False),
