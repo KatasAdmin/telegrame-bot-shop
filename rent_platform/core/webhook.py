@@ -9,10 +9,6 @@ from rent_platform.core.registry import get_module
 
 
 async def handle_webhook(tenant: Tenant, update: dict[str, Any]) -> None:
-    """
-    Викликається для tenant-ботів.
-    Дає кожному активному модулю шанс обробити апдейт.
-    """
     bot = Bot(token=tenant.bot_token)
     try:
         for module_name in tenant.active_modules:
