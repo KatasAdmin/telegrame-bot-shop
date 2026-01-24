@@ -1,10 +1,12 @@
-# rent_platform/core/registry.py
 from __future__ import annotations
 
 from typing import Awaitable, Callable, Any
+from aiogram import Bot
 
-# Один модуль = одна async-функція/хендлер (може бути router factory пізніше)
-ModuleHandler = Callable[..., Awaitable[Any]]
+from rent_platform.core.tenant_ctx import Tenant
+
+# Один модуль = async handler: (tenant, update, bot) -> bool
+ModuleHandler = Callable[[Tenant, dict[str, Any], Bot], Awaitable[bool]]
 
 MODULES: dict[str, ModuleHandler] = {}
 
