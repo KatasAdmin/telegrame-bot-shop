@@ -1,4 +1,2 @@
+# rent_platform/modules/luna_shop/__init__.py
 from __future__ import annotations
-from .router import handle_update
-
-__all__ = ["handle_update"]
