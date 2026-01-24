@@ -21,15 +21,16 @@ def _load_handler(handler_path: str):
 
 
 def init_modules() -> None:
-    # core (завжди)
+    # core (завжди) — критично
     try:
         from rent_platform.modules.core.router import handle_update as core_handler
         register_module("core", core_handler)
+        log.info("Module registered: core")
     except Exception as e:
         log.exception("Failed to init module 'core': %s", e)
         raise
 
-    # products from catalog (авто)
+    # products from catalog (авто) — некритично
     for product_key, meta in PRODUCT_CATALOG.items():
         module_key = meta.get("module_key")
         handler_path = meta.get("handler")
@@ -43,5 +44,6 @@ def init_modules() -> None:
             register_module(module_key, handler)
             log.info("Module registered: %s (product=%s)", module_key, product_key)
         except Exception as e:
+            # НЕ валимо всю систему через один модуль
             log.exception("Failed to init product module '%s' (product=%s): %s", module_key, product_key, e)
-            raise
+            continue
