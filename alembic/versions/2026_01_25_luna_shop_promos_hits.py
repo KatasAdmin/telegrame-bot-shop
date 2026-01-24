@@ -1,7 +1,7 @@
 """luna_shop promos & hits
 
 Revision ID: luna_shop_promos_hits
-Revises: luna_shop_tables
+Revises: 2026_01_25_luna_shop_tables
 Create Date: 2026-01-25
 """
 from __future__ import annotations
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = "luna_shop_promos_hits"
-down_revision = "luna_shop_tables"
+down_revision = "2026_01_25_luna_shop_tables"
 branch_labels = None
 depends_on = None
 
