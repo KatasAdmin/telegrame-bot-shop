@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from typing import Awaitable, Callable, Any
-from aiogram import Bot
 
+from aiogram import Bot
 from rent_platform.core.tenant_ctx import Tenant
 
-# Один модуль = async handler: (tenant, update, bot) -> bool
 ModuleHandler = Callable[[Tenant, dict[str, Any], Bot], Awaitable[bool]]
 
 MODULES: dict[str, ModuleHandler] = {}
