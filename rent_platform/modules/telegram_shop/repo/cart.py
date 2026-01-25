@@ -22,7 +22,13 @@ class TelegramShopCartRepo:
         """
         await db_execute(
             q,
-            {"tid": tenant_id, "uid": int(user_id), "pid": int(product_id), "q": qty, "ts": int(time.time())},
+            {
+                "tid": tenant_id,
+                "uid": int(user_id),
+                "pid": int(product_id),
+                "q": qty,
+                "ts": int(time.time()),
+            },
         )
 
     @staticmethod
@@ -42,7 +48,13 @@ class TelegramShopCartRepo:
         """
         row = await db_fetch_one(
             q,
-            {"tid": tenant_id, "uid": int(user_id), "pid": int(product_id), "d": delta, "ts": int(time.time())},
+            {
+                "tid": tenant_id,
+                "uid": int(user_id),
+                "pid": int(product_id),
+                "d": delta,
+                "ts": int(time.time()),
+            },
         )
         qty = int(row["qty"]) if row and row.get("qty") is not None else 0
         if qty <= 0:
