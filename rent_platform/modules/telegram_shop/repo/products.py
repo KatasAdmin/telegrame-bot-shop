@@ -337,3 +337,22 @@ class ProductsRepo:
         """
         row = await db_fetch_one(q, {"tid": tenant_id, "pid": int(product_id)})
         return str(row["file_id"]) if row and row.get("file_id") else None
+
+
+    @staticmethod
+    async def set_price_kop(tenant_id: str, product_id: int, price_kop: int) -> None:
+        q = """
+        UPDATE telegram_shop_products
+        SET price_kop = :p
+        WHERE tenant_id = :tid AND id = :pid
+        """
+        await db_execute(q, {"tid": tenant_id, "pid": int(product_id), "p": int(price_kop)})
+
+    @staticmethod
+    async def set_name(tenant_id: str, product_id: int, name: str) -> None:
+        q = """
+        UPDATE telegram_shop_products
+        SET name = :n
+        WHERE tenant_id = :tid AND id = :pid
+        """
+        await db_execute(q, {"tid": tenant_id, "pid": int(product_id), "n": (name or "").strip()[:128]})
