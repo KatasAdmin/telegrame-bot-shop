@@ -128,7 +128,7 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
     tenant_id = str(tenant["id"])
     chat_id = _get_chat_id(msg)
     user_id = _get_user_id(msg)
-    is_admin = _is_admin_stub(user_id)
+    is_admin = is_admin_user(tenant=tenant, user_id=user_id)
 
     # commands
     if text in ("/start", "/shop"):
