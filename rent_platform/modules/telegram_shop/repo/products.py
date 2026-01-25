@@ -7,65 +7,29 @@ from rent_platform.db.session import db_fetch_one, db_fetch_all, db_execute
 
 
 class ProductsRepo:
-    # --------- products list/get ---------
+    # --------- products list/get (active) ---------
 
     @staticmethod
-    async def list_active(
-        tenant_id: str,
-        *,
-        category_id: int | None = None,
-        limit: int = 50,
-    ) -> list[dict[str, Any]]:
+    async def list_active(tenant_id: str, limit: int = 50) -> list[dict[str, Any]]:
         q = """
         SELECT
             id,
             tenant_id,
-            category_id,
             name,
             price_kop,
             is_active,
+            category_id,
             COALESCE(is_hit, false) AS is_hit,
             COALESCE(promo_price_kop, 0) AS promo_price_kop,
             COALESCE(promo_until_ts, 0) AS promo_until_ts,
             COALESCE(description, '') AS description,
             created_ts
         FROM telegram_shop_products
-        WHERE tenant_id = :tid
-          AND is_active = true
-          AND (:cid IS NULL OR category_id = :cid)
-        ORDER BY created_ts DESC, id DESC
+        WHERE tenant_id = :tid AND is_active = true
+        ORDER BY id DESC
         LIMIT :lim
         """
-        return await db_fetch_all(q, {"tid": str(tenant_id), "cid": category_id, "lim": int(limit)}) or []
-
-    @staticmethod
-    async def list_inactive(
-        tenant_id: str,
-        *,
-        category_id: int | None = None,
-        limit: int = 50,
-    ) -> list[dict[str, Any]]:
-        q = """
-        SELECT
-            id,
-            tenant_id,
-            category_id,
-            name,
-            price_kop,
-            is_active,
-            COALESCE(is_hit, false) AS is_hit,
-            COALESCE(promo_price_kop, 0) AS promo_price_kop,
-            COALESCE(promo_until_ts, 0) AS promo_until_ts,
-            COALESCE(description, '') AS description,
-            created_ts
-        FROM telegram_shop_products
-        WHERE tenant_id = :tid
-          AND is_active = false
-          AND (:cid IS NULL OR category_id = :cid)
-        ORDER BY created_ts DESC, id DESC
-        LIMIT :lim
-        """
-        return await db_fetch_all(q, {"tid": str(tenant_id), "cid": category_id, "lim": int(limit)}) or []
+        return await db_fetch_all(q, {"tid": tenant_id, "lim": int(limit)}) or []
 
     @staticmethod
     async def get_active(tenant_id: str, product_id: int) -> dict | None:
@@ -73,10 +37,10 @@ class ProductsRepo:
         SELECT
             id,
             tenant_id,
-            category_id,
             name,
             price_kop,
             is_active,
+            category_id,
             COALESCE(is_hit, false) AS is_hit,
             COALESCE(promo_price_kop, 0) AS promo_price_kop,
             COALESCE(promo_until_ts, 0) AS promo_until_ts,
@@ -85,7 +49,7 @@ class ProductsRepo:
         FROM telegram_shop_products
         WHERE tenant_id = :tid AND id = :pid AND is_active = true
         """
-        return await db_fetch_one(q, {"tid": str(tenant_id), "pid": int(product_id)})
+        return await db_fetch_one(q, {"tid": tenant_id, "pid": int(product_id)})
 
     @staticmethod
     async def add(
@@ -101,19 +65,19 @@ class ProductsRepo:
     ) -> int | None:
         q = """
         INSERT INTO telegram_shop_products
-            (tenant_id, category_id, name, price_kop, is_active, is_hit, promo_price_kop, promo_until_ts, created_ts)
+            (tenant_id, name, price_kop, is_active, category_id, is_hit, promo_price_kop, promo_until_ts, created_ts)
         VALUES
-            (:tid, :cid, :n, :p, :a, :h, :pp, :pu, :ts)
+            (:tid, :n, :p, :a, :cid, :h, :pp, :pu, :ts)
         RETURNING id
         """
         row = await db_fetch_one(
             q,
             {
                 "tid": str(tenant_id),
-                "cid": category_id,
                 "n": (name or "").strip()[:128],
                 "p": int(price_kop),
                 "a": bool(is_active),
+                "cid": int(category_id) if category_id is not None else None,
                 "h": bool(is_hit),
                 "pp": int(promo_price_kop),
                 "pu": int(promo_until_ts),
@@ -129,7 +93,36 @@ class ProductsRepo:
         SET is_active = :a
         WHERE tenant_id = :tid AND id = :pid
         """
-        await db_execute(q, {"tid": str(tenant_id), "pid": int(product_id), "a": bool(is_active)})
+        await db_execute(q, {"tid": tenant_id, "pid": int(product_id), "a": bool(is_active)})
+
+    # --------- category helpers ---------
+
+    @staticmethod
+    async def set_category(tenant_id: str, product_id: int, category_id: int | None) -> None:
+        q = """
+        UPDATE telegram_shop_products
+        SET category_id = :cid
+        WHERE tenant_id = :tid AND id = :pid
+        """
+        await db_execute(
+            q,
+            {
+                "tid": tenant_id,
+                "pid": int(product_id),
+                "cid": int(category_id) if category_id is not None else None,
+            },
+        )
+
+    @staticmethod
+    async def backfill_category_for_all_products(tenant_id: str, category_id: int) -> None:
+        q = """
+        UPDATE telegram_shop_products
+        SET category_id = :cid
+        WHERE tenant_id = :tid AND category_id IS NULL
+        """
+        await db_execute(q, {"tid": tenant_id, "cid": int(category_id)})
+
+    # --------- hits / promos ---------
 
     @staticmethod
     async def set_hit(tenant_id: str, product_id: int, is_hit: bool) -> None:
@@ -138,7 +131,7 @@ class ProductsRepo:
         SET is_hit = :h
         WHERE tenant_id = :tid AND id = :pid
         """
-        await db_execute(q, {"tid": str(tenant_id), "pid": int(product_id), "h": bool(is_hit)})
+        await db_execute(q, {"tid": tenant_id, "pid": int(product_id), "h": bool(is_hit)})
 
     @staticmethod
     async def set_promo(tenant_id: str, product_id: int, promo_price_kop: int, promo_until_ts: int) -> None:
@@ -150,8 +143,49 @@ class ProductsRepo:
         """
         await db_execute(
             q,
-            {"tid": str(tenant_id), "pid": int(product_id), "pp": int(promo_price_kop), "pu": int(promo_until_ts)},
+            {"tid": tenant_id, "pid": int(product_id), "pp": int(promo_price_kop), "pu": int(promo_until_ts)},
         )
+
+    # --------- navigation helpers (for catalog cards) ---------
+    # NOTE: We show newest product first (DESC).
+    # prev = newer (higher id), next = older (lower id)
+
+    @staticmethod
+    async def get_first_active(tenant_id: str) -> dict | None:
+        q = """
+        SELECT id
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid AND is_active = true
+        ORDER BY id DESC
+        LIMIT 1
+        """
+        return await db_fetch_one(q, {"tid": tenant_id})
+
+    @staticmethod
+    async def get_prev_active(tenant_id: str, product_id: int) -> dict | None:
+        # prev = newer (higher id) in DESC order
+        q = """
+        SELECT id
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid AND is_active = true AND id > :pid
+        ORDER BY id ASC
+        LIMIT 1
+        """
+        return await db_fetch_one(q, {"tid": tenant_id, "pid": int(product_id)})
+
+    @staticmethod
+    async def get_next_active(tenant_id: str, product_id: int) -> dict | None:
+        # next = older (lower id) in DESC order
+        q = """
+        SELECT id
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid AND is_active = true AND id < :pid
+        ORDER BY id DESC
+        LIMIT 1
+        """
+        return await db_fetch_one(q, {"tid": tenant_id, "pid": int(product_id)})
+
+    # --------- description ---------
 
     @staticmethod
     async def set_description(tenant_id: str, product_id: int, description: str) -> None:
@@ -160,83 +194,20 @@ class ProductsRepo:
         SET description = :d
         WHERE tenant_id = :tid AND id = :pid
         """
-        await db_execute(q, {"tid": str(tenant_id), "pid": int(product_id), "d": (description or "").strip()})
-
-    # --------- navigation helpers (newest first) ---------
-
-    @staticmethod
-    async def get_first_active(tenant_id: str, *, category_id: int | None = None) -> dict | None:
-        q = """
-        SELECT id
-        FROM telegram_shop_products
-        WHERE tenant_id = :tid AND is_active = true
-          AND (:cid IS NULL OR category_id = :cid)
-        ORDER BY created_ts DESC, id DESC
-        LIMIT 1
-        """
-        return await db_fetch_one(q, {"tid": str(tenant_id), "cid": category_id})
-
-    @staticmethod
-    async def get_next_active(tenant_id: str, product_id: int, *, category_id: int | None = None) -> dict | None:
-        """
-        "Next" in our order (created_ts DESC, id DESC) == older item.
-        """
-        q = """
-        WITH cur AS (
-            SELECT created_ts, id
-            FROM telegram_shop_products
-            WHERE tenant_id = :tid AND id = :pid AND is_active = true
-        )
-        SELECT p.id
-        FROM telegram_shop_products p, cur
-        WHERE p.tenant_id = :tid
-          AND p.is_active = true
-          AND (:cid IS NULL OR p.category_id = :cid)
-          AND (
-               p.created_ts < cur.created_ts
-               OR (p.created_ts = cur.created_ts AND p.id < cur.id)
-          )
-        ORDER BY p.created_ts DESC, p.id DESC
-        LIMIT 1
-        """
-        return await db_fetch_one(q, {"tid": str(tenant_id), "pid": int(product_id), "cid": category_id})
-
-    @staticmethod
-    async def get_prev_active(tenant_id: str, product_id: int, *, category_id: int | None = None) -> dict | None:
-        """
-        "Prev" in our order (created_ts DESC, id DESC) == newer item.
-        """
-        q = """
-        WITH cur AS (
-            SELECT created_ts, id
-            FROM telegram_shop_products
-            WHERE tenant_id = :tid AND id = :pid AND is_active = true
-        )
-        SELECT p.id
-        FROM telegram_shop_products p, cur
-        WHERE p.tenant_id = :tid
-          AND p.is_active = true
-          AND (:cid IS NULL OR p.category_id = :cid)
-          AND (
-               p.created_ts > cur.created_ts
-               OR (p.created_ts = cur.created_ts AND p.id > cur.id)
-          )
-        ORDER BY p.created_ts ASC, p.id ASC
-        LIMIT 1
-        """
-        return await db_fetch_one(q, {"tid": str(tenant_id), "pid": int(product_id), "cid": category_id})
+        await db_execute(q, {"tid": tenant_id, "pid": int(product_id), "d": (description or "").strip()})
 
     # --------- product photos (Telegram file_id) ---------
     # Table: telegram_shop_product_photos (tenant_id, product_id, file_id, sort, created_ts)
 
     @staticmethod
     async def add_product_photo(tenant_id: str, product_id: int, file_id: str) -> int | None:
+        # next sort = max(sort)+1
         q_sort = """
         SELECT COALESCE(MAX(sort), 0) AS mx
         FROM telegram_shop_product_photos
         WHERE tenant_id = :tid AND product_id = :pid
         """
-        row = await db_fetch_one(q_sort, {"tid": str(tenant_id), "pid": int(product_id)})
+        row = await db_fetch_one(q_sort, {"tid": tenant_id, "pid": int(product_id)})
         next_sort = int(row["mx"] or 0) + 1 if row else 1
 
         q = """
@@ -246,7 +217,13 @@ class ProductsRepo:
         """
         ins = await db_fetch_one(
             q,
-            {"tid": str(tenant_id), "pid": int(product_id), "fid": str(file_id), "s": int(next_sort), "ts": int(time.time())},
+            {
+                "tid": tenant_id,
+                "pid": int(product_id),
+                "fid": str(file_id),
+                "s": int(next_sort),
+                "ts": int(time.time()),
+            },
         )
         return int(ins["id"]) if ins and ins.get("id") is not None else None
 
@@ -259,7 +236,7 @@ class ProductsRepo:
         ORDER BY sort ASC, id ASC
         LIMIT :lim
         """
-        return await db_fetch_all(q, {"tid": str(tenant_id), "pid": int(product_id), "lim": int(limit)}) or []
+        return await db_fetch_all(q, {"tid": tenant_id, "pid": int(product_id), "lim": int(limit)}) or []
 
     @staticmethod
     async def get_cover_photo_file_id(tenant_id: str, product_id: int) -> str | None:
@@ -270,5 +247,5 @@ class ProductsRepo:
         ORDER BY sort ASC, id ASC
         LIMIT 1
         """
-        row = await db_fetch_one(q, {"tid": str(tenant_id), "pid": int(product_id)})
+        row = await db_fetch_one(q, {"tid": tenant_id, "pid": int(product_id)})
         return str(row["file_id"]) if row and row.get("file_id") else None
