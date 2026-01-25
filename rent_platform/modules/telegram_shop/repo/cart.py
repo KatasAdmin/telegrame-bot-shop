@@ -22,21 +22,19 @@ class TelegramShopCartRepo:
         """
         await db_execute(
             q,
-            {
-                "tid": tenant_id,
-                "uid": int(user_id),
-                "pid": int(product_id),
-                "q": qty,
-                "ts": int(time.time()),
-            },
+            {"tid": tenant_id, "uid": int(user_id), "pid": int(product_id), "q": qty, "ts": int(time.time())},
         )
 
     @staticmethod
     async def cart_inc(tenant_id: str, user_id: int, product_id: int, delta: int) -> int:
+        """
+        Increase/decrease qty by delta.
+        If result <= 0 => item deleted.
+        """
         delta = int(delta)
         q = """
         INSERT INTO telegram_shop_cart_items (tenant_id, user_id, product_id, qty, updated_ts)
-        VALUES (:tid, :uid, :pid, GREATEST(1, :d), :ts)
+        VALUES (:tid, :uid, :pid, 1, :ts)
         ON CONFLICT (tenant_id, user_id, product_id)
         DO UPDATE SET qty = GREATEST(0, telegram_shop_cart_items.qty + :d),
                       updated_ts = EXCLUDED.updated_ts
@@ -44,13 +42,7 @@ class TelegramShopCartRepo:
         """
         row = await db_fetch_one(
             q,
-            {
-                "tid": tenant_id,
-                "uid": int(user_id),
-                "pid": int(product_id),
-                "d": delta,
-                "ts": int(time.time()),
-            },
+            {"tid": tenant_id, "uid": int(user_id), "pid": int(product_id), "d": delta, "ts": int(time.time())},
         )
         qty = int(row["qty"]) if row and row.get("qty") is not None else 0
         if qty <= 0:
@@ -73,6 +65,9 @@ class TelegramShopCartRepo:
 
     @staticmethod
     async def cart_list(tenant_id: str, user_id: int) -> list[dict[str, Any]]:
+        """
+        MODE B: join products without hits/promos columns.
+        """
         q = """
         SELECT
             c.product_id,
