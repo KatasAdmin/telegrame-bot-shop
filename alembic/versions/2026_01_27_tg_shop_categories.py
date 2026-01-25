@@ -25,27 +25,25 @@ def upgrade() -> None:
         sa.Column("sort", sa.Integer(), nullable=False, server_default=sa.text("0")),
         sa.Column("created_ts", sa.Integer(), nullable=False, server_default=sa.text("0")),
     )
-
     op.create_index(
-        "idx_tg_shop_categories_tenant",
+        "idx_tg_shop_categories_tenant_sort",
         "telegram_shop_categories",
-        ["tenant_id"],
+        ["tenant_id", "sort", "id"],
     )
-
     op.create_index(
-        "uq_tg_shop_categories_tenant_name",
+        "ux_tg_shop_categories_tenant_name",
         "telegram_shop_categories",
         ["tenant_id", "name"],
         unique=True,
     )
 
-    # 2) add category_id to products (nullable)
+    # 2) add category_id to products (nullable for smooth rollout)
     op.add_column(
         "telegram_shop_products",
         sa.Column("category_id", sa.Integer(), nullable=True),
     )
 
-    # optional FK (можна прибрати якщо не хочеш)
+    # FK is optional; tenant consistency is enforced at app level
     op.create_foreign_key(
         "fk_tg_shop_products_category_id",
         "telegram_shop_products",
@@ -56,17 +54,17 @@ def upgrade() -> None:
     )
 
     op.create_index(
-        "idx_tg_shop_products_tenant_category_active",
+        "idx_tg_shop_products_tenant_category",
         "telegram_shop_products",
-        ["tenant_id", "category_id", "is_active", "id"],
+        ["tenant_id", "category_id"],
     )
 
 
 def downgrade() -> None:
-    op.drop_index("idx_tg_shop_products_tenant_category_active", table_name="telegram_shop_products")
+    op.drop_index("idx_tg_shop_products_tenant_category", table_name="telegram_shop_products")
     op.drop_constraint("fk_tg_shop_products_category_id", "telegram_shop_products", type_="foreignkey")
     op.drop_column("telegram_shop_products", "category_id")
 
-    op.drop_index("uq_tg_shop_categories_tenant_name", table_name="telegram_shop_categories")
-    op.drop_index("idx_tg_shop_categories_tenant", table_name="telegram_shop_categories")
+    op.drop_index("ux_tg_shop_categories_tenant_name", table_name="telegram_shop_categories")
+    op.drop_index("idx_tg_shop_categories_tenant_sort", table_name="telegram_shop_categories")
     op.drop_table("telegram_shop_categories")
