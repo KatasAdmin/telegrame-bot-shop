@@ -55,11 +55,19 @@ async def _send_menu(bot: Bot, chat_id: int, text: str, *, is_admin: bool) -> No
     await bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=main_menu_kb(is_admin=is_admin))
 
 
-async def _send_product_card(bot: Bot, chat_id: int, tenant_id: str, product_id: int, *, is_admin: bool) -> None:
+# ---------- Catalog skeleton / card rendering ----------
+
+async def _build_product_card(tenant_id: str, product_id: int) -> tuple[str, Any] | None:
+    """
+    Returns (text, inline_kb) for product card.
+    Hooks prepared for:
+      - photos up to 10 (media group)
+      - description
+      - categories / variants later
+    """
     p = await ProductsRepo.get_active(tenant_id, product_id)
     if not p:
-        await bot.send_message(chat_id, "Товар не знайдено або він не активний.")
-        return
+        return None
 
     prev_p = await ProductsRepo.get_prev_active(tenant_id, product_id)
     next_p = await ProductsRepo.get_next_active(tenant_id, product_id)
@@ -68,26 +76,50 @@ async def _send_product_card(bot: Bot, chat_id: int, tenant_id: str, product_id:
     name = str(p["name"])
     price = int(p.get("price_kop") or 0)
 
-    # TODO hooks for photos/description later:
-    # - photos (up to 10)
-    # - description text
-    text = f"🛍 *{name}*\n\nЦіна: *{_fmt_money(price)}*\n\nID: `{pid}`"
-
-    await bot.send_message(
-        chat_id,
-        text,
-        parse_mode="Markdown",
-        reply_markup=product_card_kb(product_id=pid, has_prev=bool(prev_p), has_next=bool(next_p)),
+    # Hooks (later):
+    # desc = p.get("description") ...
+    # photos_count = ...
+    text = (
+        f"🛍 *{name}*\n\n"
+        f"Ціна: *{_fmt_money(price)}*\n"
+        f"ID: `{pid}`\n\n"
+        f"_Фото/опис зʼявляться після адмінки (гачок готовий)._"
     )
 
+    kb = product_card_kb(product_id=pid, has_prev=bool(prev_p), has_next=bool(next_p))
+    return text, kb
 
-async def _send_first_product(bot: Bot, chat_id: int, tenant_id: str, *, is_admin: bool) -> None:
+
+async def _send_first_product_card(bot: Bot, chat_id: int, tenant_id: str, *, is_admin: bool) -> None:
     p = await ProductsRepo.get_first_active(tenant_id)
     if not p:
-        await bot.send_message(chat_id, "🛍 *Каталог*\n\nПоки що немає товарів.", parse_mode="Markdown", reply_markup=catalog_kb(is_admin=is_admin))
+        await bot.send_message(
+            chat_id,
+            "🛍 *Каталог*\n\nПоки що немає товарів.",
+            parse_mode="Markdown",
+            reply_markup=catalog_kb(is_admin=is_admin),
+        )
         return
-    await _send_product_card(bot, chat_id, tenant_id, int(p["id"]), is_admin=is_admin)
 
+    built = await _build_product_card(tenant_id, int(p["id"]))
+    if not built:
+        await bot.send_message(chat_id, "🛍 Каталог поки що порожній.")
+        return
+
+    text, kb = built
+    await bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=kb)
+
+
+async def _edit_product_card(bot: Bot, chat_id: int, message_id: int, tenant_id: str, product_id: int) -> bool:
+    built = await _build_product_card(tenant_id, product_id)
+    if not built:
+        return False
+    text, kb = built
+    await bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, parse_mode="Markdown", reply_markup=kb)
+    return True
+
+
+# ---------- Cart rendering ----------
 
 async def _render_cart_text(tenant_id: str, user_id: int) -> tuple[str, list[dict]]:
     items = await TelegramShopCartRepo.cart_list(tenant_id, user_id)
@@ -124,7 +156,12 @@ async def _edit_cart_inline(bot: Bot, chat_id: int, message_id: int, tenant_id: 
 async def _send_orders(bot: Bot, chat_id: int, tenant_id: str, user_id: int, *, is_admin: bool) -> None:
     orders = await TelegramShopOrdersRepo.list_orders(tenant_id, user_id, limit=20)
     if not orders:
-        await bot.send_message(chat_id, "🧾 *Історія замовлень*\n\nПоки що порожньо.", parse_mode="Markdown", reply_markup=orders_history_kb(is_admin=is_admin))
+        await bot.send_message(
+            chat_id,
+            "🧾 *Історія замовлень*\n\nПоки що порожньо.",
+            parse_mode="Markdown",
+            reply_markup=orders_history_kb(is_admin=is_admin),
+        )
         return
 
     lines = ["🧾 *Історія замовлень*\n"]
@@ -137,24 +174,27 @@ async def _send_orders(bot: Bot, chat_id: int, tenant_id: str, user_id: int, *, 
     await bot.send_message(chat_id, "\n".join(lines), parse_mode="Markdown", reply_markup=orders_history_kb(is_admin=is_admin))
 
 
+# ---------- Main entry ----------
+
 async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
     tenant_id = str(tenant["id"])
 
-    # --- callback queries (inline buttons) ---
+    # --- callbacks ---
     cb = _extract_callback(data)
     if cb:
-        cb_id = cb.get("id")
-        if cb_id:
-            await bot.answer_callback_query(cb_id)
-
         payload = (cb.get("data") or "").strip()
         if not payload.startswith("tgshop:"):
             return False
 
+        cb_id = cb.get("id")
         chat_id = int(cb["message"]["chat"]["id"])
         msg_id = int(cb["message"]["message_id"])
         user_id = int(cb["from"]["id"])
         is_admin = is_admin_user(tenant=tenant, user_id=user_id)
+
+        # stop spinner
+        if cb_id:
+            await bot.answer_callback_query(cb_id)
 
         parts = payload.split(":")
         action = parts[1] if len(parts) > 1 else ""
@@ -163,41 +203,40 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         if action == "noop":
             return True
 
-        # add to cart WITHOUT redirect to cart
+        # add to cart: no redirect, only toast
         if action == "add" and pid > 0:
             await TelegramShopCartRepo.cart_inc(tenant_id, user_id, pid, 1)
-            # show a toast
-            await bot.answer_callback_query(cb_id, text="✅ Додано в кошик", show_alert=False)
+            if cb_id:
+                await bot.answer_callback_query(cb_id, text="✅ Додано в кошик", show_alert=False)
             return True
 
-        # favorites hook (later)
+        # favorites hook (skeleton)
         if action == "fav" and pid > 0:
-            await bot.answer_callback_query(cb_id, text="⭐ Обране (скоро)", show_alert=False)
+            # TODO: FavoritesRepo.toggle(tenant_id, user_id, pid)
+            if cb_id:
+                await bot.answer_callback_query(cb_id, text="⭐ Додано в обране (скоро буде логіка)", show_alert=False)
             return True
 
-        # product navigation
+        # navigation: EDIT SAME MESSAGE (no spam)
         if action == "prev" and pid > 0:
             p = await ProductsRepo.get_prev_active(tenant_id, pid)
             if not p:
-                await bot.answer_callback_query(cb_id, text="Немає попереднього", show_alert=False)
+                if cb_id:
+                    await bot.answer_callback_query(cb_id, text="•", show_alert=False)
                 return True
-            # send next card (simple) — later we can edit message instead of spamming
-            await _send_product_card(bot, chat_id, tenant_id, int(p["id"]), is_admin=is_admin)
+            await _edit_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]))
             return True
 
         if action == "next" and pid > 0:
             p = await ProductsRepo.get_next_active(tenant_id, pid)
             if not p:
-                await bot.answer_callback_query(cb_id, text="Немає наступного", show_alert=False)
+                if cb_id:
+                    await bot.answer_callback_query(cb_id, text="•", show_alert=False)
                 return True
-            await _send_product_card(bot, chat_id, tenant_id, int(p["id"]), is_admin=is_admin)
+            await _edit_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]))
             return True
 
-        if action == "cart":
-            await _send_cart(bot, chat_id, tenant_id, user_id, is_admin=is_admin)
-            return True
-
-        # cart controls (qty already works)
+        # cart controls
         if action == "inc" and pid > 0:
             await TelegramShopCartRepo.cart_inc(tenant_id, user_id, pid, 1)
             await _edit_cart_inline(bot, chat_id, msg_id, tenant_id, user_id)
@@ -229,7 +268,7 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
 
         return False
 
-    # --- messages (reply keyboard) ---
+    # --- messages ---
     msg = _extract_message(data)
     if not msg:
         return False
@@ -242,7 +281,7 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
     user_id = int(msg["from"]["id"])
     is_admin = is_admin_user(tenant=tenant, user_id=user_id)
 
-    # keep admin hooks (client won't use commands)
+    # admin hook stays as “гачок”
     if is_admin:
         handled = await admin_handle_update(tenant=tenant, data=data, bot=bot)
         if handled:
@@ -252,8 +291,9 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         await _send_menu(bot, chat_id, "🛒 *Магазин*\n\nОбирай розділ кнопками нижче 👇", is_admin=is_admin)
         return True
 
+    # CLIENT: only buttons
     if text == BTN_CATALOG:
-        await _send_first_product(bot, chat_id, tenant_id, is_admin=is_admin)
+        await _send_first_product_card(bot, chat_id, tenant_id, is_admin=is_admin)
         return True
 
     if text == BTN_CART:
@@ -265,21 +305,22 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         return True
 
     if text == BTN_HITS:
-        await bot.send_message(chat_id, "🔥 *Хіти / Акції*\n\nПоки що в розробці.", parse_mode="Markdown", reply_markup=catalog_kb(is_admin=is_admin))
+        await bot.send_message(chat_id, "🔥 *Хіти / Акції*\n\nПоки що в розробці (гачок готовий).", parse_mode="Markdown", reply_markup=catalog_kb(is_admin=is_admin))
         return True
 
     if text == BTN_FAV:
-        await bot.send_message(chat_id, "⭐ *Обране*\n\nПоки що в розробці.", parse_mode="Markdown", reply_markup=favorites_kb(is_admin=is_admin))
+        await bot.send_message(chat_id, "⭐ *Обране*\n\nПоки що в розробці (гачок готовий).", parse_mode="Markdown", reply_markup=favorites_kb(is_admin=is_admin))
         return True
 
     if text == BTN_SUPPORT:
-        await bot.send_message(chat_id, "🆘 *Підтримка*\n\nПоки що в розробці.", parse_mode="Markdown", reply_markup=support_kb(is_admin=is_admin))
+        await bot.send_message(chat_id, "🆘 *Підтримка*\n\nПоки що в розробці (гачок готовий).", parse_mode="Markdown", reply_markup=support_kb(is_admin=is_admin))
         return True
 
     if text == BTN_MENU_BACK:
         await _send_menu(bot, chat_id, "⬅️ Повернув у меню 👇", is_admin=is_admin)
         return True
 
+    # reply cart buttons
     if text == BTN_CLEAR_CART:
         await TelegramShopCartRepo.cart_clear(tenant_id, user_id)
         await _send_cart(bot, chat_id, tenant_id, user_id, is_admin=is_admin)
