@@ -29,7 +29,17 @@ from rent_platform.modules.telegram_shop.ui.user_kb import (
     BTN_CHECKOUT,
     BTN_CLEAR_CART,
 )
-from rent_platform.modules.telegram_shop.ui.inline_kb import product_card_kb, cart_inline
+from rent_platform.modules.telegram_shop.ui.inline_kb import (
+    product_card_kb,
+    cart_inline,
+    catalog_categories_kb,
+)
+
+# CategoriesRepo optional (якщо файл/репо вже є)
+try:
+    from rent_platform.modules.telegram_shop.repo.categories import CategoriesRepo  # type: ignore
+except Exception:  # pragma: no cover
+    CategoriesRepo = None  # type: ignore
 
 log = logging.getLogger(__name__)
 
@@ -68,20 +78,55 @@ async def _send_menu(bot: Bot, chat_id: int, text: str, *, is_admin: bool) -> No
     await bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=main_menu_kb(is_admin=is_admin))
 
 
-# ---------- Catalog / product card rendering ----------
+# ---------- Catalog categories ----------
 
-async def _build_product_card(tenant_id: str, product_id: int) -> dict | None:
+async def _send_categories_menu(bot: Bot, chat_id: int, tenant_id: str, *, is_admin: bool) -> None:
+    """
+    Показує юзеру КАТЕГОРІЇ як inline-кнопки.
+    Якщо CategoriesRepo ще не підключений — fallback на старий каталог.
+    """
+    if CategoriesRepo is None:
+        # fallback: old behavior
+        await bot.send_message(
+            chat_id,
+            "🛍 *Каталог*\n\nКатегорії ще не підключені.",
+            parse_mode="Markdown",
+            reply_markup=catalog_kb(is_admin=is_admin),
+        )
+        return
+
+    cats = await CategoriesRepo.list(tenant_id, limit=50)  # type: ignore[misc]
+    if not cats:
+        await bot.send_message(
+            chat_id,
+            "🛍 *Каталог*\n\nПоки що немає категорій.",
+            parse_mode="Markdown",
+            reply_markup=catalog_kb(is_admin=is_admin),
+        )
+        return
+
+    await bot.send_message(
+        chat_id,
+        "🛍 *Каталог*\n\nОбери категорію 👇",
+        parse_mode="Markdown",
+        reply_markup=catalog_categories_kb(cats),
+    )
+
+
+# ---------- Product card rendering ----------
+
+async def _build_product_card(tenant_id: str, product_id: int, *, category_id: int | None) -> dict | None:
     p = await ProductsRepo.get_active(tenant_id, product_id)
     if not p:
         return None
-
-    prev_p = await ProductsRepo.get_prev_active(tenant_id, product_id)
-    next_p = await ProductsRepo.get_next_active(tenant_id, product_id)
 
     pid = int(p["id"])
     name = str(p["name"])
     price = int(p.get("price_kop") or 0)
     desc = (p.get("description") or "").strip()
+
+    prev_p = await ProductsRepo.get_prev_active(tenant_id, pid, category_id=category_id)
+    next_p = await ProductsRepo.get_next_active(tenant_id, pid, category_id=category_id)
 
     cover_file_id = await ProductsRepo.get_cover_photo_file_id(tenant_id, pid)
 
@@ -93,7 +138,12 @@ async def _build_product_card(tenant_id: str, product_id: int) -> dict | None:
     if desc:
         text += f"\n\n{desc}"
 
-    kb = product_card_kb(product_id=pid, has_prev=bool(prev_p), has_next=bool(next_p))
+    kb = product_card_kb(
+        product_id=pid,
+        has_prev=bool(prev_p),
+        has_next=bool(next_p),
+        category_id=category_id,
+    )
 
     return {
         "pid": pid,
@@ -104,18 +154,26 @@ async def _build_product_card(tenant_id: str, product_id: int) -> dict | None:
     }
 
 
-async def _send_first_product_card(bot: Bot, chat_id: int, tenant_id: str, *, is_admin: bool) -> None:
-    p = await ProductsRepo.get_first_active(tenant_id)
+async def _send_first_product_card(
+    bot: Bot,
+    chat_id: int,
+    tenant_id: str,
+    *,
+    is_admin: bool,
+    category_id: int | None,
+) -> None:
+    p = await ProductsRepo.get_first_active(tenant_id, category_id=category_id)
     if not p:
+        # якщо в категорії нема товарів — повернемо категорії, щоб не було "глухо"
         await bot.send_message(
             chat_id,
-            "🛍 *Каталог*\n\nПоки що немає товарів.",
+            "🛍 *Каталог*\n\nПоки що немає товарів у цій категорії.",
             parse_mode="Markdown",
-            reply_markup=catalog_kb(is_admin=is_admin),
         )
+        await _send_categories_menu(bot, chat_id, tenant_id, is_admin=is_admin)
         return
 
-    card = await _build_product_card(tenant_id, int(p["id"]))
+    card = await _build_product_card(tenant_id, int(p["id"]), category_id=category_id)
     if not card:
         await bot.send_message(chat_id, "🛍 Каталог поки що порожній.")
         return
@@ -137,8 +195,16 @@ async def _send_first_product_card(bot: Bot, chat_id: int, tenant_id: str, *, is
         )
 
 
-async def _edit_product_card(bot: Bot, chat_id: int, message_id: int, tenant_id: str, product_id: int) -> bool:
-    card = await _build_product_card(tenant_id, product_id)
+async def _edit_product_card(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    tenant_id: str,
+    product_id: int,
+    *,
+    category_id: int | None,
+) -> bool:
+    card = await _build_product_card(tenant_id, product_id, category_id=category_id)
     if not card:
         return False
 
@@ -253,11 +319,29 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
 
         parts = payload.split(":")
         action = parts[1] if len(parts) > 1 else ""
-        pid = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+        pid = int(parts[2]) if len(parts) > 2 and str(parts[2]).isdigit() else 0
+
+        cid_raw = parts[3] if len(parts) > 3 else "0"
+        cid = int(cid_raw) if str(cid_raw).isdigit() else 0
+        category_id = cid if cid > 0 else None
 
         if action == "noop":
             if cb_id:
                 await bot.answer_callback_query(cb_id, text="•", show_alert=False)
+            return True
+
+        # show categories menu
+        if action == "cats":
+            await _send_categories_menu(bot, chat_id, tenant_id, is_admin=is_admin)
+            if cb_id:
+                await bot.answer_callback_query(cb_id)
+            return True
+
+        # open category (cid) or 0 = all
+        if action == "cat":
+            await _send_first_product_card(bot, chat_id, tenant_id, is_admin=is_admin, category_id=category_id)
+            if cb_id:
+                await bot.answer_callback_query(cb_id)
             return True
 
         if action == "add" and pid > 0:
@@ -272,23 +356,23 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
             return True
 
         if action == "prev" and pid > 0:
-            p = await ProductsRepo.get_prev_active(tenant_id, pid)
+            p = await ProductsRepo.get_prev_active(tenant_id, pid, category_id=category_id)
             if not p:
                 if cb_id:
                     await bot.answer_callback_query(cb_id, text="•", show_alert=False)
                 return True
-            await _edit_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]))
+            await _edit_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]), category_id=category_id)
             if cb_id:
                 await bot.answer_callback_query(cb_id)
             return True
 
         if action == "next" and pid > 0:
-            p = await ProductsRepo.get_next_active(tenant_id, pid)
+            p = await ProductsRepo.get_next_active(tenant_id, pid, category_id=category_id)
             if not p:
                 if cb_id:
                     await bot.answer_callback_query(cb_id, text="•", show_alert=False)
                 return True
-            await _edit_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]))
+            await _edit_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]), category_id=category_id)
             if cb_id:
                 await bot.answer_callback_query(cb_id)
             return True
@@ -324,9 +408,18 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         if action == "checkout":
             oid = await TelegramShopOrdersRepo.create_order_from_cart(tenant_id, user_id)
             if not oid:
-                await bot.send_message(chat_id, "🛒 Кошик порожній — нічого оформлювати.", reply_markup=cart_kb(is_admin=is_admin))
+                await bot.send_message(
+                    chat_id,
+                    "🛒 Кошик порожній — нічого оформлювати.",
+                    reply_markup=cart_kb(is_admin=is_admin),
+                )
             else:
-                await bot.send_message(chat_id, f"✅ Замовлення *#{oid}* створено!", parse_mode="Markdown", reply_markup=main_menu_kb(is_admin=is_admin))
+                await bot.send_message(
+                    chat_id,
+                    f"✅ Замовлення *#{oid}* створено!",
+                    parse_mode="Markdown",
+                    reply_markup=main_menu_kb(is_admin=is_admin),
+                )
             await _edit_cart_inline(bot, chat_id, msg_id, tenant_id, user_id)
             if cb_id:
                 await bot.answer_callback_query(cb_id)
@@ -363,7 +456,8 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         return True
 
     if text == _normalize_text(BTN_CATALOG):
-        await _send_first_product_card(bot, chat_id, tenant_id, is_admin=is_admin)
+        # ТЕПЕР: каталог відкриває категорії (як ти хотів)
+        await _send_categories_menu(bot, chat_id, tenant_id, is_admin=is_admin)
         return True
 
     if text == _normalize_text(BTN_CART):
@@ -413,9 +507,18 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
     if text == _normalize_text(BTN_CHECKOUT):
         oid = await TelegramShopOrdersRepo.create_order_from_cart(tenant_id, user_id)
         if not oid:
-            await bot.send_message(chat_id, "🛒 Кошик порожній — нічого оформлювати.", reply_markup=cart_kb(is_admin=is_admin))
+            await bot.send_message(
+                chat_id,
+                "🛒 Кошик порожній — нічого оформлювати.",
+                reply_markup=cart_kb(is_admin=is_admin),
+            )
         else:
-            await bot.send_message(chat_id, f"✅ Замовлення *#{oid}* створено!", parse_mode="Markdown", reply_markup=main_menu_kb(is_admin=is_admin))
+            await bot.send_message(
+                chat_id,
+                f"✅ Замовлення *#{oid}* створено!",
+                parse_mode="Markdown",
+                reply_markup=main_menu_kb(is_admin=is_admin),
+            )
         return True
 
     if text == _normalize_text(BTN_ADMIN) and is_admin:
