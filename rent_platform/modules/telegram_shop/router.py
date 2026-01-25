@@ -3,11 +3,7 @@ from __future__ import annotations
 from aiogram import Bot
 
 from rent_platform.shared.utils import send_message
-from rent_platform.modules.telegram_shop.ui import (
-    main_menu_kb,
-    catalog_kb,
-    product_card_kb,
-)
+from rent_platform.modules.telegram_shop.ui.user_kb import main_menu_kb, catalog_kb, product_card_kb
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
 
 
