@@ -17,14 +17,6 @@ class TelegramShopOrdersRepo:
         total_kop = 0
         for it in items:
             price_kop = int(it.get("price_kop") or 0)
-            promo_price_kop = int(it.get("promo_price_kop") or 0)
-            promo_until_ts = int(it.get("promo_until_ts") or 0)
-            now_ts = int(time.time())
-
-            # якщо є акційна ціна і вона ще дійсна — беремо її
-            if promo_price_kop > 0 and promo_until_ts > now_ts:
-                price_kop = promo_price_kop
-
             total_kop += price_kop * int(it.get("qty") or 0)
 
         # 1) create order
@@ -46,23 +38,15 @@ class TelegramShopOrdersRepo:
         INSERT INTO telegram_shop_order_items (order_id, product_id, name, price_kop, qty)
         VALUES (:oid, :pid, :n, :p, :q)
         """
-        now_ts = int(time.time())
         for it in items:
-            price_kop = int(it.get("price_kop") or 0)
-            promo_price_kop = int(it.get("promo_price_kop") or 0)
-            promo_until_ts = int(it.get("promo_until_ts") or 0)
-
-            if promo_price_kop > 0 and promo_until_ts > now_ts:
-                price_kop = promo_price_kop
-
             await db_execute(
                 q2,
                 {
                     "oid": order_id,
                     "pid": int(it["product_id"]),
                     "n": str(it["name"])[:128],
-                    "p": int(price_kop),
-                    "q": int(it["qty"]),
+                    "p": int(it.get("price_kop") or 0),
+                    "q": int(it.get("qty") or 0),
                 },
             )
 
