@@ -4,6 +4,7 @@ import logging
 from typing import Any
 
 from aiogram import Bot
+
 from rent_platform.modules.telegram_shop.admin import admin_handle_update, is_admin_user
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
 from rent_platform.modules.telegram_shop.repo.cart import TelegramShopCartRepo
@@ -44,10 +45,6 @@ def _get_chat_id(msg: dict) -> int:
 
 def _get_user_id(msg: dict) -> int:
     return int(msg["from"]["id"])
-
-
-def _is_admin_stub(user_id: int) -> bool:
-    return False
 
 
 def _fmt_money(kop: int) -> str:
@@ -130,15 +127,16 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
     user_id = _get_user_id(msg)
     is_admin = is_admin_user(tenant=tenant, user_id=user_id)
 
+    # --- Admin hook (separate module) ---
+    if is_admin:
+        handled = await admin_handle_update(tenant=tenant, data=data, bot=bot)
+        if handled:
+            return True
+
     # commands
     if text in ("/start", "/shop"):
         await _send_menu(bot, chat_id, "🛒 *Магазин*\n\nОбирай розділ кнопками нижче 👇", is_admin=is_admin)
         return True
-
-        if is_admin:
-        handled = await admin_handle_update(tenant=tenant, data=data, bot=bot)
-        if handled:
-            return True
 
     if text == "/products":
         await _show_catalog(bot, chat_id, tenant_id, is_admin=is_admin)
@@ -180,7 +178,12 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         return True
 
     if text == BTN_FAV:
-        await bot.send_message(chat_id, "⭐ *Обране*\n\nПоки що в розробці.", parse_mode="Markdown", reply_markup=favorites_kb(is_admin=is_admin))
+        await bot.send_message(
+            chat_id,
+            "⭐ *Обране*\n\nПоки що в розробці.",
+            parse_mode="Markdown",
+            reply_markup=favorites_kb(is_admin=is_admin),
+        )
         return True
 
     if text == BTN_ORDERS:
@@ -188,7 +191,12 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         return True
 
     if text == BTN_SUPPORT:
-        await bot.send_message(chat_id, "🆘 *Підтримка*\n\nПоки що в розробці.", parse_mode="Markdown", reply_markup=support_kb(is_admin=is_admin))
+        await bot.send_message(
+            chat_id,
+            "🆘 *Підтримка*\n\nПоки що в розробці.",
+            parse_mode="Markdown",
+            reply_markup=support_kb(is_admin=is_admin),
+        )
         return True
 
     if text == BTN_MENU_BACK:
@@ -204,13 +212,22 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
     if text == BTN_CHECKOUT:
         oid = await TelegramShopOrdersRepo.create_order_from_cart(tenant_id, user_id)
         if not oid:
-            await bot.send_message(chat_id, "🛒 Кошик порожній — нічого оформлювати.", reply_markup=cart_kb(is_admin=is_admin))
+            await bot.send_message(
+                chat_id,
+                "🛒 Кошик порожній — нічого оформлювати.",
+                reply_markup=cart_kb(is_admin=is_admin),
+            )
         else:
-            await bot.send_message(chat_id, f"✅ Замовлення *#{oid}* створено!", parse_mode="Markdown", reply_markup=main_menu_kb(is_admin=is_admin))
+            await bot.send_message(
+                chat_id,
+                f"✅ Замовлення *#{oid}* створено!",
+                parse_mode="Markdown",
+                reply_markup=main_menu_kb(is_admin=is_admin),
+            )
         return True
 
     if text == BTN_ADMIN and is_admin:
-        await bot.send_message(chat_id, "🛠 Адмінка (поки що в розробці)", reply_markup=main_menu_kb(is_admin=True))
+        await bot.send_message(chat_id, "🛠 Адмінка: напиши /a_help", reply_markup=main_menu_kb(is_admin=True))
         return True
 
     return False
