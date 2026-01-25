@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import logging
@@ -44,12 +45,10 @@ def _extract_callback(update: dict) -> dict | None:
 def _normalize_text(s: str) -> str:
     """
     Telegram/iOS can send emoji texts with variation selectors.
-    We normalize so comparisons with BTN_* are stable.
+    Normalize so comparisons with BTN_* are stable.
     """
     s = (s or "").strip()
-    # remove common emoji variation selectors / joiners
-    s = s.replace("\ufe0f", "").replace("\u200d", "")
-    # collapse whitespace
+    s = s.replace("\ufe0f", "").replace("\u200d", "")  # variation selector / joiner
     s = " ".join(s.split())
     return s
 
@@ -60,9 +59,9 @@ def _get_text(msg: dict) -> str:
 
 def _fmt_money(kop: int) -> str:
     kop = int(kop or 0)
-    Ð³ÑÐ½ = kop // 100
-    ÐºÐ¾Ð¿ = kop % 100
-    return f"{Ð³ÑÐ½}.{ÐºÐ¾Ð¿:02d} Ð³ÑÐ½"
+    uah = kop // 100
+    cents = kop % 100
+    return f"{uah}.{cents:02d} грн"
 
 
 async def _send_menu(bot: Bot, chat_id: int, text: str, *, is_admin: bool) -> None:
@@ -87,8 +86,8 @@ async def _build_product_card(tenant_id: str, product_id: int) -> dict | None:
     cover_file_id = await ProductsRepo.get_cover_photo_file_id(tenant_id, pid)
 
     text = (
-        f"ð *{name}*\n\n"
-        f"Ð¦ÑÐ½Ð°: *{_fmt_money(price)}*\n"
+        f"🛍 *{name}*\n\n"
+        f"Ціна: *{_fmt_money(price)}*\n"
         f"ID: `{pid}`"
     )
     if desc:
@@ -110,7 +109,7 @@ async def _send_first_product_card(bot: Bot, chat_id: int, tenant_id: str, *, is
     if not p:
         await bot.send_message(
             chat_id,
-            "ð *ÐÐ°ÑÐ°Ð»Ð¾Ð³*\n\nÐÐ¾ÐºÐ¸ ÑÐ¾ Ð½ÐµÐ¼Ð°Ñ ÑÐ¾Ð²Ð°ÑÑÐ².",
+            "🛍 *Каталог*\n\nПоки що немає товарів.",
             parse_mode="Markdown",
             reply_markup=catalog_kb(is_admin=is_admin),
         )
@@ -118,7 +117,7 @@ async def _send_first_product_card(bot: Bot, chat_id: int, tenant_id: str, *, is
 
     card = await _build_product_card(tenant_id, int(p["id"]))
     if not card:
-        await bot.send_message(chat_id, "ð ÐÐ°ÑÐ°Ð»Ð¾Ð³ Ð¿Ð¾ÐºÐ¸ ÑÐ¾ Ð¿Ð¾ÑÐ¾Ð¶Ð½ÑÐ¹.")
+        await bot.send_message(chat_id, "🛍 Каталог поки що порожній.")
         return
 
     if card["has_photo"]:
@@ -167,17 +166,17 @@ async def _edit_product_card(bot: Bot, chat_id: int, message_id: int, tenant_id:
 async def _render_cart_text(tenant_id: str, user_id: int) -> tuple[str, list[dict]]:
     items = await TelegramShopCartRepo.cart_list(tenant_id, user_id)
     if not items:
-        return ("ð *ÐÐ¾ÑÐ¸Ðº*\n\nÐÐ¾ÑÐ¾Ð¶Ð½ÑÐ¾.", [])
+        return ("🛒 *Кошик*\n\nПорожньо.", [])
 
     total = 0
-    lines = ["ð *ÐÐ¾ÑÐ¸Ðº*\n"]
+    lines = ["🛒 *Кошик*\n"]
     for it in items:
         name = str(it["name"])
         qty = int(it["qty"])
         price = int(it.get("price_kop") or 0)
         total += price * qty
-        lines.append(f"{name}\n{qty} Ã {_fmt_money(price)} = *{_fmt_money(price * qty)}*")
-    lines.append(f"\nÐ Ð°Ð·Ð¾Ð¼: *{_fmt_money(total)}*")
+        lines.append(f"{name}\n{qty} × {_fmt_money(price)} = *{_fmt_money(price * qty)}*")
+    lines.append(f"\nРазом: *{_fmt_money(total)}*")
     return ("\n\n".join(lines), items)
 
 
@@ -185,7 +184,7 @@ async def _send_cart(bot: Bot, chat_id: int, tenant_id: str, user_id: int, *, is
     text, items = await _render_cart_text(tenant_id, user_id)
     await bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=cart_kb(is_admin=is_admin))
     if items:
-        await bot.send_message(chat_id, "âï¸ ÐÐµÑÑÐ²Ð°Ð½Ð½Ñ ÐºÐ¾ÑÐ¸ÐºÐ¾Ð¼:", reply_markup=cart_inline(items=items))
+        await bot.send_message(chat_id, "⚙️ Керування кошиком:", reply_markup=cart_inline(items=items))
 
 
 async def _edit_cart_inline(bot: Bot, chat_id: int, message_id: int, tenant_id: str, user_id: int) -> None:
@@ -207,18 +206,18 @@ async def _send_orders(bot: Bot, chat_id: int, tenant_id: str, user_id: int, *, 
     if not orders:
         await bot.send_message(
             chat_id,
-            "ð§¾ *ÐÑÑÐ¾ÑÑÑ Ð·Ð°Ð¼Ð¾Ð²Ð»ÐµÐ½Ñ*\n\nÐÐ¾ÐºÐ¸ ÑÐ¾ Ð¿Ð¾ÑÐ¾Ð¶Ð½ÑÐ¾.",
+            "🧾 *Історія замовлень*\n\nПоки що порожньо.",
             parse_mode="Markdown",
             reply_markup=orders_history_kb(is_admin=is_admin),
         )
         return
 
-    lines = ["ð§¾ *ÐÑÑÐ¾ÑÑÑ Ð·Ð°Ð¼Ð¾Ð²Ð»ÐµÐ½Ñ*\n"]
+    lines = ["🧾 *Історія замовлень*\n"]
     for o in orders:
         oid = int(o["id"])
         status = str(o["status"])
         total = int(o["total_kop"] or 0)
-        lines.append(f"#{oid} â *{status}* â {_fmt_money(total)}")
+        lines.append(f"#{oid} — *{status}* — {_fmt_money(total)}")
 
     await bot.send_message(chat_id, "\n".join(lines), parse_mode="Markdown", reply_markup=orders_history_kb(is_admin=is_admin))
 
@@ -232,27 +231,24 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
     cb = _extract_callback(data)
     if cb:
         payload = (cb.get("data") or "").strip()
-
         chat_id = int(cb["message"]["chat"]["id"])
         user_id = int(cb["from"]["id"])
         is_admin = is_admin_user(tenant=tenant, user_id=user_id)
+        cb_id = cb.get("id")
 
-        # â 1) Admin callbacks first
+        # 1) Admin callbacks first
         if payload.startswith("tgadm:"):
             if not is_admin:
-                cb_id = cb.get("id")
                 if cb_id:
-                    await bot.answer_callback_query(cb_id, text="â ÐÐµÐ¼Ð° Ð´Ð¾ÑÑÑÐ¿Ñ", show_alert=False)
+                    await bot.answer_callback_query(cb_id, text="⛔ Нема доступу", show_alert=False)
                 return True
-
             handled = await admin_handle_update(tenant=tenant, data=data, bot=bot)
             return bool(handled)
 
-        # â 2) Shop callbacks
+        # 2) Shop callbacks
         if not payload.startswith("tgshop:"):
             return False
 
-        cb_id = cb.get("id")
         msg_id = int(cb["message"]["message_id"])
 
         parts = payload.split(":")
@@ -261,25 +257,25 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
 
         if action == "noop":
             if cb_id:
-                await bot.answer_callback_query(cb_id, text="â¢", show_alert=False)
+                await bot.answer_callback_query(cb_id, text="•", show_alert=False)
             return True
 
         if action == "add" and pid > 0:
             await TelegramShopCartRepo.cart_inc(tenant_id, user_id, pid, 1)
             if cb_id:
-                await bot.answer_callback_query(cb_id, text="â ÐÐ¾Ð´Ð°Ð½Ð¾ Ð² ÐºÐ¾ÑÐ¸Ðº", show_alert=False)
+                await bot.answer_callback_query(cb_id, text="✅ Додано в кошик", show_alert=False)
             return True
 
         if action == "fav" and pid > 0:
             if cb_id:
-                await bot.answer_callback_query(cb_id, text="â­ ÐÐ¾Ð´Ð°Ð½Ð¾ Ð² Ð¾Ð±ÑÐ°Ð½Ðµ (ÑÐºÐ¾ÑÐ¾ Ð±ÑÐ´Ðµ Ð»Ð¾Ð³ÑÐºÐ°)", show_alert=False)
+                await bot.answer_callback_query(cb_id, text="⭐ Додано в обране (скоро буде логіка)", show_alert=False)
             return True
 
         if action == "prev" and pid > 0:
             p = await ProductsRepo.get_prev_active(tenant_id, pid)
             if not p:
                 if cb_id:
-                    await bot.answer_callback_query(cb_id, text="â¢", show_alert=False)
+                    await bot.answer_callback_query(cb_id, text="•", show_alert=False)
                 return True
             await _edit_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]))
             if cb_id:
@@ -290,7 +286,7 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
             p = await ProductsRepo.get_next_active(tenant_id, pid)
             if not p:
                 if cb_id:
-                    await bot.answer_callback_query(cb_id, text="â¢", show_alert=False)
+                    await bot.answer_callback_query(cb_id, text="•", show_alert=False)
                 return True
             await _edit_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]))
             if cb_id:
@@ -328,9 +324,9 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         if action == "checkout":
             oid = await TelegramShopOrdersRepo.create_order_from_cart(tenant_id, user_id)
             if not oid:
-                await bot.send_message(chat_id, "ð ÐÐ¾ÑÐ¸Ðº Ð¿Ð¾ÑÐ¾Ð¶Ð½ÑÐ¹ â Ð½ÑÑÐ¾Ð³Ð¾ Ð¾ÑÐ¾ÑÐ¼Ð»ÑÐ²Ð°ÑÐ¸.", reply_markup=cart_kb(is_admin=is_admin))
+                await bot.send_message(chat_id, "🛒 Кошик порожній — нічого оформлювати.", reply_markup=cart_kb(is_admin=is_admin))
             else:
-                await bot.send_message(chat_id, f"â ÐÐ°Ð¼Ð¾Ð²Ð»ÐµÐ½Ð½Ñ *#{oid}* ÑÑÐ²Ð¾ÑÐµÐ½Ð¾!", parse_mode="Markdown", reply_markup=main_menu_kb(is_admin=is_admin))
+                await bot.send_message(chat_id, f"✅ Замовлення *#{oid}* створено!", parse_mode="Markdown", reply_markup=main_menu_kb(is_admin=is_admin))
             await _edit_cart_inline(bot, chat_id, msg_id, tenant_id, user_id)
             if cb_id:
                 await bot.answer_callback_query(cb_id)
@@ -349,7 +345,7 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
     user_id = int(msg["from"]["id"])
     is_admin = is_admin_user(tenant=tenant, user_id=user_id)
 
-    # â Admin handler FIRST (so wizard can process photos/documents without text)
+    # Admin handler FIRST (so wizard can process photos/documents without text)
     if is_admin:
         handled = await admin_handle_update(tenant=tenant, data=data, bot=bot)
         if handled:
@@ -363,7 +359,7 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
     log.info("tgshop message text=%r user_id=%s tenant=%s", text, user_id, tenant_id)
 
     if text in ("/start", "/shop"):
-        await _send_menu(bot, chat_id, "ð *ÐÐ°Ð³Ð°Ð·Ð¸Ð½*\n\nÐÐ±Ð¸ÑÐ°Ð¹ ÑÐ¾Ð·Ð´ÑÐ» ÐºÐ½Ð¾Ð¿ÐºÐ°Ð¼Ð¸ Ð½Ð¸Ð¶ÑÐµ ð", is_admin=is_admin)
+        await _send_menu(bot, chat_id, "🛒 *Магазин*\n\nОбирай розділ кнопками нижче 👇", is_admin=is_admin)
         return True
 
     if text == _normalize_text(BTN_CATALOG):
@@ -379,19 +375,34 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         return True
 
     if text == _normalize_text(BTN_HITS):
-        await bot.send_message(chat_id, "ð¥ *Ð¥ÑÑÐ¸ / ÐÐºÑÑÑ*\n\nÐÐ¾ÐºÐ¸ ÑÐ¾ Ð² ÑÐ¾Ð·ÑÐ¾Ð±ÑÑ (Ð³Ð°ÑÐ¾Ðº Ð³Ð¾ÑÐ¾Ð²Ð¸Ð¹).", parse_mode="Markdown", reply_markup=catalog_kb(is_admin=is_admin))
+        await bot.send_message(
+            chat_id,
+            "🔥 *Хіти / Акції*\n\nПоки що в розробці (гачок готовий).",
+            parse_mode="Markdown",
+            reply_markup=catalog_kb(is_admin=is_admin),
+        )
         return True
 
     if text == _normalize_text(BTN_FAV):
-        await bot.send_message(chat_id, "â­ *ÐÐ±ÑÐ°Ð½Ðµ*\n\nÐÐ¾ÐºÐ¸ ÑÐ¾ Ð² ÑÐ¾Ð·ÑÐ¾Ð±ÑÑ (Ð³Ð°ÑÐ¾Ðº Ð³Ð¾ÑÐ¾Ð²Ð¸Ð¹).", parse_mode="Markdown", reply_markup=favorites_kb(is_admin=is_admin))
+        await bot.send_message(
+            chat_id,
+            "⭐ *Обране*\n\nПоки що в розробці (гачок готовий).",
+            parse_mode="Markdown",
+            reply_markup=favorites_kb(is_admin=is_admin),
+        )
         return True
 
     if text == _normalize_text(BTN_SUPPORT):
-        await bot.send_message(chat_id, "ð *ÐÑÐ´ÑÑÐ¸Ð¼ÐºÐ°*\n\nÐÐ¾ÐºÐ¸ ÑÐ¾ Ð² ÑÐ¾Ð·ÑÐ¾Ð±ÑÑ (Ð³Ð°ÑÐ¾Ðº Ð³Ð¾ÑÐ¾Ð²Ð¸Ð¹).", parse_mode="Markdown", reply_markup=support_kb(is_admin=is_admin))
+        await bot.send_message(
+            chat_id,
+            "🆘 *Підтримка*\n\nПоки що в розробці (гачок готовий).",
+            parse_mode="Markdown",
+            reply_markup=support_kb(is_admin=is_admin),
+        )
         return True
 
     if text == _normalize_text(BTN_MENU_BACK):
-        await _send_menu(bot, chat_id, "â¬ï¸ ÐÐ¾Ð²ÐµÑÐ½ÑÐ² Ñ Ð¼ÐµÐ½Ñ ð", is_admin=is_admin)
+        await _send_menu(bot, chat_id, "⬅️ Повернув у меню 👇", is_admin=is_admin)
         return True
 
     if text == _normalize_text(BTN_CLEAR_CART):
@@ -402,13 +413,13 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
     if text == _normalize_text(BTN_CHECKOUT):
         oid = await TelegramShopOrdersRepo.create_order_from_cart(tenant_id, user_id)
         if not oid:
-            await bot.send_message(chat_id, "ð ÐÐ¾ÑÐ¸Ðº Ð¿Ð¾ÑÐ¾Ð¶Ð½ÑÐ¹ â Ð½ÑÑÐ¾Ð³Ð¾ Ð¾ÑÐ¾ÑÐ¼Ð»ÑÐ²Ð°ÑÐ¸.", reply_markup=cart_kb(is_admin=is_admin))
+            await bot.send_message(chat_id, "🛒 Кошик порожній — нічого оформлювати.", reply_markup=cart_kb(is_admin=is_admin))
         else:
-            await bot.send_message(chat_id, f"â ÐÐ°Ð¼Ð¾Ð²Ð»ÐµÐ½Ð½Ñ *#{oid}* ÑÑÐ²Ð¾ÑÐµÐ½Ð¾!", parse_mode="Markdown", reply_markup=main_menu_kb(is_admin=is_admin))
+            await bot.send_message(chat_id, f"✅ Замовлення *#{oid}* створено!", parse_mode="Markdown", reply_markup=main_menu_kb(is_admin=is_admin))
         return True
 
     if text == _normalize_text(BTN_ADMIN) and is_admin:
-        await bot.send_message(chat_id, "ð  ÐÐ´Ð¼ÑÐ½ÐºÐ°: /a_help", reply_markup=main_menu_kb(is_admin=True))
+        await bot.send_message(chat_id, "🛠 Адмінка: /a_help", reply_markup=main_menu_kb(is_admin=True))
         return True
 
     return False
