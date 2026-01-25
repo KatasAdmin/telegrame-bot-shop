@@ -16,9 +16,6 @@ class ProductsRepo:
             name,
             price_kop,
             is_active,
-            is_hit,
-            promo_price_kop,
-            promo_until_ts,
             created_ts
         FROM telegram_shop_products
         WHERE tenant_id = :tid AND is_active = true
