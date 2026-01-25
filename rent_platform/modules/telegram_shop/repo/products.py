@@ -180,7 +180,11 @@ class ProductsRepo:
         """
         await db_execute(
             q,
-            {"tid": tenant_id, "pid": int(product_id), "cid": int(category_id) if category_id is not None else None},
+            {
+                "tid": tenant_id,
+                "pid": int(product_id),
+                "cid": int(category_id) if category_id is not None else None,
+            },
         )
 
     @staticmethod
@@ -202,7 +206,12 @@ class ProductsRepo:
         """
         await db_execute(
             q,
-            {"tid": tenant_id, "pid": int(product_id), "pp": int(promo_price_kop), "pu": int(promo_until_ts)},
+            {
+                "tid": tenant_id,
+                "pid": int(product_id),
+                "pp": int(promo_price_kop),
+                "pu": int(promo_until_ts),
+            },
         )
 
     # --------- navigation helpers (catalog cards) ---------
@@ -311,7 +320,13 @@ class ProductsRepo:
         """
         ins = await db_fetch_one(
             q,
-            {"tid": tenant_id, "pid": int(product_id), "fid": str(file_id), "s": int(next_sort), "ts": int(time.time())},
+            {
+                "tid": tenant_id,
+                "pid": int(product_id),
+                "fid": str(file_id),
+                "s": int(next_sort),
+                "ts": int(time.time()),
+            },
         )
         return int(ins["id"]) if ins and ins.get("id") is not None else None
 
@@ -337,7 +352,6 @@ class ProductsRepo:
         """
         row = await db_fetch_one(q, {"tid": tenant_id, "pid": int(product_id)})
         return str(row["file_id"]) if row and row.get("file_id") else None
-
 
     @staticmethod
     async def set_price_kop(tenant_id: str, product_id: int, price_kop: int) -> None:
