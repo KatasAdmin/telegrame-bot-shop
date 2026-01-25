@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from aiogram import Bot
-
+from rent_platform.modules.telegram_shop.admin import admin_handle_update, is_admin_user
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
 from rent_platform.modules.telegram_shop.repo.cart import TelegramShopCartRepo
 from rent_platform.modules.telegram_shop.repo.orders import TelegramShopOrdersRepo
