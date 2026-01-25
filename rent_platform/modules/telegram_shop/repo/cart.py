@@ -78,10 +78,7 @@ class TelegramShopCartRepo:
             c.product_id,
             c.qty,
             p.name,
-            p.price_kop,
-            COALESCE(p.is_hit, false) AS is_hit,
-            COALESCE(p.promo_price_kop, 0) AS promo_price_kop,
-            COALESCE(p.promo_until_ts, 0) AS promo_until_ts
+            p.price_kop
         FROM telegram_shop_cart_items c
         JOIN telegram_shop_products p
           ON p.tenant_id = c.tenant_id AND p.id = c.product_id
