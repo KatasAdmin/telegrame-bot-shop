@@ -135,6 +135,11 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         await _send_menu(bot, chat_id, "🛒 *Магазин*\n\nОбирай розділ кнопками нижче 👇", is_admin=is_admin)
         return True
 
+        if is_admin:
+        handled = await admin_handle_update(tenant=tenant, data=data, bot=bot)
+        if handled:
+            return True
+
     if text == "/products":
         await _show_catalog(bot, chat_id, tenant_id, is_admin=is_admin)
         return True
