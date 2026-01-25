@@ -272,3 +272,83 @@ class ProductsRepo:
         """
         row = await db_fetch_one(q, {"tid": tenant_id, "pid": int(product_id)})
         return str(row["file_id"]) if row and row.get("file_id") else None
+
+
+    @staticmethod
+    async def list_active(tenant_id: str, limit: int = 50, *, category_id: int | None = None) -> list[dict[str, Any]]:
+        q = """
+        SELECT
+            id,
+            tenant_id,
+            name,
+            price_kop,
+            is_active,
+            COALESCE(is_hit, false) AS is_hit,
+            COALESCE(promo_price_kop, 0) AS promo_price_kop,
+            COALESCE(promo_until_ts, 0) AS promo_until_ts,
+            COALESCE(description, '') AS description,
+            category_id,
+            created_ts
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid AND is_active = true
+          AND (:cid IS NULL OR category_id = :cid)
+        ORDER BY id ASC
+        LIMIT :lim
+        """
+        return await db_fetch_all(q, {"tid": tenant_id, "lim": int(limit), "cid": category_id}) or []
+
+    @staticmethod
+    async def get_active(tenant_id: str, product_id: int) -> dict | None:
+        q = """
+        SELECT
+            id,
+            tenant_id,
+            name,
+            price_kop,
+            is_active,
+            COALESCE(is_hit, false) AS is_hit,
+            COALESCE(promo_price_kop, 0) AS promo_price_kop,
+            COALESCE(promo_until_ts, 0) AS promo_until_ts,
+            COALESCE(description, '') AS description,
+            category_id,
+            created_ts
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid AND id = :pid AND is_active = true
+        """
+        return await db_fetch_one(q, {"tid": tenant_id, "pid": int(product_id)})
+
+    @staticmethod
+    async def get_first_active(tenant_id: str, *, category_id: int | None = None) -> dict | None:
+        q = """
+        SELECT id
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid AND is_active = true
+          AND (:cid IS NULL OR category_id = :cid)
+        ORDER BY id ASC
+        LIMIT 1
+        """
+        return await db_fetch_one(q, {"tid": tenant_id, "cid": category_id})
+
+    @staticmethod
+    async def get_prev_active(tenant_id: str, product_id: int, *, category_id: int | None = None) -> dict | None:
+        q = """
+        SELECT id
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid AND is_active = true AND id < :pid
+          AND (:cid IS NULL OR category_id = :cid)
+        ORDER BY id DESC
+        LIMIT 1
+        """
+        return await db_fetch_one(q, {"tid": tenant_id, "pid": int(product_id), "cid": category_id})
+
+    @staticmethod
+    async def get_next_active(tenant_id: str, product_id: int, *, category_id: int | None = None) -> dict | None:
+        q = """
+        SELECT id
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid AND is_active = true AND id > :pid
+          AND (:cid IS NULL OR category_id = :cid)
+        ORDER BY id ASC
+        LIMIT 1
+        """
+        return await db_fetch_one(q, {"tid": tenant_id, "pid": int(product_id), "cid": category_id})
