@@ -2,6 +2,19 @@ from __future__ import annotations
 
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 
+# --- Single source of truth for button texts ---
+BTN_CATALOG = "🛍 Каталог"
+BTN_CART = "🛒 Кошик"
+BTN_HITS = "🔥 Хіти / Акції"
+BTN_FAV = "⭐ Обране"
+BTN_ORDERS = "🧾 Історія замовлень"
+BTN_SUPPORT = "🆘 Підтримка"
+BTN_MENU_BACK = "⬅️ Меню"
+BTN_ADMIN = "🛠 Адмінка"
+
+BTN_CHECKOUT = "✅ Оформити замовлення"
+BTN_CLEAR_CART = "🧹 Очистити кошик"
+
 
 def _kb(rows: list[list[str]], *, resize: bool = True) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
@@ -11,67 +24,63 @@ def _kb(rows: list[list[str]], *, resize: bool = True) -> ReplyKeyboardMarkup:
 
 
 def main_menu_kb(*, is_admin: bool = False) -> ReplyKeyboardMarkup:
-    """
-    Головне меню для покупця.
-    is_admin залишив, щоб не падало якщо роутер передає цей аргумент.
-    """
     rows = [
-        ["🛍 Каталог", "🛒 Кошик"],
-        ["🔥 Хіти / Акції", "⭐ Обране"],
-        ["🧾 Історія замовлень", "🆘 Підтримка"],
+        [BTN_CATALOG, BTN_CART],
+        [BTN_HITS, BTN_FAV],
+        [BTN_ORDERS, BTN_SUPPORT],
     ]
     if is_admin:
-        rows.insert(0, ["🛠 Адмінка"])
+        rows.insert(0, [BTN_ADMIN])
     return _kb(rows)
 
 
 def catalog_kb(*, is_admin: bool = False) -> ReplyKeyboardMarkup:
     rows = [
-        ["🛒 Кошик", "⭐ Обране"],
-        ["🔥 Хіти / Акції", "🧾 Історія замовлень"],
-        ["⬅️ Меню"],
+        [BTN_CART, BTN_FAV],
+        [BTN_HITS, BTN_ORDERS],
+        [BTN_MENU_BACK],
     ]
     if is_admin:
-        rows.insert(0, ["🛠 Адмінка"])
+        rows.insert(0, [BTN_ADMIN])
     return _kb(rows)
 
 
 def cart_kb(*, is_admin: bool = False) -> ReplyKeyboardMarkup:
     rows = [
-        ["✅ Оформити замовлення"],
-        ["🧹 Очистити кошик"],
-        ["⬅️ Меню"],
+        [BTN_CHECKOUT],
+        [BTN_CLEAR_CART],
+        [BTN_MENU_BACK],
     ]
     if is_admin:
-        rows.insert(0, ["🛠 Адмінка"])
+        rows.insert(0, [BTN_ADMIN])
     return _kb(rows)
 
 
 def favorites_kb(*, is_admin: bool = False) -> ReplyKeyboardMarkup:
     rows = [
-        ["🛍 Каталог", "🛒 Кошик"],
-        ["⬅️ Меню"],
+        [BTN_CATALOG, BTN_CART],
+        [BTN_MENU_BACK],
     ]
     if is_admin:
-        rows.insert(0, ["🛠 Адмінка"])
+        rows.insert(0, [BTN_ADMIN])
     return _kb(rows)
 
 
 def orders_history_kb(*, is_admin: bool = False) -> ReplyKeyboardMarkup:
     rows = [
-        ["🛍 Каталог", "🛒 Кошик"],
-        ["⬅️ Меню"],
+        [BTN_CATALOG, BTN_CART],
+        [BTN_MENU_BACK],
     ]
     if is_admin:
-        rows.insert(0, ["🛠 Адмінка"])
+        rows.insert(0, [BTN_ADMIN])
     return _kb(rows)
 
 
 def support_kb(*, is_admin: bool = False) -> ReplyKeyboardMarkup:
     rows = [
-        ["🛍 Каталог", "🛒 Кошик"],
-        ["⬅️ Меню"],
+        [BTN_CATALOG, BTN_CART],
+        [BTN_MENU_BACK],
     ]
     if is_admin:
-        rows.insert(0, ["🛠 Адмінка"])
+        rows.insert(0, [BTN_ADMIN])
     return _kb(rows)
