@@ -232,6 +232,25 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
     cb = _extract_callback(data)
     if cb:
         payload = (cb.get("data") or "").strip()
+
+        chat_id = int(cb["message"]["chat"]["id"])
+        user_id = int(cb["from"]["id"])
+        is_admin = is_admin_user(tenant=tenant, user_id=user_id)
+
+    # ✅ 1) Admin callbacks first
+        if payload.startswith("tgadm:"):
+            if not is_admin:
+            # не адмін — просто не даємо нічого робити
+                cb_id = cb.get("id")
+                if cb_id:
+                    await bot.answer_callback_query(cb_id, text="⛔ Нема доступу", show_alert=False)
+                return True
+
+        # передаємо повністю в адмін-хендлер
+            handled = await admin_handle_update(tenant=tenant, data=data, bot=bot)
+            return bool(handled)
+
+    # ✅ 2) Shop callbacks
         if not payload.startswith("tgshop:"):
             return False
 
