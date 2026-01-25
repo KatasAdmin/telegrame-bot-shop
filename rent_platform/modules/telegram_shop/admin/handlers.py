@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from aiogram import Bot
+from aiogram.types import InputMediaPhoto
 
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
 
-# CategoriesRepo optional-import (so admin doesn't crash if you haven't added file yet)
 try:
     from rent_platform.modules.telegram_shop.repo.categories import CategoriesRepo  # type: ignore
 except Exception:  # pragma: no cover
@@ -58,7 +58,7 @@ def _kb(rows: list[list[tuple[str, str]]]) -> dict:
 
 
 # -----------------------------
-# Меню: "в одному місці" -> 📦 Каталог
+# Menus
 # -----------------------------
 def _admin_home_kb() -> dict:
     return _kb([
@@ -84,8 +84,9 @@ def _products_menu_kb() -> dict:
 
 
 def _categories_menu_kb() -> dict:
+    # як ти просив: без "список категорій"
     return _kb([
-        [("➕ Створити категорію", "tgadm:cat_create"), ("📋 Список категорій", "tgadm:cat_list")],
+        [("➕ Додати категорію", "tgadm:cat_create"), ("🧩 Керувати категорією", "tgadm:cat_manage")],
         [("🗑 Видалити категорію", "tgadm:cat_delete")],
         [("⬅️ Назад", "tgadm:catalog")],
     ])
@@ -114,35 +115,34 @@ def _wiz_finish_kb(*, product_id: int) -> dict:
     ])
 
 
-def _category_pick_kb(categories: list[dict], *, default_category_id: int | None) -> dict:
+def _category_pick_kb(categories: list[dict], *, prefix: str, include_cancel: bool = True) -> dict:
+    """
+    prefix: tgadm:cat_open  / tgadm:cat_del / tgadm:wiz_cat
+    """
     rows: list[list[tuple[str, str]]] = []
     for c in categories:
         cid = int(c["id"])
         name = str(c["name"])
-        badge = "✅ " if default_category_id and cid == default_category_id else ""
-        rows.append([(f"{badge}📁 {name}", f"tgadm:wiz_cat:{cid}")])
-
-    # "Пропустити" = поставити дефолтну категорію
-    rows.append([("⏭ Пропустити", "tgadm:wiz_skip"), ("❌ Скасувати", "tgadm:cancel")])
+        rows.append([(f"📁 {name}", f"{prefix}:{cid}")])
+    if include_cancel:
+        rows.append([("⬅️ Назад", "tgadm:cat_menu"), ("❌ Скасувати", "tgadm:cancel")])
+    else:
+        rows.append([("⬅️ Назад", "tgadm:cat_menu")])
     return _kb(rows)
 
 
-def _cat_delete_pick_kb(categories: list[dict], *, default_id: int) -> dict:
-    rows: list[list[tuple[str, str]]] = []
-    for c in categories:
-        cid = int(c["id"])
-        name = str(c["name"])
-        if cid == default_id:
-            rows.append([(f"🔒 {name}", "tgadm:noop")])
-        else:
-            rows.append([(f"🗑 {name}", f"tgadm:cat_del:{cid}")])
-    rows.append([("⬅️ Назад", "tgadm:cat_menu")])
-    return _kb(rows)
+def _admin_product_card_kb(*, product_id: int, category_id: int, has_prev: bool, has_next: bool) -> dict:
+    cid = int(category_id)
 
+    nav_row: list[tuple[str, str]] = []
+    nav_row.append(("⬅️", f"tgadm:pc_prev:{product_id}:{cid}") if has_prev else ("·", "tgadm:noop"))
+    nav_row.append(("➡️", f"tgadm:pc_next:{product_id}:{cid}") if has_next else ("·", "tgadm:noop"))
 
-def _cat_delete_confirm_kb(category_id: int) -> dict:
     return _kb([
-        [("✅ Так, видалити", f"tgadm:cat_del_yes:{int(category_id)}"), ("❌ Ні", "tgadm:cat_menu")],
+        nav_row,
+        [("🗑 В архів", f"tgadm:pdel:{product_id}:{cid}"), ("📝 Опис", f"tgadm:wiz_desc_edit:{product_id}")],
+        [("💰 Ціна", f"tgadm:pprice:{product_id}:{cid}"), ("✏️ Назва", f"tgadm:pname:{product_id}:{cid}")],
+        [("⬅️ Категорії", "tgadm:cat_manage")],
     ])
 
 
@@ -249,17 +249,12 @@ async def _wiz_ask_category(bot: Bot, chat_id: int, tenant_id: str, draft: dict)
 
     default_cid = await CategoriesRepo.ensure_default(tenant_id)  # type: ignore[misc]
     cats = await CategoriesRepo.list(tenant_id, limit=50)  # type: ignore[misc]
-
-    _state_set(
-        tenant_id,
-        chat_id,
-        {"mode": "wiz_category", "draft": draft, "default_category_id": int(default_cid or 0)},
-    )
+    _state_set(tenant_id, chat_id, {"mode": "wiz_category", "draft": draft, "default_category_id": int(default_cid or 0)})
     await bot.send_message(
         chat_id,
         "4/5 *Категорія*\n\nОбери категорію для товару:",
         parse_mode="Markdown",
-        reply_markup=_category_pick_kb(cats, default_category_id=int(default_cid or 0)),
+        reply_markup=_category_pick_kb(cats, prefix="tgadm:wiz_cat", include_cancel=True),
     )
 
 
@@ -297,9 +292,7 @@ async def _wiz_photos_start(bot: Bot, chat_id: int, tenant_id: str, product_id: 
     _state_set(tenant_id, chat_id, {"mode": "wiz_photo", "product_id": int(product_id)})
     await bot.send_message(
         chat_id,
-        f"📷 Фото для товару *#{product_id}*\n\n"
-        "Надсилай фото (можна кілька).\n"
-        "Після кожного фото я спитаю — додати ще чи `Готово`.",
+        f"📷 Фото для товару *#{product_id}*\n\nНадсилай фото (можна кілька).",
         parse_mode="Markdown",
         reply_markup=_wiz_photos_kb(product_id=product_id),
     )
@@ -308,8 +301,7 @@ async def _wiz_photos_start(bot: Bot, chat_id: int, tenant_id: str, product_id: 
 async def _wiz_finish(bot: Bot, chat_id: int, product_id: int) -> None:
     await bot.send_message(
         chat_id,
-        f"✅ *Готово!* Товар *#{product_id}* створено.\n\n"
-        "Можеш додати фото/опис або створити ще.",
+        f"✅ *Готово!* Товар *#{product_id}* створено.\n\nМожеш додати фото/опис або створити ще.",
         parse_mode="Markdown",
         reply_markup=_wiz_finish_kb(product_id=product_id),
     )
@@ -330,43 +322,92 @@ def _extract_image_file_id(msg: dict) -> str | None:
 
 
 # -----------------------------
-# Categories UI
+# Category management (as you asked)
 # -----------------------------
-async def _send_categories_list(bot: Bot, chat_id: int, tenant_id: str) -> None:
+async def _send_manage_categories_pick(bot: Bot, chat_id: int, tenant_id: str) -> None:
     if CategoriesRepo is None:
-        await bot.send_message(chat_id, "📁 Категорії ще не підключені (репо буде додано наступним кроком).")
+        await bot.send_message(chat_id, "📁 Категорії ще не підключені (repo/categories.py).", reply_markup=_categories_menu_kb())
         return
-
     await CategoriesRepo.ensure_default(tenant_id)  # type: ignore[misc]
     cats = await CategoriesRepo.list(tenant_id, limit=100)  # type: ignore[misc]
-
-    if not cats:
-        await bot.send_message(chat_id, "📁 Поки що немає категорій. Натисни ➕ Створити категорію.", reply_markup=_categories_menu_kb())
-        return
-
-    lines = ["📁 *Категорії:*"]
-    for c in cats:
-        lines.append(f"- {c['name']} (id={c['id']})")
-    await bot.send_message(chat_id, "\n".join(lines), parse_mode="Markdown", reply_markup=_categories_menu_kb())
+    await bot.send_message(
+        chat_id,
+        "🧩 *Керувати категорією*\n\nОбери категорію 👇",
+        parse_mode="Markdown",
+        reply_markup=_category_pick_kb(cats, prefix="tgadm:cat_open", include_cancel=True),
+    )
 
 
-async def _send_categories_delete_pick(bot: Bot, chat_id: int, tenant_id: str) -> None:
+async def _send_delete_categories_pick(bot: Bot, chat_id: int, tenant_id: str) -> None:
     if CategoriesRepo is None:
-        await bot.send_message(chat_id, "📁 Категорії ще не підключені.", reply_markup=_categories_menu_kb())
+        await bot.send_message(chat_id, "📁 Категорії ще не підключені (repo/categories.py).", reply_markup=_categories_menu_kb())
         return
-
-    default_id = int(await CategoriesRepo.ensure_default(tenant_id))  # type: ignore[misc]
+    default_id = await CategoriesRepo.ensure_default(tenant_id)  # type: ignore[misc]
     cats = await CategoriesRepo.list(tenant_id, limit=100)  # type: ignore[misc]
-    if not cats:
-        await bot.send_message(chat_id, "📁 Нема категорій.", reply_markup=_categories_menu_kb())
+    # не даємо видаляти дефолтну
+    cats2 = [c for c in cats if int(c["id"]) != int(default_id)]
+    if not cats2:
+        await bot.send_message(chat_id, "Нема категорій для видалення (є лише 'Без категорії').", reply_markup=_categories_menu_kb())
         return
 
     await bot.send_message(
         chat_id,
-        "🗑 *Видалення категорії*\n\nОбери категорію. Товари з неї будуть перенесені в *Без категорії*.",
+        "🗑 *Видалити категорію*\n\nОбери категорію (товари будуть перенесені в 'Без категорії'):",
         parse_mode="Markdown",
-        reply_markup=_cat_delete_pick_kb(cats, default_id=default_id),
+        reply_markup=_category_pick_kb(cats2, prefix="tgadm:cat_del", include_cancel=True),
     )
+
+
+async def _build_admin_product_card(tenant_id: str, product_id: int, category_id: int) -> dict | None:
+    p = await ProductsRepo.get_active(tenant_id, product_id)
+    if not p:
+        return None
+
+    prev_p = await ProductsRepo.get_prev_active(tenant_id, product_id, category_id=category_id)
+    next_p = await ProductsRepo.get_next_active(tenant_id, product_id, category_id=category_id)
+
+    pid = int(p["id"])
+    name = str(p["name"])
+    price = int(p.get("price_kop") or 0)
+    desc = (p.get("description") or "").strip()
+
+    cover_file_id = await ProductsRepo.get_cover_photo_file_id(tenant_id, pid)
+
+    text = f"🛍 *{name}*\n\nЦіна: *{_fmt_money(price)}*\nID: `{pid}`"
+    if desc:
+        text += f"\n\n{desc}"
+
+    kb = _admin_product_card_kb(product_id=pid, category_id=int(category_id), has_prev=bool(prev_p), has_next=bool(next_p))
+    return {"pid": pid, "file_id": cover_file_id, "has_photo": bool(cover_file_id), "text": text, "kb": kb}
+
+
+async def _send_admin_category_first_product(bot: Bot, chat_id: int, tenant_id: str, category_id: int) -> None:
+    p = await ProductsRepo.get_first_active(tenant_id, category_id=category_id)
+    if not p:
+        await bot.send_message(chat_id, "У цій категорії поки що немає активних товарів.", reply_markup=_categories_menu_kb())
+        return
+    card = await _build_admin_product_card(tenant_id, int(p["id"]), int(category_id))
+    if not card:
+        await bot.send_message(chat_id, "Категорія порожня.", reply_markup=_categories_menu_kb())
+        return
+
+    if card["has_photo"]:
+        await bot.send_photo(chat_id, photo=card["file_id"], caption=card["text"], parse_mode="Markdown", reply_markup=card["kb"])
+    else:
+        await bot.send_message(chat_id, card["text"], parse_mode="Markdown", reply_markup=card["kb"])
+
+
+async def _edit_admin_product_card(bot: Bot, chat_id: int, message_id: int, tenant_id: str, product_id: int, category_id: int) -> bool:
+    card = await _build_admin_product_card(tenant_id, product_id, category_id)
+    if not card:
+        return False
+
+    if card["has_photo"]:
+        media = InputMediaPhoto(media=card["file_id"], caption=card["text"], parse_mode="Markdown")
+        await bot.edit_message_media(media=media, chat_id=chat_id, message_id=message_id, reply_markup=card["kb"])
+    else:
+        await bot.edit_message_text(card["text"], chat_id=chat_id, message_id=message_id, parse_mode="Markdown", reply_markup=card["kb"])
+    return True
 
 
 async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
@@ -380,6 +421,7 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             return False
 
         chat_id = int(cb["message"]["chat"]["id"])
+        msg_id = int(cb["message"]["message_id"])
         cb_id = cb.get("id")
         if cb_id:
             await bot.answer_callback_query(cb_id)
@@ -387,7 +429,9 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
         parts = payload.split(":")
         action = parts[1] if len(parts) > 1 else ""
         arg = parts[2] if len(parts) > 2 else ""
+        arg2 = parts[3] if len(parts) > 3 else ""
 
+        # noop
         if action == "noop":
             return True
 
@@ -412,6 +456,35 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             if CategoriesRepo is not None:
                 await CategoriesRepo.ensure_default(tenant_id)  # type: ignore[misc]
             await bot.send_message(chat_id, "📁 *Категорії*\n\nОбери дію 👇", parse_mode="Markdown", reply_markup=_categories_menu_kb())
+            return True
+
+        if action == "cat_manage":
+            _state_clear(tenant_id, chat_id)
+            await _send_manage_categories_pick(bot, chat_id, tenant_id)
+            return True
+
+        if action == "cat_delete":
+            _state_clear(tenant_id, chat_id)
+            await _send_delete_categories_pick(bot, chat_id, tenant_id)
+            return True
+
+        if action == "cat_open" and arg.isdigit():
+            _state_clear(tenant_id, chat_id)
+            cid = int(arg)
+            _state_set(tenant_id, chat_id, {"mode": "cat_browse", "category_id": cid})
+            await _send_admin_category_first_product(bot, chat_id, tenant_id, cid)
+            return True
+
+        if action == "cat_del" and arg.isdigit():
+            if CategoriesRepo is None:
+                await bot.send_message(chat_id, "Категорії не підключені.", reply_markup=_categories_menu_kb())
+                return True
+            cid = int(arg)
+            try:
+                await CategoriesRepo.delete(tenant_id, cid)  # type: ignore[misc]
+                await bot.send_message(chat_id, "✅ Категорію видалено. Товари перенесено в 'Без категорії'.", reply_markup=_categories_menu_kb())
+            except Exception as e:
+                await bot.send_message(chat_id, f"❌ Не вдалося видалити: {e}", reply_markup=_categories_menu_kb())
             return True
 
         if action == "archive":
@@ -445,64 +518,10 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             await bot.send_message(chat_id, "Надішли ID товару (цифрою), який увімкнути:", reply_markup=_wiz_nav_kb())
             return True
 
-        # Categories
-        if action == "cat_list":
-            _state_clear(tenant_id, chat_id)
-            await _send_categories_list(bot, chat_id, tenant_id)
-            return True
-
+        # create category
         if action == "cat_create":
             _state_set(tenant_id, chat_id, {"mode": "cat_create_name"})
             await bot.send_message(chat_id, "➕ Введи назву нової категорії:", reply_markup=_wiz_nav_kb())
-            return True
-
-        if action == "cat_delete":
-            _state_clear(tenant_id, chat_id)
-            await _send_categories_delete_pick(bot, chat_id, tenant_id)
-            return True
-
-        if action == "cat_del":
-            if not arg.isdigit():
-                await bot.send_message(chat_id, "❌ Невірний ID категорії.", reply_markup=_categories_menu_kb())
-                return True
-            cid = int(arg)
-            if CategoriesRepo is None:
-                await bot.send_message(chat_id, "📁 Категорії ще не підключені.", reply_markup=_categories_menu_kb())
-                return True
-
-            c = await CategoriesRepo.get_by_id(tenant_id, cid)  # type: ignore[misc]
-            if not c:
-                await bot.send_message(chat_id, "❌ Категорію не знайдено.", reply_markup=_categories_menu_kb())
-                return True
-
-            default_id = int(await CategoriesRepo.ensure_default(tenant_id))  # type: ignore[misc]
-            if cid == default_id or (c.get("name") or "").strip() == getattr(CategoriesRepo, "DEFAULT_NAME", "Без категорії"):
-                await bot.send_message(chat_id, "🔒 Категорію *Без категорії* видаляти не можна.", parse_mode="Markdown", reply_markup=_categories_menu_kb())
-                return True
-
-            await bot.send_message(
-                chat_id,
-                f"⚠️ Видалити категорію *{c['name']}* (id={cid})?\n\n"
-                "Товари з неї будуть перенесені в *Без категорії*.",
-                parse_mode="Markdown",
-                reply_markup=_cat_delete_confirm_kb(cid),
-            )
-            return True
-
-        if action == "cat_del_yes":
-            if not arg.isdigit():
-                await bot.send_message(chat_id, "❌ Невірний ID.", reply_markup=_categories_menu_kb())
-                return True
-            cid = int(arg)
-            if CategoriesRepo is None:
-                await bot.send_message(chat_id, "📁 Категорії ще не підключені.", reply_markup=_categories_menu_kb())
-                return True
-
-            ok = await CategoriesRepo.delete(tenant_id, cid)  # type: ignore[misc]
-            if ok:
-                await bot.send_message(chat_id, f"✅ Категорію (id={cid}) видалено.", reply_markup=_categories_menu_kb())
-            else:
-                await bot.send_message(chat_id, "❌ Не вдалося видалити (можливо це *Без категорії* або нема такої).", parse_mode="Markdown", reply_markup=_categories_menu_kb())
             return True
 
         # Wizard
@@ -566,6 +585,49 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             await bot.send_message(chat_id, f"📝 Надішли новий опис для товару #{pid}:", reply_markup=_wiz_nav_kb(allow_skip=True))
             return True
 
+        # --- category browse controls ---
+        if action in ("pc_prev", "pc_next", "pdel", "pprice", "pname"):
+            # формат: tgadm:<action>:<pid>:<cid>
+            if not (arg.isdigit() and arg2.isdigit()):
+                return True
+            pid = int(arg)
+            cid = int(arg2)
+
+            if action == "pc_prev":
+                p = await ProductsRepo.get_prev_active(tenant_id, pid, category_id=cid)
+                if p:
+                    await _edit_admin_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]), cid)
+                return True
+
+            if action == "pc_next":
+                p = await ProductsRepo.get_next_active(tenant_id, pid, category_id=cid)
+                if p:
+                    await _edit_admin_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]), cid)
+                return True
+
+            if action == "pdel":
+                # "видалити" = в архів
+                await ProductsRepo.set_active(tenant_id, pid, False)
+                # показуємо наступний або попередній, або кажемо що порожньо
+                p = await ProductsRepo.get_next_active(tenant_id, pid, category_id=cid)
+                if not p:
+                    p = await ProductsRepo.get_prev_active(tenant_id, pid, category_id=cid)
+                if p:
+                    await _edit_admin_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]), cid)
+                else:
+                    await bot.edit_message_caption("У цій категорії більше нема активних товарів.", chat_id=chat_id, message_id=msg_id)
+                return True
+
+            if action == "pprice":
+                _state_set(tenant_id, chat_id, {"mode": "edit_price", "product_id": pid, "category_id": cid})
+                await bot.send_message(chat_id, f"💰 Надішли нову ціну для товару #{pid} (наприклад 1200.50):", reply_markup=_wiz_nav_kb())
+                return True
+
+            if action == "pname":
+                _state_set(tenant_id, chat_id, {"mode": "edit_name", "product_id": pid, "category_id": cid})
+                await bot.send_message(chat_id, f"✏️ Надішли нову назву для товару #{pid}:", reply_markup=_wiz_nav_kb())
+                return True
+
         return False
 
     # ---------- messages ----------
@@ -596,22 +658,11 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
 
         file_id = _extract_image_file_id(msg)
         if not file_id:
-            await bot.send_message(
-                chat_id,
-                "Надішли *фото* (або файл-скрін, але як картинку). Або натисни `Готово`.",
-                parse_mode="Markdown",
-                reply_markup=_wiz_photos_kb(product_id=product_id),
-            )
+            await bot.send_message(chat_id, "Надішли *фото* або натисни `Готово`.", parse_mode="Markdown", reply_markup=_wiz_photos_kb(product_id=product_id))
             return True
 
         await ProductsRepo.add_product_photo(tenant_id, product_id, file_id)
-
-        await bot.send_message(
-            chat_id,
-            f"✅ Фото додано до *#{product_id}*.\n\nДодати ще чи `Готово`?",
-            parse_mode="Markdown",
-            reply_markup=_wiz_photos_kb(product_id=product_id),
-        )
+        await bot.send_message(chat_id, f"✅ Фото додано до *#{product_id}*.\n\nДодати ще чи `Готово`?", parse_mode="Markdown", reply_markup=_wiz_photos_kb(product_id=product_id))
         return True
 
     # enable/disable by id
@@ -634,12 +685,11 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
 
         if CategoriesRepo is None:
             _state_clear(tenant_id, chat_id)
-            await bot.send_message(chat_id, "📁 Категорії ще не підключені.", reply_markup=_catalog_kb())
+            await bot.send_message(chat_id, "📁 Категорії ще не підключені (repo/categories.py).", reply_markup=_catalog_kb())
             return True
 
         await CategoriesRepo.ensure_default(tenant_id)  # type: ignore[misc]
         cid = await CategoriesRepo.create(tenant_id, name[:64])  # type: ignore[misc]
-
         _state_clear(tenant_id, chat_id)
         await bot.send_message(chat_id, f"✅ Категорію створено: *{name}* (id={cid})", parse_mode="Markdown", reply_markup=_categories_menu_kb())
         return True
@@ -679,13 +729,48 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             await bot.send_message(chat_id, "❌ Нема ID товару.", reply_markup=_admin_home_kb())
             return True
 
-        if text == "":
-            await bot.send_message(chat_id, "Опис пустий. Можеш надіслати текст або натиснути Пропустити.", reply_markup=_wiz_nav_kb(allow_skip=True))
-            return True
-
         await ProductsRepo.set_description(tenant_id, product_id, text)
         _state_clear(tenant_id, chat_id)
         await bot.send_message(chat_id, f"✅ Опис оновлено для #{product_id}.", reply_markup=_admin_home_kb())
+        return True
+
+    # edit price / name inside category manage
+    if mode == "edit_price":
+        pid = int(st.get("product_id") or 0)
+        cid = int(st.get("category_id") or 0)
+        price_kop = _parse_price_to_kop(text)
+        if price_kop is None or price_kop <= 0:
+            await bot.send_message(chat_id, "Ціна не розпізнана. Приклад: `1200.50` або `1200`", parse_mode="Markdown")
+            return True
+        if hasattr(ProductsRepo, "set_price_kop"):
+            await ProductsRepo.set_price_kop(tenant_id, pid, int(price_kop))  # type: ignore[attr-defined]
+        else:
+            # якщо методу ще нема — скажемо що треба додати
+            await bot.send_message(chat_id, "❌ Нема ProductsRepo.set_price_kop(). Додай метод (я нижче дам).")
+            return True
+        _state_clear(tenant_id, chat_id)
+        await bot.send_message(chat_id, f"✅ Ціну оновлено для #{pid}.", reply_markup=_categories_menu_kb())
+        # повертаємось в категорію (перший товар)
+        if cid:
+            await _send_admin_category_first_product(bot, chat_id, tenant_id, cid)
+        return True
+
+    if mode == "edit_name":
+        pid = int(st.get("product_id") or 0)
+        cid = int(st.get("category_id") or 0)
+        nm = (text or "").strip()
+        if not nm:
+            await bot.send_message(chat_id, "Назва не може бути пустою.")
+            return True
+        if hasattr(ProductsRepo, "set_name"):
+            await ProductsRepo.set_name(tenant_id, pid, nm[:128])  # type: ignore[attr-defined]
+        else:
+            await bot.send_message(chat_id, "❌ Нема ProductsRepo.set_name(). Додай метод (я нижче дам).")
+            return True
+        _state_clear(tenant_id, chat_id)
+        await bot.send_message(chat_id, f"✅ Назву оновлено для #{pid}.", reply_markup=_categories_menu_kb())
+        if cid:
+            await _send_admin_category_first_product(bot, chat_id, tenant_id, cid)
         return True
 
     return False
