@@ -41,8 +41,21 @@ def _extract_callback(update: dict) -> dict | None:
     return update.get("callback_query")
 
 
+def _normalize_text(s: str) -> str:
+    """
+    Telegram/iOS can send emoji texts with variation selectors.
+    We normalize so comparisons with BTN_* are stable.
+    """
+    s = (s or "").strip()
+    # remove common emoji variation selectors / joiners
+    s = s.replace("\ufe0f", "").replace("\u200d", "")
+    # collapse whitespace
+    s = " ".join(s.split())
+    return s
+
+
 def _get_text(msg: dict) -> str:
-    return (msg.get("text") or "").strip()
+    return _normalize_text((msg.get("text") or ""))
 
 
 def _fmt_money(kop: int) -> str:
@@ -180,7 +193,13 @@ async def _edit_cart_inline(bot: Bot, chat_id: int, message_id: int, tenant_id: 
     if not items:
         await bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, parse_mode="Markdown")
         return
-    await bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, parse_mode="Markdown", reply_markup=cart_inline(items=items))
+    await bot.edit_message_text(
+        text,
+        chat_id=chat_id,
+        message_id=message_id,
+        parse_mode="Markdown",
+        reply_markup=cart_inline(items=items),
+    )
 
 
 async def _send_orders(bot: Bot, chat_id: int, tenant_id: str, user_id: int, *, is_admin: bool) -> None:
@@ -231,20 +250,17 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
                 await bot.answer_callback_query(cb_id, text="•", show_alert=False)
             return True
 
-        # add to cart: no redirect, only toast
         if action == "add" and pid > 0:
             await TelegramShopCartRepo.cart_inc(tenant_id, user_id, pid, 1)
             if cb_id:
                 await bot.answer_callback_query(cb_id, text="✅ Додано в кошик", show_alert=False)
             return True
 
-        # favorites hook (skeleton)
         if action == "fav" and pid > 0:
             if cb_id:
                 await bot.answer_callback_query(cb_id, text="⭐ Додано в обране (скоро буде логіка)", show_alert=False)
             return True
 
-        # navigation: EDIT SAME MESSAGE (no spam)
         if action == "prev" and pid > 0:
             p = await ProductsRepo.get_prev_active(tenant_id, pid)
             if not p:
@@ -267,7 +283,6 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
                 await bot.answer_callback_query(cb_id)
             return True
 
-        # cart controls
         if action == "inc" and pid > 0:
             await TelegramShopCartRepo.cart_inc(tenant_id, user_id, pid, 1)
             await _edit_cart_inline(bot, chat_id, msg_id, tenant_id, user_id)
@@ -324,7 +339,9 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
     user_id = int(msg["from"]["id"])
     is_admin = is_admin_user(tenant=tenant, user_id=user_id)
 
-    # admin hook stays as “гачок”
+    # 🔎 helpful debug (won't spam unless you enable logger level)
+    log.info("tgshop message text=%r user_id=%s tenant=%s", text, user_id, tenant_id)
+
     if is_admin:
         handled = await admin_handle_update(tenant=tenant, data=data, bot=bot)
         if handled:
@@ -335,41 +352,40 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         return True
 
     # CLIENT: only buttons
-    if text == BTN_CATALOG:
+    if text == _normalize_text(BTN_CATALOG):
         await _send_first_product_card(bot, chat_id, tenant_id, is_admin=is_admin)
         return True
 
-    if text == BTN_CART:
+    if text == _normalize_text(BTN_CART):
         await _send_cart(bot, chat_id, tenant_id, user_id, is_admin=is_admin)
         return True
 
-    if text == BTN_ORDERS:
+    if text == _normalize_text(BTN_ORDERS):
         await _send_orders(bot, chat_id, tenant_id, user_id, is_admin=is_admin)
         return True
 
-    if text == BTN_HITS:
+    if text == _normalize_text(BTN_HITS):
         await bot.send_message(chat_id, "🔥 *Хіти / Акції*\n\nПоки що в розробці (гачок готовий).", parse_mode="Markdown", reply_markup=catalog_kb(is_admin=is_admin))
         return True
 
-    if text == BTN_FAV:
+    if text == _normalize_text(BTN_FAV):
         await bot.send_message(chat_id, "⭐ *Обране*\n\nПоки що в розробці (гачок готовий).", parse_mode="Markdown", reply_markup=favorites_kb(is_admin=is_admin))
         return True
 
-    if text == BTN_SUPPORT:
+    if text == _normalize_text(BTN_SUPPORT):
         await bot.send_message(chat_id, "🆘 *Підтримка*\n\nПоки що в розробці (гачок готовий).", parse_mode="Markdown", reply_markup=support_kb(is_admin=is_admin))
         return True
 
-    if text == BTN_MENU_BACK:
+    if text == _normalize_text(BTN_MENU_BACK):
         await _send_menu(bot, chat_id, "⬅️ Повернув у меню 👇", is_admin=is_admin)
         return True
 
-    # reply cart buttons
-    if text == BTN_CLEAR_CART:
+    if text == _normalize_text(BTN_CLEAR_CART):
         await TelegramShopCartRepo.cart_clear(tenant_id, user_id)
         await _send_cart(bot, chat_id, tenant_id, user_id, is_admin=is_admin)
         return True
 
-    if text == BTN_CHECKOUT:
+    if text == _normalize_text(BTN_CHECKOUT):
         oid = await TelegramShopOrdersRepo.create_order_from_cart(tenant_id, user_id)
         if not oid:
             await bot.send_message(chat_id, "🛒 Кошик порожній — нічого оформлювати.", reply_markup=cart_kb(is_admin=is_admin))
@@ -377,7 +393,7 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
             await bot.send_message(chat_id, f"✅ Замовлення *#{oid}* створено!", parse_mode="Markdown", reply_markup=main_menu_kb(is_admin=is_admin))
         return True
 
-    if text == BTN_ADMIN and is_admin:
+    if text == _normalize_text(BTN_ADMIN) and is_admin:
         await bot.send_message(chat_id, "🛠 Адмінка: /a_help", reply_markup=main_menu_kb(is_admin=True))
         return True
 
