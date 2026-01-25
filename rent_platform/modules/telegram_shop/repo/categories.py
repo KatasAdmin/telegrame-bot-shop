@@ -37,27 +37,6 @@ class CategoriesRepo:
         return int(row2["id"])
 
     @staticmethod
-    async def get_by_id(tenant_id: str, category_id: int) -> dict[str, Any] | None:
-        q = """
-        SELECT id, tenant_id, name, sort, created_ts
-        FROM telegram_shop_categories
-        WHERE tenant_id = :tid AND id = :cid
-        LIMIT 1
-        """
-        return await db_fetch_one(q, {"tid": tenant_id, "cid": int(category_id)})
-
-    @staticmethod
-    async def has_any(tenant_id: str) -> bool:
-        q = """
-        SELECT 1
-        FROM telegram_shop_categories
-        WHERE tenant_id = :tid
-        LIMIT 1
-        """
-        row = await db_fetch_one(q, {"tid": tenant_id})
-        return bool(row)
-
-    @staticmethod
     async def list(tenant_id: str, limit: int = 50) -> list[dict[str, Any]]:
         q = """
         SELECT id, tenant_id, name, sort, created_ts
@@ -100,37 +79,27 @@ class CategoriesRepo:
         return int(row2["id"])
 
     @staticmethod
-    async def delete(tenant_id: str, category_id: int) -> bool:
+    async def delete(tenant_id: str, category_id: int) -> None:
         """
-        Видаляє категорію.
-        Перед видаленням переносить всі товари з цієї категорії в "Без категорії".
-        Категорію "Без категорії" видаляти не можна.
+        Видаляє категорію (крім "Без категорії").
+        Перед видаленням переносить всі товари з цієї категорії в дефолтну.
         """
         cid = int(category_id)
-        default_id = int(await CategoriesRepo.ensure_default(tenant_id))
+        default_id = await CategoriesRepo.ensure_default(tenant_id)
+        if cid == int(default_id):
+            raise ValueError("cannot delete default category")
 
-        if cid == default_id:
-            return False
-
-        # якщо хтось перейменував дефолт — ще раз перевіримо по назві
-        c = await CategoriesRepo.get_by_id(tenant_id, cid)
-        if not c:
-            return False
-        if (c.get("name") or "").strip() == CategoriesRepo.DEFAULT_NAME:
-            return False
-
-        # 1) переносимо товари
-        q_upd = """
+        # Переносимо товари в "Без категорії"
+        q_move = """
         UPDATE telegram_shop_products
-        SET category_id = :def_cid
+        SET category_id = :to_cid
         WHERE tenant_id = :tid AND category_id = :cid
         """
-        await db_execute(q_upd, {"tid": tenant_id, "cid": cid, "def_cid": default_id})
+        await db_execute(q_move, {"tid": tenant_id, "cid": cid, "to_cid": int(default_id)})
 
-        # 2) видаляємо категорію
+        # Видаляємо категорію
         q_del = """
         DELETE FROM telegram_shop_categories
         WHERE tenant_id = :tid AND id = :cid
         """
         await db_execute(q_del, {"tid": tenant_id, "cid": cid})
-        return True
