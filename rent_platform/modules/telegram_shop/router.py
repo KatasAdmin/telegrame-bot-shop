@@ -35,7 +35,6 @@ from rent_platform.modules.telegram_shop.ui.inline_kb import (
     catalog_categories_kb,
 )
 
-# CategoriesRepo optional (якщо файл/репо вже є)
 try:
     from rent_platform.modules.telegram_shop.repo.categories import CategoriesRepo  # type: ignore
 except Exception:  # pragma: no cover
@@ -53,12 +52,8 @@ def _extract_callback(update: dict) -> dict | None:
 
 
 def _normalize_text(s: str) -> str:
-    """
-    Telegram/iOS can send emoji texts with variation selectors.
-    Normalize so comparisons with BTN_* are stable.
-    """
     s = (s or "").strip()
-    s = s.replace("\ufe0f", "").replace("\u200d", "")  # variation selector / joiner
+    s = s.replace("\ufe0f", "").replace("\u200d", "")
     s = " ".join(s.split())
     return s
 
@@ -83,10 +78,12 @@ async def _send_menu(bot: Bot, chat_id: int, text: str, *, is_admin: bool) -> No
 async def _send_categories_menu(bot: Bot, chat_id: int, tenant_id: str, *, is_admin: bool) -> None:
     """
     Показує юзеру КАТЕГОРІЇ як inline-кнопки.
-    Якщо CategoriesRepo ще не підключений — fallback на старий каталог.
+    ВАЖЛИВО:
+      - беремо тільки публічні (sort >= 0, без __...__)
+      - кнопку "🌐 Усі товари" показуємо тільки якщо адмін увімкнув
+      - "Без категорії" показується лише якщо адмін зробив її видимою
     """
     if CategoriesRepo is None:
-        # fallback: old behavior
         await bot.send_message(
             chat_id,
             "🛍 *Каталог*\n\nКатегорії ще не підключені.",
@@ -95,8 +92,14 @@ async def _send_categories_menu(bot: Bot, chat_id: int, tenant_id: str, *, is_ad
         )
         return
 
-    cats = await CategoriesRepo.list(tenant_id, limit=50)  # type: ignore[misc]
-    if not cats:
+    # гарантуємо, що дефолт/флаг існують
+    await CategoriesRepo.ensure_default(tenant_id)  # type: ignore[misc]
+    await CategoriesRepo.ensure_show_all_flag(tenant_id)  # type: ignore[misc]
+
+    include_all = await CategoriesRepo.is_show_all_enabled(tenant_id)  # type: ignore[misc]
+
+    cats = await CategoriesRepo.list_public(tenant_id, limit=50)  # type: ignore[misc]
+    if not cats and not include_all:
         await bot.send_message(
             chat_id,
             "🛍 *Каталог*\n\nПоки що немає категорій.",
@@ -109,7 +112,7 @@ async def _send_categories_menu(bot: Bot, chat_id: int, tenant_id: str, *, is_ad
         chat_id,
         "🛍 *Каталог*\n\nОбери категорію 👇",
         parse_mode="Markdown",
-        reply_markup=catalog_categories_kb(cats),
+        reply_markup=catalog_categories_kb(cats, include_all=bool(include_all)),
     )
 
 
@@ -164,7 +167,6 @@ async def _send_first_product_card(
 ) -> None:
     p = await ProductsRepo.get_first_active(tenant_id, category_id=category_id)
     if not p:
-        # якщо в категорії нема товарів — повернемо категорії, щоб не було "глухо"
         await bot.send_message(
             chat_id,
             "🛍 *Каталог*\n\nПоки що немає товарів у цій категорії.",
@@ -330,7 +332,6 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
                 await bot.answer_callback_query(cb_id, text="•", show_alert=False)
             return True
 
-        # show categories menu
         if action == "cats":
             await _send_categories_menu(bot, chat_id, tenant_id, is_admin=is_admin)
             if cb_id:
@@ -438,13 +439,12 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
     user_id = int(msg["from"]["id"])
     is_admin = is_admin_user(tenant=tenant, user_id=user_id)
 
-    # Admin handler FIRST (so wizard can process photos/documents without text)
+    # Admin handler FIRST
     if is_admin:
         handled = await admin_handle_update(tenant=tenant, data=data, bot=bot)
         if handled:
             return True
 
-    # then text-based client buttons
     text = _get_text(msg)
     if not text:
         return False
@@ -456,7 +456,6 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         return True
 
     if text == _normalize_text(BTN_CATALOG):
-        # ТЕПЕР: каталог відкриває категорії (як ти хотів)
         await _send_categories_menu(bot, chat_id, tenant_id, is_admin=is_admin)
         return True
 
