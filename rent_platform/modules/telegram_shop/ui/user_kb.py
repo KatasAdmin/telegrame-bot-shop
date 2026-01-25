@@ -35,9 +35,13 @@ def main_menu_kb(*, is_admin: bool = False) -> ReplyKeyboardMarkup:
 
 
 def catalog_kb(*, is_admin: bool = False) -> ReplyKeyboardMarkup:
+    """
+    В каталозі не дублюємо "Кошик", бо він і так є в головному меню.
+    Лишаємо мінімум навігації.
+    """
     rows = [
-        [BTN_CART, BTN_FAV],
-        [BTN_HITS, BTN_ORDERS],
+        [BTN_FAV, BTN_HITS],
+        [BTN_ORDERS],
         [BTN_MENU_BACK],
     ]
     if is_admin:
