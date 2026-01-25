@@ -16,15 +16,13 @@ def product_card_kb(*, product_id: int, has_prev: bool, has_next: bool) -> Inlin
         _btn("⭐ В обране", f"tgshop:fav:{product_id}"),
     ])
 
-    # navigation
+    # navigation (no "Cart" here, because it exists in reply keyboard)
     nav_row: list[InlineKeyboardButton] = []
     nav_row.append(_btn("◀️", f"tgshop:prev:{product_id}") if has_prev else _btn(" ", f"tgshop:noop:{product_id}"))
-    nav_row.append(_btn("🛒 Кошик", "tgshop:cart"))
     nav_row.append(_btn("▶️", f"tgshop:next:{product_id}") if has_next else _btn(" ", f"tgshop:noop:{product_id}"))
     rows.append(nav_row)
 
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
 
 def cart_inline(*, items: list[dict]) -> InlineKeyboardMarkup:
     """
