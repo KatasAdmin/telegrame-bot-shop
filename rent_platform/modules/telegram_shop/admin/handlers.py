@@ -30,11 +30,9 @@ def _parse_price_to_kop(raw: str) -> int | None:
             грн = int(грн_s) if грн_s else 0
             коп = int((коп_s + "0")[:2])
             return грн * 100 + коп
-
-        # якщо адмін ввів 1500 -> трактуємо як грн (щоб було зручно)
-        # але якщо хочеш навпаки (в коп.) — скажеш, поміняємо.
+        # якщо адмін ввів 1500 -> трактуємо як грн (зручно)
         val = int(s)
-        if val < 100000:  # до 1000 грн умовно
+        if val < 100000:
             return val * 100
         return val
     except Exception:
@@ -50,15 +48,7 @@ def _extract_callback(data: dict[str, Any]) -> dict | None:
 
 
 def _kb(rows: list[list[tuple[str, str]]]) -> dict:
-    """
-    rows: [[(text, callback_data), ...], ...]
-    """
-    return {
-        "inline_keyboard": [
-            [{"text": t, "callback_data": d} for (t, d) in row]
-            for row in rows
-        ]
-    }
+    return {"inline_keyboard": [[{"text": t, "callback_data": d} for (t, d) in row] for row in rows]}
 
 
 def _admin_home_kb() -> dict:
@@ -77,7 +67,7 @@ def _wiz_nav_kb(*, allow_skip: bool = False) -> dict:
 
 
 def _wiz_photos_kb(*, product_id: int) -> dict:
-    # саме те, що ти просив: після фото -> "додати ще" або "готово"
+    # Тут головне: після КОЖНОГО фото ми показуємо "Додати ще фото" / "Готово"
     return _kb([
         [("📷 Додати ще фото", "tgadm:wiz_photo_more"), ("✅ Готово", "tgadm:wiz_done")],
         [("📝 Додати/змінити опис", f"tgadm:wiz_desc_edit:{product_id}")],
@@ -108,8 +98,7 @@ def _state_clear(tenant_id: str, chat_id: int) -> None:
 async def _send_admin_home(bot: Bot, chat_id: int) -> None:
     await bot.send_message(
         chat_id,
-        "🛠 *Адмінка магазину*\n\n"
-        "Тут все через wizard і кнопки 👇",
+        "🛠 *Адмінка магазину*\n\nТут все через wizard і кнопки 👇",
         parse_mode="Markdown",
         reply_markup=_admin_home_kb(),
     )
@@ -131,8 +120,7 @@ async def _wiz_ask_name(bot: Bot, chat_id: int, tenant_id: str) -> None:
     _state_set(tenant_id, chat_id, {"mode": "wiz_name", "draft": {}})
     await bot.send_message(
         chat_id,
-        "➕ *Новий товар*\n\n"
-        "1/4 Введи *назву* товару:",
+        "➕ *Новий товар*\n\n1/4 Введи *назву* товару:",
         parse_mode="Markdown",
         reply_markup=_wiz_nav_kb(),
     )
@@ -159,12 +147,10 @@ async def _wiz_ask_desc(bot: Bot, chat_id: int, tenant_id: str, draft: dict) -> 
 
 
 async def _wiz_ask_category_stub(bot: Bot, chat_id: int, tenant_id: str, draft: dict) -> None:
-    # Гачок під категорії. Поки просто пропускаємо.
     _state_set(tenant_id, chat_id, {"mode": "wiz_category_stub", "draft": draft})
     await bot.send_message(
         chat_id,
-        "4/4 *Категорія*\n\n"
-        "Скоро додамо категорії. Поки натисни `Пропустити` 👇",
+        "4/4 *Категорія*\n\nСкоро додамо категорії. Поки — натисни `Пропустити` 👇",
         parse_mode="Markdown",
         reply_markup=_wiz_nav_kb(allow_skip=True),
     )
@@ -190,7 +176,8 @@ async def _wiz_photos_start(bot: Bot, chat_id: int, tenant_id: str, product_id: 
     await bot.send_message(
         chat_id,
         f"📷 Фото для товару *#{product_id}*\n\n"
-        "Надсилай фото (можна кілька). Після кожного фото я спитаю — додати ще чи Готово.",
+        "Надсилай фото (можна кілька).\n"
+        "Після кожного фото я спитаю — додати ще чи `Готово`.",
         parse_mode="Markdown",
         reply_markup=_wiz_photos_kb(product_id=product_id),
     )
@@ -208,20 +195,20 @@ async def _wiz_finish(bot: Bot, chat_id: int, product_id: int) -> None:
 
 def _extract_image_file_id(msg: dict) -> str | None:
     """
-    Telegram може прислати картинку як:
-    - message.photo (звичайне фото)
-    - message.document (як файл), з mime_type image/*
+    Supports:
+    - photo (standard)
+    - document with image/* mime (some clients send as file)
     """
     photos = msg.get("photo") or []
     if photos:
-        fid = photos[-1].get("file_id")
-        return str(fid) if fid else None
+        # take best quality
+        return str(photos[-1].get("file_id"))
 
-    doc = msg.get("document") or {}
-    mime = (doc.get("mime_type") or "").lower()
-    if mime.startswith("image/"):
-        fid = doc.get("file_id")
-        return str(fid) if fid else None
+    doc = msg.get("document")
+    if doc:
+        mime = (doc.get("mime_type") or "").lower()
+        if mime.startswith("image/"):
+            return str(doc.get("file_id"))
 
     return None
 
@@ -278,26 +265,18 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             st = _state_get(tenant_id, chat_id) or {}
             mode = st.get("mode")
             draft = st.get("draft") or {}
-
             if mode == "wiz_desc":
                 draft["description"] = ""
                 await _wiz_ask_category_stub(bot, chat_id, tenant_id, draft)
                 return True
-
             if mode == "wiz_category_stub":
                 pid2 = await _wiz_create_product(bot, chat_id, tenant_id, draft)
                 _state_clear(tenant_id, chat_id)
                 if not pid2:
-                    await bot.send_message(
-                        chat_id,
-                        "❌ Не вдалося створити товар (перевір БД/міграції).",
-                        reply_markup=_admin_home_kb(),
-                    )
+                    await bot.send_message(chat_id, "❌ Не вдалося створити товар (перевір БД/міграції).", reply_markup=_admin_home_kb())
                     return True
-
                 await _wiz_photos_start(bot, chat_id, tenant_id, pid2)
                 return True
-
             return True
 
         if action == "wiz_done":
@@ -324,12 +303,7 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
                 await bot.send_message(chat_id, "❌ Нема ID товару.", reply_markup=_admin_home_kb())
                 return True
             _state_set(tenant_id, chat_id, {"mode": "desc_edit", "product_id": int(pid)})
-            await bot.send_message(
-                chat_id,
-                f"📝 Надішли новий опис для товару #{pid} (або `Пропустити`, щоб очистити):",
-                parse_mode="Markdown",
-                reply_markup=_wiz_nav_kb(allow_skip=True),
-            )
+            await bot.send_message(chat_id, f"📝 Надішли новий опис для товару #{pid}:", reply_markup=_wiz_nav_kb(allow_skip=True))
             return True
 
         return False
@@ -353,7 +327,7 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
 
     mode = str(st.get("mode") or "")
 
-    # ---- фото у wizard ----
+    # photo in wizard (IMPORTANT: works even if message has no text)
     if mode == "wiz_photo":
         product_id = int(st.get("product_id") or 0)
         if product_id <= 0:
@@ -365,7 +339,7 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
         if not file_id:
             await bot.send_message(
                 chat_id,
-                "Надішли *фото* (саме фото або картинку-файл). Або натисни `Готово`.",
+                "Надішли *фото* (або файл-скрін, але як картинку). Або натисни `Готово`.",
                 parse_mode="Markdown",
                 reply_markup=_wiz_photos_kb(product_id=product_id),
             )
@@ -373,26 +347,27 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
 
         await ProductsRepo.add_product_photo(tenant_id, product_id, file_id)
 
+        # ask after each photo
         await bot.send_message(
             chat_id,
-            f"✅ Фото додано до *#{product_id}*.\n\nХочеш додати ще?",
+            f"✅ Фото додано до *#{product_id}*.\n\nДодати ще чи `Готово`?",
             parse_mode="Markdown",
             reply_markup=_wiz_photos_kb(product_id=product_id),
         )
         return True
 
-    # ---- enable/disable ----
+    # enable/disable by id
     if mode in ("enable", "disable"):
         if not text.isdigit():
             await bot.send_message(chat_id, "Надішли тільки цифру ID.")
             return True
-        pid = int(text)
-        await ProductsRepo.set_active(tenant_id, pid, mode == "enable")
+        pid2 = int(text)
+        await ProductsRepo.set_active(tenant_id, pid2, mode == "enable")
         _state_clear(tenant_id, chat_id)
-        await bot.send_message(chat_id, f"✅ Товар {pid} {'увімкнено' if mode=='enable' else 'вимкнено'}.", reply_markup=_admin_home_kb())
+        await bot.send_message(chat_id, f"✅ Товар {pid2} {'увімкнено' if mode=='enable' else 'вимкнено'}.", reply_markup=_admin_home_kb())
         return True
 
-    # ---- wizard steps ----
+    # wizard steps
     if mode == "wiz_name":
         name = (text or "").strip()
         if not name:
@@ -421,15 +396,15 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
 
     if mode == "wiz_category_stub":
         draft = st.get("draft") or {}
-        pid2 = await _wiz_create_product(bot, chat_id, tenant_id, draft)
+        pid3 = await _wiz_create_product(bot, chat_id, tenant_id, draft)
         _state_clear(tenant_id, chat_id)
-        if not pid2:
+        if not pid3:
             await bot.send_message(chat_id, "❌ Не вдалося створити товар (перевір БД/міграції).", reply_markup=_admin_home_kb())
             return True
-        await _wiz_photos_start(bot, chat_id, tenant_id, pid2)
+        await _wiz_photos_start(bot, chat_id, tenant_id, pid3)
         return True
 
-    # ---- quick desc edit ----
+    # quick desc edit for existing product
     if mode == "desc_edit":
         product_id = int(st.get("product_id") or 0)
         if product_id <= 0:
@@ -437,11 +412,8 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             await bot.send_message(chat_id, "❌ Нема ID товару.", reply_markup=_admin_home_kb())
             return True
 
-        # якщо натиснув "Пропустити" — очищаємо опис
-        if text == "" or text.lower() == "пропустити":
-            await ProductsRepo.set_description(tenant_id, product_id, "")
-            _state_clear(tenant_id, chat_id)
-            await bot.send_message(chat_id, f"✅ Опис очищено для #{product_id}.", reply_markup=_admin_home_kb())
+        if text == "":
+            await bot.send_message(chat_id, "Опис пустий. Можеш надіслати текст або натиснути Пропустити.", reply_markup=_wiz_nav_kb(allow_skip=True))
             return True
 
         await ProductsRepo.set_description(tenant_id, product_id, text)
