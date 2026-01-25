@@ -1,16 +1,10 @@
 from __future__ import annotations
 
-import time
 from typing import Any
 
 from aiogram import Bot
 
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
-
-
-ADMIN_STATE: dict[tuple[str, int], dict[str, Any]] = {}
-MODE_SET_DESC = "set_desc"
-MODE_ADD_PHOTO = "add_photo"
 
 
 def _fmt_money(kop: int) -> str:
@@ -35,11 +29,12 @@ def _parse_price_to_kop(raw: str) -> int | None:
         return None
 
 
-def _get_photo_file_id(msg: dict) -> str | None:
-    photos = msg.get("photo") or []
-    if not photos:
-        return None
-    return str(photos[-1].get("file_id") or "").strip() or None
+# pending photo upload state (tenant_id:user_id -> product_id)
+_PENDING_PHOTO: dict[str, int] = {}
+
+
+def _pending_key(tenant_id: str, user_id: int) -> str:
+    return f"{tenant_id}:{int(user_id)}"
 
 
 async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
@@ -51,39 +46,40 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
     if not msg:
         return False
 
-    tenant_id = str(tenant["id"])
     chat_id = int(msg["chat"]["id"])
     user_id = int(msg["from"]["id"])
+    tenant_id = str(tenant["id"])
 
     text = (msg.get("text") or "").strip()
-    key = (tenant_id, user_id)
 
-    # ---- state: wait description ----
-    st = ADMIN_STATE.get(key)
-    if st and st.get("mode") == MODE_SET_DESC:
-        pid = int(st["product_id"])
-        if text and not text.startswith("/"):
-            await ProductsRepo.set_description(tenant_id, pid, text)
-            ADMIN_STATE.pop(key, None)
-            await bot.send_message(chat_id, f"✅ Опис для товару *#{pid}* збережено.", parse_mode="Markdown")
-            return True
-
-    # ---- state: wait photo ----
-    if st and st.get("mode") == MODE_ADD_PHOTO:
-        pid = int(st["product_id"])
-        file_id = _get_photo_file_id(msg)
-        if file_id:
-            await ProductsRepo.add_photo(tenant_id, pid, file_id, sort=0)
-            ADMIN_STATE.pop(key, None)
-            await bot.send_message(chat_id, f"✅ Фото додано до товару *#{pid}*.", parse_mode="Markdown")
-            return True
-
-        if text and not text.startswith("/"):
-            await bot.send_message(chat_id, "❗ Надішли *фото* (не текст).", parse_mode="Markdown")
-            return True
-
-    # Якщо це чисто фото без тексту — теж може бути адмінська дія в режимі
+    # 0) PHOTO MODE: if admin previously started /a_photo <id>, accept incoming photo messages
     if not text:
+        # check photo payload
+        photos = msg.get("photo") or []
+        if photos:
+            key = _pending_key(tenant_id, user_id)
+            pid = _PENDING_PHOTO.get(key)
+            if not pid:
+                return False  # no pending mode
+
+            # choose best resolution
+            file_id = str(photos[-1].get("file_id") or "").strip()
+            if not file_id:
+                await bot.send_message(chat_id, "Не бачу file_id у фото 😅")
+                return True
+
+            photo_db_id = await ProductsRepo.add_product_photo(tenant_id, pid, file_id)
+            if not photo_db_id:
+                await bot.send_message(chat_id, "Не вдалося зберегти фото (перевір таблицю/міграцію).")
+                return True
+
+            await bot.send_message(
+                chat_id,
+                f"📸 Фото додано до товару #{pid}. (ще можна надсилати фото)\n"
+                f"Завершити: /a_photo_done",
+            )
+            return True
+
         return False
 
     # /a_help
@@ -97,10 +93,11 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             "📦 Список активних:\n"
             "/a_list_products\n\n"
             "📝 Опис:\n"
-            "/a_desc 12   (потім надішли текст)\n\n"
+            "/a_desc 12 Текст опису...\n\n"
             "📸 Фото:\n"
-            "/a_photo 12  (потім надішли фото)\n"
-            "/a_photos 12 (список фото)\n\n"
+            "/a_photo 12   (потім надішли фото 1..N)\n"
+            "/a_photo_done (завершити режим)\n"
+            "/a_photos 12  (список/кількість)\n\n"
             "🔌 Вимк/увімк:\n"
             "/a_disable 12\n"
             "/a_enable 12\n",
@@ -146,54 +143,6 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
         await bot.send_message(chat_id, "\n".join(lines))
         return True
 
-    # /a_desc 12
-    if text.startswith("/a_desc "):
-        parts = text.split()
-        if len(parts) != 2 or not parts[1].isdigit():
-            await bot.send_message(chat_id, "Формат: /a_desc 12")
-            return True
-        pid = int(parts[1])
-        p = await ProductsRepo.get_active(tenant_id, pid)
-        if not p:
-            await bot.send_message(chat_id, "❗ Товар не знайдено або не активний.")
-            return True
-        ADMIN_STATE[key] = {"mode": MODE_SET_DESC, "product_id": pid, "ts": int(time.time())}
-        await bot.send_message(chat_id, f"Ок. Надішли текст опису для товару *#{pid}* одним повідомленням.", parse_mode="Markdown")
-        return True
-
-    # /a_photo 12
-    if text.startswith("/a_photo "):
-        parts = text.split()
-        if len(parts) != 2 or not parts[1].isdigit():
-            await bot.send_message(chat_id, "Формат: /a_photo 12")
-            return True
-        pid = int(parts[1])
-        p = await ProductsRepo.get_active(tenant_id, pid)
-        if not p:
-            await bot.send_message(chat_id, "❗ Товар не знайдено або не активний.")
-            return True
-        ADMIN_STATE[key] = {"mode": MODE_ADD_PHOTO, "product_id": pid, "ts": int(time.time())}
-        await bot.send_message(chat_id, f"Ок. Надішли *фото* для товару *#{pid}* одним повідомленням.", parse_mode="Markdown")
-        return True
-
-    # /a_photos 12
-    if text.startswith("/a_photos "):
-        parts = text.split()
-        if len(parts) != 2 or not parts[1].isdigit():
-            await bot.send_message(chat_id, "Формат: /a_photos 12")
-            return True
-        pid = int(parts[1])
-        photos = await ProductsRepo.list_photos(tenant_id, pid, limit=10)
-        if not photos:
-            await bot.send_message(chat_id, f"Фото для *#{pid}* поки немає.", parse_mode="Markdown")
-            return True
-
-        lines = [f"📸 Фото товару *#{pid}* (до 10):"]
-        for ph in photos:
-            lines.append(f"- id={ph['id']} sort={ph.get('sort', 0)}")
-        await bot.send_message(chat_id, "\n".join(lines), parse_mode="Markdown")
-        return True
-
     # /a_disable 12  /a_enable 12
     if text.startswith("/a_disable ") or text.startswith("/a_enable "):
         parts = text.split()
@@ -204,6 +153,67 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
         is_active = text.startswith("/a_enable ")
         await ProductsRepo.set_active(tenant_id, pid, is_active)
         await bot.send_message(chat_id, f"✅ Товар {pid} {'увімкнено' if is_active else 'вимкнено'}.")
+        return True
+
+    # /a_desc 12 some text...
+    if text.startswith("/a_desc "):
+        # формат: /a_desc <id> <text...>
+        parts = text.split(maxsplit=2)
+        if len(parts) < 3 or not parts[1].isdigit():
+            await bot.send_message(chat_id, "Формат: /a_desc 12 Текст опису...")
+            return True
+        pid = int(parts[1])
+        desc = parts[2].strip()
+        await ProductsRepo.set_description(tenant_id, pid, desc)
+        await bot.send_message(chat_id, f"✅ Опис збережено для товару #{pid}.")
+        return True
+
+    # /a_photo 12 -> enable photo mode
+    if text.startswith("/a_photo "):
+        parts = text.split()
+        if len(parts) != 2 or not parts[1].isdigit():
+            await bot.send_message(chat_id, "Формат: /a_photo 12")
+            return True
+        pid = int(parts[1])
+        _PENDING_PHOTO[_pending_key(tenant_id, user_id)] = pid
+        await bot.send_message(
+            chat_id,
+            f"📸 Режим фото для товару #{pid} увімкнено.\n"
+            f"Надішли фото (можна кілька підряд).\n"
+            f"Завершити: /a_photo_done",
+        )
+        return True
+
+    # /a_photo_done -> disable photo mode
+    if text == "/a_photo_done":
+        key = _pending_key(tenant_id, user_id)
+        if key in _PENDING_PHOTO:
+            pid = _PENDING_PHOTO.pop(key)
+            await bot.send_message(chat_id, f"✅ Режим фото завершено для товару #{pid}.")
+        else:
+            await bot.send_message(chat_id, "Режим фото не активний.")
+        return True
+
+    # /a_photos 12 -> list photos
+    if text.startswith("/a_photos "):
+        parts = text.split()
+        if len(parts) != 2 or not parts[1].isdigit():
+            await bot.send_message(chat_id, "Формат: /a_photos 12")
+            return True
+        pid = int(parts[1])
+        photos = await ProductsRepo.list_product_photos(tenant_id, pid, limit=10)
+        cover = await ProductsRepo.get_cover_photo_file_id(tenant_id, pid)
+
+        if not photos:
+            await bot.send_message(chat_id, f"Фото для товару #{pid}: поки що немає.\nДодати: /a_photo {pid}")
+            return True
+
+        lines = [f"📸 Фото товару #{pid}: {len(photos)} шт (показую до 10)"]
+        if cover:
+            lines.append("🖼 Cover: є")
+        for ph in photos:
+            lines.append(f"• id={ph['id']} sort={ph['sort']}")
+        await bot.send_message(chat_id, "\n".join(lines))
         return True
 
     return False
