@@ -5,23 +5,35 @@ from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton
 )
 
-
 # ---------- USER UI ----------
 
-def main_menu_kb() -> ReplyKeyboardMarkup:
+def main_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
+    """
+    Головне меню магазину.
+    Якщо is_admin=True — додаємо кнопку для адміна.
+    """
+    keyboard = [
+        [KeyboardButton(text="🛍 Каталог"), KeyboardButton(text="🛒 Кошик")],
+        [KeyboardButton(text="🔥 Хіти"), KeyboardButton(text="🎁 Акції")],
+        [KeyboardButton(text="📦 Замовлення"), KeyboardButton(text="ℹ️ Допомога")],
+    ]
+
+    if is_admin:
+        keyboard.append([KeyboardButton(text="🛠 Адмінка")])
+
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🛍 Каталог"), KeyboardButton(text="🛒 Кошик")],
-            [KeyboardButton(text="📦 Замовлення"), KeyboardButton(text="ℹ️ Допомога")],
-        ],
+        keyboard=keyboard,
         resize_keyboard=True,
         selective=True,
     )
 
 
-def back_to_menu_kb() -> ReplyKeyboardMarkup:
+def back_to_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
+    keyboard = [[KeyboardButton(text="🏠 Меню")]]
+    if is_admin:
+        keyboard.append([KeyboardButton(text="🛠 Адмінка")])
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="🏠 Меню")]],
+        keyboard=keyboard,
         resize_keyboard=True,
         selective=True,
     )
@@ -30,9 +42,8 @@ def back_to_menu_kb() -> ReplyKeyboardMarkup:
 def products_list_kb(products: list[dict]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for p in products:
-        rows.append(
-            [InlineKeyboardButton(text=f"➕ {p['name']}", callback_data=f"ls:add:{p['id']}")]
-        )
+        rows.append([InlineKeyboardButton(text=f"➕ {p['name']}", callback_data=f"ls:add:{p['id']}")])
+
     rows.append([InlineKeyboardButton(text="🛒 Відкрити кошик", callback_data="ls:cart")])
     rows.append([InlineKeyboardButton(text="🏠 Меню", callback_data="ls:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -70,9 +81,6 @@ def cart_kb(has_items: bool) -> InlineKeyboardMarkup:
 # (щоб імпорт не падав + база для адмінки)
 
 def admin_kb() -> ReplyKeyboardMarkup:
-    """
-    Мінімальна адмін-клава. Можеш показувати її тільки адмінам.
-    """
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="➕ Додати товар"), KeyboardButton(text="📦 Товари")],
@@ -85,9 +93,6 @@ def admin_kb() -> ReplyKeyboardMarkup:
 
 
 def admin_menu_kb() -> InlineKeyboardMarkup:
-    """
-    Інлайн-адмін меню (на майбутнє).
-    """
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="➕ Додати товар", callback_data="ls:a:add_product")],
