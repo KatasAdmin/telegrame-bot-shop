@@ -42,6 +42,18 @@ def _parse_price_to_kop(raw: str) -> int | None:
         return None
 
 
+def _normalize_text(s: str) -> str:
+    s = (s or "").strip()
+    s = s.replace("\ufe0f", "").replace("\u200d", "")  # emoji variation selector/joiner
+    s = " ".join(s.split())
+    return s
+
+
+def _is_done_text(s: str) -> bool:
+    s = _normalize_text(s).lower()
+    return s in {"готово", "done", "/done", "ok", "ок", "✅готово", "✅ готово"}
+
+
 def _extract_message(data: dict[str, Any]) -> dict | None:
     return data.get("message") or data.get("edited_message")
 
@@ -278,16 +290,7 @@ async def _send_archive(bot: Bot, chat_id: int, tenant_id: str, page: int) -> No
     limit = 12
     offset = page * limit
 
-    q = """
-    SELECT id, name, price_kop
-    FROM telegram_shop_products
-    WHERE tenant_id = :tid AND is_active = false
-    ORDER BY id DESC
-    LIMIT :lim OFFSET :off
-    """
-    items = await db_fetch_one("SELECT 1")  # keep connection warm (noop-ish)
     rows = await ProductsRepo.list_inactive(tenant_id, limit=500)  # type: ignore[attr-defined]
-    # ручна пагінація по вже витягнутому списку (просто і надійно)
     rows_sorted = sorted(rows, key=lambda x: int(x["id"]), reverse=True)
     chunk = rows_sorted[offset:offset + limit]
     has_next = len(rows_sorted) > offset + limit
@@ -389,12 +392,23 @@ async def _wiz_create_and_go_photos(bot: Bot, chat_id: int, tenant_id: str, draf
 
 
 async def _wiz_photos_start(bot: Bot, chat_id: int, tenant_id: str, product_id: int) -> None:
+    # ВАЖЛИВО: режим фото тримаємо активним, щоб можна було надсилати багато фото підряд
     _state_set(tenant_id, chat_id, {"mode": "wiz_photo", "product_id": int(product_id)})
-    await bot.send_message(chat_id, f"📷 Фото для товару *#{product_id}*\n\nНадсилай фото (можна кілька).", parse_mode="Markdown", reply_markup=_wiz_photos_kb(product_id=product_id))
+    await bot.send_message(
+        chat_id,
+        f"📷 Фото для товару *#{product_id}*\n\nНадсилай фото (можна кілька). Коли закінчиш — натисни *✅ Готово* або напиши `готово`.",
+        parse_mode="Markdown",
+        reply_markup=_wiz_photos_kb(product_id=product_id),
+    )
 
 
 async def _wiz_finish(bot: Bot, chat_id: int, product_id: int) -> None:
-    await bot.send_message(chat_id, f"✅ *Готово!* Товар *#{product_id}* створено.\n\nМожеш додати фото/опис або створити ще.", parse_mode="Markdown", reply_markup=_wiz_finish_kb(product_id=product_id))
+    await bot.send_message(
+        chat_id,
+        f"✅ *Готово!* Товар *#{product_id}* створено.\n\nМожеш додати фото/опис або створити ще.",
+        parse_mode="Markdown",
+        reply_markup=_wiz_finish_kb(product_id=product_id),
+    )
 
 
 def _extract_image_file_id(msg: dict) -> str | None:
@@ -571,11 +585,14 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             pid = int(arg)
             cats = await CategoriesRepo.list(tenant_id, limit=100)  # type: ignore[misc]
             _state_set(tenant_id, chat_id, {"mode": "arch_setcat_pick", "product_id": pid})
-            await bot.send_message(chat_id, "📁 Обери категорію для товару:", reply_markup=_category_pick_kb(cats, prefix="tgadm:arch_setcat_do", back_to="tgadm:archive:0"))
+            await bot.send_message(
+                chat_id,
+                "📁 Обери категорію для товару:",
+                reply_markup=_category_pick_kb(cats, prefix="tgadm:arch_setcat_do", back_to="tgadm:archive:0"),
+            )
             return True
 
         if action == "arch_setcat_do" and arg.isdigit():
-            # tgadm:arch_setcat_do:<cid> state has product_id
             st = _state_get(tenant_id, chat_id) or {}
             pid = int(st.get("product_id") or 0)
             cid = int(arg)
@@ -597,7 +614,12 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
 
         if action == "arch_photo" and arg.isdigit():
             _state_set(tenant_id, chat_id, {"mode": "arch_add_photo", "product_id": int(arg)})
-            await bot.send_message(chat_id, f"📷 Надішли фото для товару #{arg}:", reply_markup=_wiz_nav_kb())
+            await bot.send_message(
+                chat_id,
+                f"📷 Надсилай фото для товару #{arg} (можна кілька). Коли закінчиш — натисни ✅ Готово або напиши `готово`.",
+                parse_mode="Markdown",
+                reply_markup=_wiz_photos_kb(product_id=int(arg)),
+            )
             return True
 
         # Категорії: керування/видалення
@@ -760,7 +782,12 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
 
             if action == "p_photo":
                 _state_set(tenant_id, chat_id, {"mode": "add_photo_to_pid", "product_id": pid})
-                await bot.send_message(chat_id, f"📷 Надішли фото для товару #{pid}:", reply_markup=_wiz_nav_kb())
+                await bot.send_message(
+                    chat_id,
+                    f"📷 Надсилай фото для товару #{pid} (можна кілька). Коли закінчиш — натисни ✅ Готово або напиши `готово`.",
+                    parse_mode="Markdown",
+                    reply_markup=_wiz_photos_kb(product_id=pid),
+                )
                 return True
 
         if action == "p_setcat_do" and arg.isdigit():
@@ -794,7 +821,7 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
         return False
 
     chat_id = int(msg["chat"]["id"])
-    text = (msg.get("text") or "").strip()
+    text = _normalize_text(msg.get("text") or "")
 
     if text in ("/a", "/a_help"):
         await _send_admin_home(bot, chat_id)
@@ -806,7 +833,17 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
 
     mode = str(st.get("mode") or "")
 
-    # photo wizard / add photo
+    # "готово" текстом — працює в будь-якому фото-режимі
+    if mode in ("wiz_photo", "add_photo_to_pid", "arch_add_photo") and _is_done_text(text):
+        product_id = int(st.get("product_id") or 0)
+        _state_clear(tenant_id, chat_id)
+        if product_id > 0:
+            await _wiz_finish(bot, chat_id, product_id)
+        else:
+            await bot.send_message(chat_id, "✅ Готово.", reply_markup=_admin_home_kb())
+        return True
+
+    # photo wizard / add photo (multi-photo enabled)
     if mode in ("wiz_photo", "add_photo_to_pid", "arch_add_photo"):
         product_id = int(st.get("product_id") or 0)
         if product_id <= 0:
@@ -816,12 +853,23 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
 
         file_id = _extract_image_file_id(msg)
         if not file_id:
-            await bot.send_message(chat_id, "Надішли *фото*.", parse_mode="Markdown", reply_markup=_wiz_nav_kb())
+            await bot.send_message(
+                chat_id,
+                "Надішли *фото* (або натисни ✅ Готово / напиши `готово`).",
+                parse_mode="Markdown",
+                reply_markup=_wiz_photos_kb(product_id=product_id),
+            )
             return True
 
         await ProductsRepo.add_product_photo(tenant_id, product_id, file_id)
-        _state_clear(tenant_id, chat_id)
-        await bot.send_message(chat_id, f"✅ Фото додано до *#{product_id}*.", parse_mode="Markdown", reply_markup=_catalog_kb())
+
+        # НЕ чистимо state — щоб можна було надсилати багато фото підряд
+        await bot.send_message(
+            chat_id,
+            f"✅ Фото додано до *#{product_id}*.\nНадішли ще фото або натисни *✅ Готово*.",
+            parse_mode="Markdown",
+            reply_markup=_wiz_photos_kb(product_id=product_id),
+        )
         return True
 
     # enable/disable by id
