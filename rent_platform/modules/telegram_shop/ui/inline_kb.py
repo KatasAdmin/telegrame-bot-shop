@@ -7,22 +7,28 @@ def _btn(text: str, data: str) -> InlineKeyboardButton:
     return InlineKeyboardButton(text=text, callback_data=data)
 
 
-def catalog_inline(*, product_ids: list[int]) -> InlineKeyboardMarkup:
-    """
-    Catalog: for each product -> [➕ Add]
-    plus: [🛒 Cart]
-    """
+def product_card_kb(*, product_id: int, has_prev: bool, has_next: bool) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    for pid in product_ids:
-        rows.append([_btn(f"➕ Додати #{pid}", f"tgshop:add:{pid}")])
-    rows.append([_btn("🛒 Кошик", "tgshop:cart")])
+
+    # actions
+    rows.append([
+        _btn("🛒 Додати в кошик", f"tgshop:add:{product_id}"),
+        _btn("⭐ В обране", f"tgshop:fav:{product_id}"),
+    ])
+
+    # navigation
+    nav_row: list[InlineKeyboardButton] = []
+    nav_row.append(_btn("◀️", f"tgshop:prev:{product_id}") if has_prev else _btn(" ", f"tgshop:noop:{product_id}"))
+    nav_row.append(_btn("🛒 Кошик", "tgshop:cart"))
+    nav_row.append(_btn("▶️", f"tgshop:next:{product_id}") if has_next else _btn(" ", f"tgshop:noop:{product_id}"))
+    rows.append(nav_row)
+
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def cart_inline(*, items: list[dict]) -> InlineKeyboardMarkup:
     """
-    Cart: per item controls: [➖][qty][➕][🗑]
-    plus: [✅ Checkout] [🧹 Clear] [🛍 Catalog]
+    Cart controls (qty later you said, but you already like it - leave it).
     """
     rows: list[list[InlineKeyboardButton]] = []
     for it in items:
@@ -38,5 +44,4 @@ def cart_inline(*, items: list[dict]) -> InlineKeyboardMarkup:
         _btn("✅ Оформити", "tgshop:checkout"),
         _btn("🧹 Очистити", "tgshop:clear"),
     ])
-    rows.append([_btn("🛍 Каталог", "tgshop:catalog")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
