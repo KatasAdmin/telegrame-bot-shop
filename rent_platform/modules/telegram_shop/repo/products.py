@@ -79,30 +79,30 @@ class ProductsRepo:
         name: str,
         price_kop: int,
         *,
-        category_id: int | None = None,
         is_hit: bool = False,
         promo_price_kop: int = 0,
         promo_until_ts: int = 0,
         is_active: bool = True,
+        category_id: int | None = None,
     ) -> int | None:
         q = """
         INSERT INTO telegram_shop_products
-            (tenant_id, category_id, name, price_kop, is_active, is_hit, promo_price_kop, promo_until_ts, created_ts)
+            (tenant_id, name, price_kop, is_active, is_hit, promo_price_kop, promo_until_ts, category_id, created_ts)
         VALUES
-            (:tid, :cid, :n, :p, :a, :h, :pp, :pu, :ts)
+            (:tid, :n, :p, :a, :h, :pp, :pu, :cid, :ts)
         RETURNING id
         """
         row = await db_fetch_one(
             q,
             {
                 "tid": str(tenant_id),
-                "cid": int(category_id) if category_id is not None else None,
                 "n": (name or "").strip()[:128],
                 "p": int(price_kop),
                 "a": bool(is_active),
                 "h": bool(is_hit),
                 "pp": int(promo_price_kop),
                 "pu": int(promo_until_ts),
+                "cid": int(category_id) if category_id is not None else None,
                 "ts": int(time.time()),
             },
         )
