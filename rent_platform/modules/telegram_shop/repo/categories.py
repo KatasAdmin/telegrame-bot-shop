@@ -29,7 +29,12 @@ class CategoriesRepo:
         """
         row = await db_fetch_one(
             q_ins,
-            {"tid": tenant_id, "name": CategoriesRepo.DEFAULT_NAME, "s": int(CategoriesRepo.DEFAULT_HIDDEN_SORT), "ts": int(time.time())},
+            {
+                "tid": tenant_id,
+                "name": CategoriesRepo.DEFAULT_NAME,
+                "s": int(CategoriesRepo.DEFAULT_HIDDEN_SORT),
+                "ts": int(time.time()),
+            },
         )
         if row and row.get("id") is not None:
             return int(row["id"])
@@ -80,7 +85,15 @@ class CategoriesRepo:
         VALUES (:tid, :name, :s, :ts)
         ON CONFLICT (tenant_id, name) DO NOTHING
         """
-        await db_execute(q, {"tid": tenant_id, "name": CategoriesRepo.SHOW_ALL_FLAG_NAME, "s": int(CategoriesRepo.FLAG_HIDDEN_SORT), "ts": int(time.time())})
+        await db_execute(
+            q,
+            {
+                "tid": tenant_id,
+                "name": CategoriesRepo.SHOW_ALL_FLAG_NAME,
+                "s": int(CategoriesRepo.FLAG_HIDDEN_SORT),
+                "ts": int(time.time()),
+            },
+        )
 
     @staticmethod
     async def set_show_all_enabled(tenant_id: str, enabled: bool) -> None:
@@ -128,7 +141,7 @@ class CategoriesRepo:
     @staticmethod
     async def list(tenant_id: str, limit: int = 50) -> list[dict[str, Any]]:
         """
-        Для адміна: всі категорії, крім системних (__...__) можна показувати теж (але ми їх зазвичай не показуємо в пікерах).
+        Для адміна: всі категорії.
         """
         q = """
         SELECT id, tenant_id, name, sort, created_ts
@@ -151,7 +164,9 @@ class CategoriesRepo:
         ON CONFLICT (tenant_id, name) DO NOTHING
         RETURNING id
         """
-        row = await db_fetch_one(q_ins, {"tid": tenant_id, "name": nm, "sort": int(sort), "ts": int(time.time())})
+        row = await db_fetch_one(
+            q_ins, {"tid": tenant_id, "name": nm, "sort": int(sort), "ts": int(time.time())}
+        )
         if row and row.get("id") is not None:
             return int(row["id"])
 
