@@ -9,19 +9,13 @@ from rent_platform.db.session import db_fetch_one, db_fetch_all, db_execute
 class ProductsRepo:
     """
     MODE B (no hits/promos columns yet).
-    Works with columns: id, tenant_id, name, price_kop, is_active, created_ts
+    Columns: id, tenant_id, name, price_kop, is_active, created_ts
     """
 
     @staticmethod
     async def list_active(tenant_id: str, limit: int = 50) -> list[dict[str, Any]]:
         q = """
-        SELECT
-            id,
-            tenant_id,
-            name,
-            price_kop,
-            is_active,
-            created_ts
+        SELECT id, tenant_id, name, price_kop, is_active, created_ts
         FROM telegram_shop_products
         WHERE tenant_id = :tid AND is_active = true
         ORDER BY id DESC
@@ -32,45 +26,55 @@ class ProductsRepo:
     @staticmethod
     async def get_active(tenant_id: str, product_id: int) -> dict | None:
         q = """
-        SELECT
-            id,
-            tenant_id,
-            name,
-            price_kop,
-            is_active,
-            created_ts
+        SELECT id, tenant_id, name, price_kop, is_active, created_ts
         FROM telegram_shop_products
         WHERE tenant_id = :tid AND id = :pid AND is_active = true
         """
         return await db_fetch_one(q, {"tid": tenant_id, "pid": int(product_id)})
 
     @staticmethod
-    async def add(
-        tenant_id: str,
-        name: str,
-        price_kop: int,
-        *,
-        is_active: bool = True,
-    ) -> int | None:
-        """
-        MODE B insert (no hits/promos columns).
-        """
+    async def get_first_active(tenant_id: str) -> dict | None:
         q = """
-        INSERT INTO telegram_shop_products
-            (tenant_id, name, price_kop, is_active, created_ts)
-        VALUES
-            (:tid, :n, :p, :a, :ts)
+        SELECT id, tenant_id, name, price_kop, is_active, created_ts
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid AND is_active = true
+        ORDER BY id ASC
+        LIMIT 1
+        """
+        return await db_fetch_one(q, {"tid": tenant_id})
+
+    @staticmethod
+    async def get_next_active(tenant_id: str, current_id: int) -> dict | None:
+        q = """
+        SELECT id, tenant_id, name, price_kop, is_active, created_ts
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid AND is_active = true AND id > :cid
+        ORDER BY id ASC
+        LIMIT 1
+        """
+        return await db_fetch_one(q, {"tid": tenant_id, "cid": int(current_id)})
+
+    @staticmethod
+    async def get_prev_active(tenant_id: str, current_id: int) -> dict | None:
+        q = """
+        SELECT id, tenant_id, name, price_kop, is_active, created_ts
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid AND is_active = true AND id < :cid
+        ORDER BY id DESC
+        LIMIT 1
+        """
+        return await db_fetch_one(q, {"tid": tenant_id, "cid": int(current_id)})
+
+    @staticmethod
+    async def add(tenant_id: str, name: str, price_kop: int, *, is_active: bool = True) -> int | None:
+        q = """
+        INSERT INTO telegram_shop_products (tenant_id, name, price_kop, is_active, created_ts)
+        VALUES (:tid, :n, :p, :a, :ts)
         RETURNING id
         """
         row = await db_fetch_one(
             q,
-            {
-                "tid": str(tenant_id),
-                "n": (name or "").strip()[:128],
-                "p": int(price_kop),
-                "a": bool(is_active),
-                "ts": int(time.time()),
-            },
+            {"tid": str(tenant_id), "n": (name or "").strip()[:128], "p": int(price_kop), "a": bool(is_active), "ts": int(time.time())},
         )
         return int(row["id"]) if row and row.get("id") is not None else None
 
