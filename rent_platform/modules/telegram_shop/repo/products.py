@@ -7,7 +7,7 @@ from rent_platform.db.session import db_fetch_one, db_fetch_all, db_execute
 
 
 class ProductsRepo:
-    # -------- products --------
+    # --------- products list/get (active) ---------
 
     @staticmethod
     async def list_active(tenant_id: str, limit: int = 50) -> list[dict[str, Any]]:
@@ -25,7 +25,7 @@ class ProductsRepo:
             created_ts
         FROM telegram_shop_products
         WHERE tenant_id = :tid AND is_active = true
-        ORDER BY id DESC
+        ORDER BY id ASC
         LIMIT :lim
         """
         return await db_fetch_all(q, {"tid": tenant_id, "lim": int(limit)}) or []
@@ -50,39 +50,6 @@ class ProductsRepo:
         return await db_fetch_one(q, {"tid": tenant_id, "pid": int(product_id)})
 
     @staticmethod
-    async def get_first_active(tenant_id: str) -> dict | None:
-        q = """
-        SELECT id
-        FROM telegram_shop_products
-        WHERE tenant_id = :tid AND is_active = true
-        ORDER BY id ASC
-        LIMIT 1
-        """
-        return await db_fetch_one(q, {"tid": tenant_id})
-
-    @staticmethod
-    async def get_prev_active(tenant_id: str, product_id: int) -> dict | None:
-        q = """
-        SELECT id
-        FROM telegram_shop_products
-        WHERE tenant_id = :tid AND is_active = true AND id < :pid
-        ORDER BY id DESC
-        LIMIT 1
-        """
-        return await db_fetch_one(q, {"tid": tenant_id, "pid": int(product_id)})
-
-    @staticmethod
-    async def get_next_active(tenant_id: str, product_id: int) -> dict | None:
-        q = """
-        SELECT id
-        FROM telegram_shop_products
-        WHERE tenant_id = :tid AND is_active = true AND id > :pid
-        ORDER BY id ASC
-        LIMIT 1
-        """
-        return await db_fetch_one(q, {"tid": tenant_id, "pid": int(product_id)})
-
-    @staticmethod
     async def add(
         tenant_id: str,
         name: str,
@@ -92,13 +59,12 @@ class ProductsRepo:
         promo_price_kop: int = 0,
         promo_until_ts: int = 0,
         is_active: bool = True,
-        description: str = "",
     ) -> int | None:
         q = """
         INSERT INTO telegram_shop_products
-            (tenant_id, name, price_kop, is_active, is_hit, promo_price_kop, promo_until_ts, description, created_ts)
+            (tenant_id, name, price_kop, is_active, is_hit, promo_price_kop, promo_until_ts, created_ts)
         VALUES
-            (:tid, :n, :p, :a, :h, :pp, :pu, :d, :ts)
+            (:tid, :n, :p, :a, :h, :pp, :pu, :ts)
         RETURNING id
         """
         row = await db_fetch_one(
@@ -111,7 +77,6 @@ class ProductsRepo:
                 "h": bool(is_hit),
                 "pp": int(promo_price_kop),
                 "pu": int(promo_until_ts),
-                "d": (description or "").strip(),
                 "ts": int(time.time()),
             },
         )
@@ -148,6 +113,43 @@ class ProductsRepo:
             {"tid": tenant_id, "pid": int(product_id), "pp": int(promo_price_kop), "pu": int(promo_until_ts)},
         )
 
+    # --------- navigation helpers (for catalog cards) ---------
+
+    @staticmethod
+    async def get_first_active(tenant_id: str) -> dict | None:
+        q = """
+        SELECT id
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid AND is_active = true
+        ORDER BY id ASC
+        LIMIT 1
+        """
+        return await db_fetch_one(q, {"tid": tenant_id})
+
+    @staticmethod
+    async def get_prev_active(tenant_id: str, product_id: int) -> dict | None:
+        q = """
+        SELECT id
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid AND is_active = true AND id < :pid
+        ORDER BY id DESC
+        LIMIT 1
+        """
+        return await db_fetch_one(q, {"tid": tenant_id, "pid": int(product_id)})
+
+    @staticmethod
+    async def get_next_active(tenant_id: str, product_id: int) -> dict | None:
+        q = """
+        SELECT id
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid AND is_active = true AND id > :pid
+        ORDER BY id ASC
+        LIMIT 1
+        """
+        return await db_fetch_one(q, {"tid": tenant_id, "pid": int(product_id)})
+
+    # --------- description ---------
+
     @staticmethod
     async def set_description(tenant_id: str, product_id: int, description: str) -> None:
         q = """
@@ -157,24 +159,33 @@ class ProductsRepo:
         """
         await db_execute(q, {"tid": tenant_id, "pid": int(product_id), "d": (description or "").strip()})
 
-
-    # -------- photos --------
+    # --------- product photos (Telegram file_id) ---------
+    # Table: telegram_shop_product_photos (tenant_id, product_id, file_id, sort, created_ts)
 
     @staticmethod
-    async def add_photo(tenant_id: str, product_id: int, file_id: str, *, sort: int = 0) -> int | None:
+    async def add_product_photo(tenant_id: str, product_id: int, file_id: str) -> int | None:
+        # next sort = max(sort)+1
+        q_sort = """
+        SELECT COALESCE(MAX(sort), 0) AS mx
+        FROM telegram_shop_product_photos
+        WHERE tenant_id = :tid AND product_id = :pid
+        """
+        row = await db_fetch_one(q_sort, {"tid": tenant_id, "pid": int(product_id)})
+        next_sort = int(row["mx"] or 0) + 1 if row else 1
+
         q = """
         INSERT INTO telegram_shop_product_photos (tenant_id, product_id, file_id, sort, created_ts)
         VALUES (:tid, :pid, :fid, :s, :ts)
         RETURNING id
         """
-        row = await db_fetch_one(
+        ins = await db_fetch_one(
             q,
-            {"tid": tenant_id, "pid": int(product_id), "fid": str(file_id), "s": int(sort), "ts": int(time.time())},
+            {"tid": tenant_id, "pid": int(product_id), "fid": str(file_id), "s": int(next_sort), "ts": int(time.time())},
         )
-        return int(row["id"]) if row and row.get("id") is not None else None
+        return int(ins["id"]) if ins and ins.get("id") is not None else None
 
     @staticmethod
-    async def list_photos(tenant_id: str, product_id: int, limit: int = 10) -> list[dict[str, Any]]:
+    async def list_product_photos(tenant_id: str, product_id: int, limit: int = 10) -> list[dict[str, Any]]:
         q = """
         SELECT id, tenant_id, product_id, file_id, sort, created_ts
         FROM telegram_shop_product_photos
