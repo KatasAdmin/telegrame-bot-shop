@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from aiogram import Bot
-
+from aiogram.types import InputMediaPhoto
 from rent_platform.modules.telegram_shop.admin import admin_handle_update, is_admin_user
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
 from rent_platform.modules.telegram_shop.repo.cart import TelegramShopCartRepo
@@ -57,14 +57,9 @@ async def _send_menu(bot: Bot, chat_id: int, text: str, *, is_admin: bool) -> No
 
 # ---------- Catalog skeleton / card rendering ----------
 
-async def _build_product_card(tenant_id: str, product_id: int) -> tuple[str, Any] | None:
-    """
-    Returns (text, inline_kb) for product card.
-    Hooks prepared for:
-      - photos up to 10 (media group)
-      - description
-      - categories / variants later
-    """
+from aiogram.types import InputMediaPhoto
+
+async def _build_product_card(tenant_id: str, product_id: int) -> dict | None:
     p = await ProductsRepo.get_active(tenant_id, product_id)
     if not p:
         return None
@@ -75,19 +70,27 @@ async def _build_product_card(tenant_id: str, product_id: int) -> tuple[str, Any
     pid = int(p["id"])
     name = str(p["name"])
     price = int(p.get("price_kop") or 0)
+    desc = (p.get("description") or "").strip()
 
-    # Hooks (later):
-    # desc = p.get("description") ...
-    # photos_count = ...
+    cover_file_id = await ProductsRepo.get_cover_photo_file_id(tenant_id, pid)
+
     text = (
         f"🛍 *{name}*\n\n"
         f"Ціна: *{_fmt_money(price)}*\n"
-        f"ID: `{pid}`\n\n"
-        f"_Фото/опис зʼявляться після адмінки (гачок готовий)._"
+        f"ID: `{pid}`"
     )
+    if desc:
+        text += f"\n\n{desc}"
 
     kb = product_card_kb(product_id=pid, has_prev=bool(prev_p), has_next=bool(next_p))
-    return text, kb
+
+    return {
+        "pid": pid,
+        "has_photo": bool(cover_file_id),
+        "file_id": cover_file_id,
+        "text": text,
+        "kb": kb,
+    }
 
 
 async def _send_first_product_card(bot: Bot, chat_id: int, tenant_id: str, *, is_admin: bool) -> None:
@@ -101,21 +104,49 @@ async def _send_first_product_card(bot: Bot, chat_id: int, tenant_id: str, *, is
         )
         return
 
-    built = await _build_product_card(tenant_id, int(p["id"]))
-    if not built:
+    card = await _build_product_card(tenant_id, int(p["id"]))
+    if not card:
         await bot.send_message(chat_id, "🛍 Каталог поки що порожній.")
         return
 
-    text, kb = built
-    await bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=kb)
+    if card["has_photo"]:
+        await bot.send_photo(
+            chat_id,
+            photo=card["file_id"],
+            caption=card["text"],
+            parse_mode="Markdown",
+            reply_markup=card["kb"],
+        )
+    else:
+        await bot.send_message(
+            chat_id,
+            card["text"],
+            parse_mode="Markdown",
+            reply_markup=card["kb"],
+        )
 
 
 async def _edit_product_card(bot: Bot, chat_id: int, message_id: int, tenant_id: str, product_id: int) -> bool:
-    built = await _build_product_card(tenant_id, product_id)
-    if not built:
+    card = await _build_product_card(tenant_id, product_id)
+    if not card:
         return False
-    text, kb = built
-    await bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, parse_mode="Markdown", reply_markup=kb)
+
+    if card["has_photo"]:
+        media = InputMediaPhoto(media=card["file_id"], caption=card["text"], parse_mode="Markdown")
+        await bot.edit_message_media(
+            media=media,
+            chat_id=chat_id,
+            message_id=message_id,
+            reply_markup=card["kb"],
+        )
+    else:
+        await bot.edit_message_text(
+            card["text"],
+            chat_id=chat_id,
+            message_id=message_id,
+            parse_mode="Markdown",
+            reply_markup=card["kb"],
+        )
     return True
 
 
