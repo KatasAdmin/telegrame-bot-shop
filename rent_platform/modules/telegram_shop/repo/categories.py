@@ -7,6 +7,8 @@ from rent_platform.db.session import db_fetch_one, db_fetch_all, db_execute
 
 
 class CategoriesRepo:
+    DEFAULT_NAME = "Без категорії"
+
     @staticmethod
     async def has_any(tenant_id: str) -> bool:
         q = """
@@ -30,42 +32,38 @@ class CategoriesRepo:
         return await db_fetch_all(q, {"tid": str(tenant_id), "lim": int(limit)}) or []
 
     @staticmethod
-    async def create(tenant_id: str, name: str, sort: int = 0) -> int | None:
+    async def create(tenant_id: str, name: str, sort: int = 100) -> int | None:
         q = """
         INSERT INTO telegram_shop_categories (tenant_id, name, sort, created_ts)
-        VALUES (:tid, :n, :s, :ts)
-        ON CONFLICT (tenant_id, name) DO UPDATE SET name = EXCLUDED.name
+        VALUES (:tid, :name, :sort, :ts)
         RETURNING id
         """
         row = await db_fetch_one(
             q,
-            {"tid": str(tenant_id), "n": (name or "").strip()[:64], "s": int(sort), "ts": int(time.time())},
+            {"tid": str(tenant_id), "name": (name or "").strip()[:64], "sort": int(sort), "ts": int(time.time())},
         )
         return int(row["id"]) if row and row.get("id") is not None else None
 
     @staticmethod
-    async def ensure_default_category_id(tenant_id: str) -> int | None:
-        """
-        Гарантує, що існує категорія 'Без категорії' і повертає її id.
-        """
-        q_sel = """
+    async def get_default_id(tenant_id: str) -> int | None:
+        q = """
         SELECT id
         FROM telegram_shop_categories
-        WHERE tenant_id = :tid AND name = 'Без категорії'
+        WHERE tenant_id = :tid AND name = :name
+        ORDER BY sort ASC, id ASC
         LIMIT 1
         """
-        row = await db_fetch_one(q_sel, {"tid": str(tenant_id)})
-        if row and row.get("id") is not None:
-            return int(row["id"])
-
-        cid = await CategoriesRepo.create(tenant_id, "Без категорії", sort=0)
-        return int(cid) if cid else None
+        row = await db_fetch_one(q, {"tid": str(tenant_id), "name": CategoriesRepo.DEFAULT_NAME})
+        return int(row["id"]) if row and row.get("id") is not None else None
 
     @staticmethod
-    async def get_by_id(tenant_id: str, category_id: int) -> dict[str, Any] | None:
-        q = """
-        SELECT id, tenant_id, name, sort, created_ts
-        FROM telegram_shop_categories
-        WHERE tenant_id = :tid AND id = :cid
+    async def ensure_default(tenant_id: str) -> int:
         """
-        return await db_fetch_one(q, {"tid": str(tenant_id), "cid": int(category_id)})
+        Гарантує існування дефолтної категорії "Без категорії".
+        Повертає її id.
+        """
+        cid = await CategoriesRepo.get_default_id(tenant_id)
+        if cid:
+            return int(cid)
+        new_id = await CategoriesRepo.create(tenant_id, CategoriesRepo.DEFAULT_NAME, sort=0)
+        return int(new_id or 0)
