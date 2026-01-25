@@ -5,6 +5,7 @@ from typing import Any
 
 from aiogram import Bot
 from aiogram.types import InputMediaPhoto
+
 from rent_platform.modules.telegram_shop.admin import admin_handle_update, is_admin_user
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
 from rent_platform.modules.telegram_shop.repo.cart import TelegramShopCartRepo
@@ -55,9 +56,7 @@ async def _send_menu(bot: Bot, chat_id: int, text: str, *, is_admin: bool) -> No
     await bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=main_menu_kb(is_admin=is_admin))
 
 
-# ---------- Catalog skeleton / card rendering ----------
-
-from aiogram.types import InputMediaPhoto
+# ---------- Catalog / product card rendering ----------
 
 async def _build_product_card(tenant_id: str, product_id: int) -> dict | None:
     p = await ProductsRepo.get_active(tenant_id, product_id)
@@ -223,15 +222,13 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         user_id = int(cb["from"]["id"])
         is_admin = is_admin_user(tenant=tenant, user_id=user_id)
 
-        # stop spinner
-        if cb_id:
-            await bot.answer_callback_query(cb_id)
-
         parts = payload.split(":")
         action = parts[1] if len(parts) > 1 else ""
         pid = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
 
         if action == "noop":
+            if cb_id:
+                await bot.answer_callback_query(cb_id, text="•", show_alert=False)
             return True
 
         # add to cart: no redirect, only toast
@@ -243,7 +240,6 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
 
         # favorites hook (skeleton)
         if action == "fav" and pid > 0:
-            # TODO: FavoritesRepo.toggle(tenant_id, user_id, pid)
             if cb_id:
                 await bot.answer_callback_query(cb_id, text="⭐ Додано в обране (скоро буде логіка)", show_alert=False)
             return True
@@ -256,6 +252,8 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
                     await bot.answer_callback_query(cb_id, text="•", show_alert=False)
                 return True
             await _edit_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]))
+            if cb_id:
+                await bot.answer_callback_query(cb_id)
             return True
 
         if action == "next" and pid > 0:
@@ -265,27 +263,37 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
                     await bot.answer_callback_query(cb_id, text="•", show_alert=False)
                 return True
             await _edit_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]))
+            if cb_id:
+                await bot.answer_callback_query(cb_id)
             return True
 
         # cart controls
         if action == "inc" and pid > 0:
             await TelegramShopCartRepo.cart_inc(tenant_id, user_id, pid, 1)
             await _edit_cart_inline(bot, chat_id, msg_id, tenant_id, user_id)
+            if cb_id:
+                await bot.answer_callback_query(cb_id)
             return True
 
         if action == "dec" and pid > 0:
             await TelegramShopCartRepo.cart_inc(tenant_id, user_id, pid, -1)
             await _edit_cart_inline(bot, chat_id, msg_id, tenant_id, user_id)
+            if cb_id:
+                await bot.answer_callback_query(cb_id)
             return True
 
         if action == "del" and pid > 0:
             await TelegramShopCartRepo.cart_delete_item(tenant_id, user_id, pid)
             await _edit_cart_inline(bot, chat_id, msg_id, tenant_id, user_id)
+            if cb_id:
+                await bot.answer_callback_query(cb_id)
             return True
 
         if action == "clear":
             await TelegramShopCartRepo.cart_clear(tenant_id, user_id)
             await _edit_cart_inline(bot, chat_id, msg_id, tenant_id, user_id)
+            if cb_id:
+                await bot.answer_callback_query(cb_id)
             return True
 
         if action == "checkout":
@@ -295,8 +303,12 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
             else:
                 await bot.send_message(chat_id, f"✅ Замовлення *#{oid}* створено!", parse_mode="Markdown", reply_markup=main_menu_kb(is_admin=is_admin))
             await _edit_cart_inline(bot, chat_id, msg_id, tenant_id, user_id)
+            if cb_id:
+                await bot.answer_callback_query(cb_id)
             return True
 
+        if cb_id:
+            await bot.answer_callback_query(cb_id)
         return False
 
     # --- messages ---
