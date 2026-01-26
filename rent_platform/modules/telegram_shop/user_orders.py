@@ -18,7 +18,8 @@ from rent_platform.modules.telegram_shop.ui.orders_status import status_label
 
 def _fmt_money(kop: int) -> str:
     kop = int(kop or 0)
-    return f"{kop//100}.{kop%100:02d} грн"
+    return f"{kop // 100}.{kop % 100:02d} грн"
+
 
 def _fmt_dt(ts: int) -> str:
     ts = int(ts or 0)
@@ -57,25 +58,15 @@ async def send_orders_list(bot: Bot, chat_id: int, tenant_id: str, user_id: int)
     )
 
 
-async def _get_order_fallback(tenant_id: str, user_id: int, order_id: int) -> dict | None:
-    """
-    fallback якщо в repo нема get_order()
-    """
-    orders = await TelegramShopOrdersRepo.list_orders(tenant_id, user_id, limit=50)
-    for o in (orders or []):
-        if int(o.get("id") or 0) == int(order_id):
-            return o
-    return None
-
-
 async def send_order_detail(bot: Bot, chat_id: int, tenant_id: str, user_id: int, order_id: int) -> None:
-    if hasattr(TelegramShopOrdersRepo, "get_order"):
-        o = await TelegramShopOrdersRepo.get_order(tenant_id, user_id, int(order_id))  # type: ignore[attr-defined]
-    else:
-        o = await _get_order_fallback(tenant_id, user_id, int(order_id))
-
+    o = await TelegramShopOrdersRepo.get_order(tenant_id, int(order_id))
     if not o:
         await bot.send_message(chat_id, "Замовлення не знайдено 😅")
+        return
+
+    # ✅ security: чужі замовлення не показуємо
+    if int(o.get("user_id") or 0) != int(user_id):
+        await bot.send_message(chat_id, "⛔ Це замовлення не належить вам.")
         return
 
     oid = int(o.get("id") or 0)
@@ -90,7 +81,7 @@ async def send_order_detail(bot: Bot, chat_id: int, tenant_id: str, user_id: int
         f"Статус: *{st}*\n"
         f"Сума: *{total}*\n"
         f"Створено: _{created}_\n\n"
-        f"_(Далі сюди додамо таймлайн: прийнято/зiбрано/НП/отримано/не отримано/повернення…)_\n"
+        f"_(Далі додамо таймлайн: прийнято/зiбрано/НП/отримано/не отримано/повернення/скасовано…)_\n"
     )
 
     await bot.send_message(
@@ -102,16 +93,23 @@ async def send_order_detail(bot: Bot, chat_id: int, tenant_id: str, user_id: int
 
 
 async def send_order_items(bot: Bot, chat_id: int, tenant_id: str, user_id: int, order_id: int) -> None:
-    items: list[dict[str, Any]] = []
-    if hasattr(TelegramShopOrdersRepo, "list_items"):
-        items = await TelegramShopOrdersRepo.list_items(tenant_id, user_id, int(order_id))  # type: ignore[attr-defined]
-        items = items or []
+    o = await TelegramShopOrdersRepo.get_order(tenant_id, int(order_id))
+    if not o:
+        await bot.send_message(chat_id, "Замовлення не знайдено 😅")
+        return
+
+    # ✅ security
+    if int(o.get("user_id") or 0) != int(user_id):
+        await bot.send_message(chat_id, "⛔ Це замовлення не належить вам.")
+        return
+
+    items = await TelegramShopOrdersRepo.list_order_items(int(order_id))
+    items = items or []
 
     if not items:
         await bot.send_message(
             chat_id,
-            f"📦 *Товари в замовленні #{int(order_id)}*\n\n"
-            f"Поки що це скелет. (Додамо items, коли затвердимо схему з qty/цінами/назвами).",
+            f"📦 *Товари в замовленні #{int(order_id)}*\n\nПоки що порожньо.",
             parse_mode="Markdown",
             reply_markup=order_items_kb(int(order_id)),
         )
@@ -124,7 +122,12 @@ async def send_order_items(bot: Bot, chat_id: int, tenant_id: str, user_id: int,
         price = _fmt_money(int(it.get("price_kop") or 0))
         lines.append(f"• *{name}* — {qty} шт × {price}")
 
-    await bot.send_message(chat_id, "\n".join(lines), parse_mode="Markdown", reply_markup=order_items_kb(int(order_id)))
+    await bot.send_message(
+        chat_id,
+        "\n".join(lines),
+        parse_mode="Markdown",
+        reply_markup=order_items_kb(int(order_id)),
+    )
 
 
 async def handle_orders_callback(
@@ -140,26 +143,26 @@ async def handle_orders_callback(
 
     parts = payload.split(":")
     action = parts[1] if len(parts) > 1 else ""
-    a = parts[2] if len(parts) > 2 else "0"
+    raw = parts[2] if len(parts) > 2 else "0"
 
     if action == "list":
         await send_orders_list(bot, chat_id, tenant_id, user_id)
         return True
 
     if action == "open":
-        oid = int(a) if a.isdigit() else 0
+        oid = int(raw) if raw.isdigit() else 0
         if oid > 0:
             await send_order_detail(bot, chat_id, tenant_id, user_id, oid)
         return True
 
     if action == "items":
-        oid = int(a) if a.isdigit() else 0
+        oid = int(raw) if raw.isdigit() else 0
         if oid > 0:
             await send_order_items(bot, chat_id, tenant_id, user_id, oid)
         return True
 
     if action == "arch":
-        oid = int(a) if a.isdigit() else 0
+        oid = int(raw) if raw.isdigit() else 0
         if oid > 0:
             await TelegramShopOrdersArchiveRepo.toggle(tenant_id, user_id, oid)
             await send_order_detail(bot, chat_id, tenant_id, user_id, oid)
