@@ -43,6 +43,12 @@ from rent_platform.modules.telegram_shop.user_favorites import (
     handle_favorites_callback,
 )
 
+# ✅ NEW: orders UI
+from rent_platform.modules.telegram_shop.user_orders import (
+    send_orders_list,
+    handle_orders_callback,
+)
+
 try:
     from rent_platform.modules.telegram_shop.repo.categories import CategoriesRepo  # type: ignore
 except Exception:  # pragma: no cover
@@ -415,37 +421,10 @@ async def _edit_product_kb_only(
     category_id: int | None,
     scope: str,
 ) -> None:
-    """
-    Для toggle favorites: не чіпаємо текст/медіа, лише міняємо inline-кнопки.
-    """
     card = await _build_product_card(tenant_id, user_id, product_id, category_id=category_id, scope=scope)
     if not card:
         return
     await bot.edit_message_reply_markup(chat_id=chat_id, message_id=message_id, reply_markup=card["kb"])
-
-
-# =========================================================
-# Orders
-# =========================================================
-async def _send_orders(bot: Bot, chat_id: int, tenant_id: str, user_id: int, *, is_admin: bool) -> None:
-    orders = await TelegramShopOrdersRepo.list_orders(tenant_id, user_id, limit=20)
-    if not orders:
-        await bot.send_message(
-            chat_id,
-            "🧾 *Історія замовлень*\n\nПоки що порожньо.",
-            parse_mode="Markdown",
-            reply_markup=orders_history_kb(is_admin=is_admin),
-        )
-        return
-
-    lines = ["🧾 *Історія замовлень*\n"]
-    for o in orders:
-        oid = int(o["id"])
-        status = str(o["status"])
-        total = int(o["total_kop"] or 0)
-        lines.append(f"#{oid} — *{status}* — {_fmt_money(total)}")
-
-    await bot.send_message(chat_id, "\n".join(lines), parse_mode="Markdown", reply_markup=orders_history_kb(is_admin=is_admin))
 
 
 # =========================================================
@@ -501,7 +480,20 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
                 await bot.answer_callback_query(cb_id)
             return bool(handled)
 
-        # 4) Shop callbacks
+        # ✅ 4) Orders callbacks (tgord:*)
+        if payload.startswith("tgord:"):
+            handled = await handle_orders_callback(
+                bot=bot,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                chat_id=chat_id,
+                payload=payload,
+            )
+            if cb_id:
+                await bot.answer_callback_query(cb_id)
+            return bool(handled)
+
+        # 5) Shop callbacks
         if not payload.startswith("tgshop:"):
             return False
 
@@ -566,7 +558,6 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         if action == "fav" and pid > 0:
             added = await TelegramShopFavoritesRepo.toggle(tenant_id, user_id, pid)
 
-            # миттєво оновлюємо кнопки на цій же картці
             try:
                 await _edit_product_kb_only(
                     bot,
@@ -668,8 +659,9 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         )
         return bool(handled)
 
+    # ✅ Orders (NEW UI)
     if text == _normalize_text(BTN_ORDERS):
-        await _send_orders(bot, chat_id, tenant_id, user_id, is_admin=is_admin)
+        await send_orders_list(bot, chat_id, tenant_id, user_id)
         return True
 
     if text == _normalize_text(BTN_HITS):
