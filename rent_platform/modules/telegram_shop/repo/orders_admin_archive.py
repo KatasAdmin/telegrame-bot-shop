@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import time
-
 from rent_platform.db.session import db_fetch_one, db_execute
 
 
@@ -20,9 +19,6 @@ class TelegramShopOrdersAdminArchiveRepo:
 
     @staticmethod
     async def toggle(tenant_id: str, order_id: int) -> bool:
-        """
-        returns True if archived now, False if unarchived now
-        """
         if await TelegramShopOrdersAdminArchiveRepo.is_archived(tenant_id, order_id):
             q = """
             DELETE FROM telegram_shop_orders_admin_archive
