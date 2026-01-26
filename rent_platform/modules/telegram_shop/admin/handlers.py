@@ -7,6 +7,7 @@ from typing import Any
 from aiogram import Bot
 from aiogram.types import InputMediaPhoto
 
+
 from rent_platform.modules.telegram_shop.admin_orders import admin_orders_handle_update
 from rent_platform.db.session import db_fetch_all, db_fetch_one, db_execute  # noqa: F401
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
@@ -891,7 +892,8 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
         #   from rent_platform.modules.telegram_shop.admin_orders import admin_orders_handle_update
         if payload.startswith("tgadm:ord"):
             handled = await admin_orders_handle_update(tenant=tenant, data=data, bot=bot)
-            return bool(handled)
+            if handled:
+                return True
 
         parts = payload.split(":")
         action = parts[1] if len(parts) > 1 else ""
