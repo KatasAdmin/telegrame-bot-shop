@@ -79,10 +79,13 @@ def _promo_active(p: dict[str, Any], now: int) -> bool:
     pu = int(p.get("promo_until_ts") or 0)
     return pp > 0 and (pu == 0 or pu > now)
 
+
 def _fmt_dt(ts: int) -> str:
     # простий формат без timezone (достатньо для UI)
     import datetime as _dt
+
     return _dt.datetime.fromtimestamp(int(ts)).strftime("%d.%m.%Y %H:%M")
+
 
 def _effective_price_kop(p: dict[str, Any], now: int) -> int:
     return int(p.get("promo_price_kop") or 0) if _promo_active(p, now) else int(p.get("price_kop") or 0)
@@ -93,6 +96,7 @@ async def _send_menu(bot: Bot, chat_id: int, text: str, *, is_admin: bool) -> No
 
 
 # ---------- Catalog categories ----------
+
 
 async def _send_categories_menu(bot: Bot, chat_id: int, tenant_id: str, *, is_admin: bool) -> None:
     """
@@ -138,6 +142,7 @@ async def _send_categories_menu(bot: Bot, chat_id: int, tenant_id: str, *, is_ad
 
 # ---------- Product card rendering ----------
 
+
 async def _build_product_card(tenant_id: str, product_id: int, *, category_id: int | None) -> dict | None:
     p = await ProductsRepo.get_active(tenant_id, product_id)
     if not p:
@@ -151,7 +156,6 @@ async def _build_product_card(tenant_id: str, product_id: int, *, category_id: i
     desc = (p.get("description") or "").strip()
 
     promo_on = _promo_active(p, now)
-    promo_price = int(p.get("promo_price_kop") or 0)
     promo_until = int(p.get("promo_until_ts") or 0)
     effective_price = _effective_price_kop(p, now)
 
@@ -192,9 +196,82 @@ async def _build_product_card(tenant_id: str, product_id: int, *, category_id: i
         "text": text,
         "kb": kb,
     }
-    
+
+
+async def _send_first_product_card(
+    bot: Bot,
+    chat_id: int,
+    tenant_id: str,
+    *,
+    is_admin: bool,
+    category_id: int | None,
+) -> None:
+    p = await ProductsRepo.get_first_active(tenant_id, category_id=category_id)
+    if not p:
+        await bot.send_message(
+            chat_id,
+            "🛍 *Каталог*\n\nПоки що немає товарів у цій категорії.",
+            parse_mode="Markdown",
+        )
+        await _send_categories_menu(bot, chat_id, tenant_id, is_admin=is_admin)
+        return
+
+    card = await _build_product_card(tenant_id, int(p["id"]), category_id=category_id)
+    if not card:
+        await bot.send_message(chat_id, "🛍 Каталог поки що порожній.")
+        return
+
+    if card["has_photo"]:
+        await bot.send_photo(
+            chat_id,
+            photo=card["file_id"],
+            caption=card["text"],
+            parse_mode="Markdown",
+            reply_markup=card["kb"],
+        )
+    else:
+        await bot.send_message(
+            chat_id,
+            card["text"],
+            parse_mode="Markdown",
+            reply_markup=card["kb"],
+        )
+
+
+async def _edit_product_card(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    tenant_id: str,
+    product_id: int,
+    *,
+    category_id: int | None,
+) -> bool:
+    card = await _build_product_card(tenant_id, product_id, category_id=category_id)
+    if not card:
+        return False
+
+    if card["has_photo"]:
+        media = InputMediaPhoto(media=card["file_id"], caption=card["text"], parse_mode="Markdown")
+        await bot.edit_message_media(
+            media=media,
+            chat_id=chat_id,
+            message_id=message_id,
+            reply_markup=card["kb"],
+        )
+    else:
+        await bot.edit_message_text(
+            card["text"],
+            chat_id=chat_id,
+            message_id=message_id,
+            parse_mode="Markdown",
+            reply_markup=card["kb"],
+        )
+    return True
+
 
 # ---------- Cart rendering ----------
+
 
 async def _render_cart_text(tenant_id: str, user_id: int) -> tuple[str, list[dict]]:
     items = await TelegramShopCartRepo.cart_list(tenant_id, user_id)
@@ -256,6 +333,7 @@ async def _send_orders(bot: Bot, chat_id: int, tenant_id: str, user_id: int, *, 
 
 
 # ---------- Main entry ----------
+
 
 async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
     tenant_id = str(tenant["id"])
