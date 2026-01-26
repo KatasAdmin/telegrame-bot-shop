@@ -7,6 +7,7 @@ from typing import Any
 from aiogram import Bot
 from aiogram.types import InputMediaPhoto
 
+from rent_platform.modules.telegram_shop.admin_orders import admin_orders_handle_update
 from rent_platform.db.session import db_fetch_all, db_fetch_one, db_execute  # noqa: F401
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
 
@@ -161,6 +162,7 @@ def _admin_home_kb() -> dict:
     return _kb(
         [
             [("📦 Каталог", "tgadm:catalog")],
+            [("🧾 Замовлення", "tgadm:ord_menu:0")],
             [("❌ Скинути дію", "tgadm:cancel")],
         ]
     )
