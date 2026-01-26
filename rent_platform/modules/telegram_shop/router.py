@@ -10,12 +10,10 @@ from aiogram.types import InputMediaPhoto
 
 from rent_platform.modules.telegram_shop.admin import admin_handle_update, is_admin_user
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
-from rent_platform.modules.telegram_shop.repo.cart import TelegramShopCartRepo
 from rent_platform.modules.telegram_shop.repo.orders import TelegramShopOrdersRepo
 from rent_platform.modules.telegram_shop.ui.user_kb import (
     main_menu_kb,
     catalog_kb,
-    cart_kb,
     favorites_kb,
     orders_history_kb,
     support_kb,
@@ -27,13 +25,17 @@ from rent_platform.modules.telegram_shop.ui.user_kb import (
     BTN_SUPPORT,
     BTN_MENU_BACK,
     BTN_ADMIN,
-    BTN_CHECKOUT,
-    BTN_CLEAR_CART,
 )
 from rent_platform.modules.telegram_shop.ui.inline_kb import (
     product_card_kb,
-    cart_inline,
     catalog_categories_kb,
+)
+
+# NEW cart UX (tgcart:*)
+from rent_platform.modules.telegram_shop.user_cart import (
+    send_cart as send_user_cart,
+    handle_cart_message as handle_user_cart_message,
+    handle_cart_callback as handle_user_cart_callback,
 )
 
 try:
@@ -270,47 +272,6 @@ async def _edit_product_card(
     return True
 
 
-# ---------- Cart rendering ----------
-
-
-async def _render_cart_text(tenant_id: str, user_id: int) -> tuple[str, list[dict]]:
-    items = await TelegramShopCartRepo.cart_list(tenant_id, user_id)
-    if not items:
-        return ("🛒 *Кошик*\n\nПорожньо.", [])
-
-    total = 0
-    lines = ["🛒 *Кошик*\n"]
-    for it in items:
-        name = str(it["name"])
-        qty = int(it["qty"])
-        price = int(it.get("price_kop") or 0)
-        total += price * qty
-        lines.append(f"{name}\n{qty} × {_fmt_money(price)} = *{_fmt_money(price * qty)}*")
-    lines.append(f"\nРазом: *{_fmt_money(total)}*")
-    return ("\n\n".join(lines), items)
-
-
-async def _send_cart(bot: Bot, chat_id: int, tenant_id: str, user_id: int, *, is_admin: bool) -> None:
-    text, items = await _render_cart_text(tenant_id, user_id)
-    await bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=cart_kb(is_admin=is_admin))
-    if items:
-        await bot.send_message(chat_id, "⚙️ Керування кошиком:", reply_markup=cart_inline(items=items))
-
-
-async def _edit_cart_inline(bot: Bot, chat_id: int, message_id: int, tenant_id: str, user_id: int) -> None:
-    text, items = await _render_cart_text(tenant_id, user_id)
-    if not items:
-        await bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, parse_mode="Markdown")
-        return
-    await bot.edit_message_text(
-        text,
-        chat_id=chat_id,
-        message_id=message_id,
-        parse_mode="Markdown",
-        reply_markup=cart_inline(items=items),
-    )
-
-
 async def _send_orders(bot: Bot, chat_id: int, tenant_id: str, user_id: int, *, is_admin: bool) -> None:
     orders = await TelegramShopOrdersRepo.list_orders(tenant_id, user_id, limit=20)
     if not orders:
@@ -346,6 +307,7 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         user_id = int(cb["from"]["id"])
         is_admin = is_admin_user(tenant=tenant, user_id=user_id)
         cb_id = cb.get("id")
+        msg_id = int(cb["message"]["message_id"])
 
         # 1) Admin callbacks first
         if payload.startswith("tgadm:"):
@@ -356,11 +318,24 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
             handled = await admin_handle_update(tenant=tenant, data=data, bot=bot)
             return bool(handled)
 
-        # 2) Shop callbacks
+        # 2) Cart callbacks (NEW UX)
+        if payload.startswith("tgcart:"):
+            handled = await handle_user_cart_callback(
+                bot=bot,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                chat_id=chat_id,
+                message_id=msg_id,
+                payload=payload,
+            )
+            if cb_id:
+                # щоб не крутилось "loading"
+                await bot.answer_callback_query(cb_id, text="•", show_alert=False)
+            return bool(handled)
+
+        # 3) Shop callbacks
         if not payload.startswith("tgshop:"):
             return False
-
-        msg_id = int(cb["message"]["message_id"])
 
         parts = payload.split(":")
         action = parts[1] if len(parts) > 1 else ""
@@ -388,6 +363,10 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
             return True
 
         if action == "add" and pid > 0:
+            # додаємо в кошик (через repo)
+            # user_cart працює з tgcart:* для керування, але додавання з картки товару лишаємо тут
+            from rent_platform.modules.telegram_shop.repo.cart import TelegramShopCartRepo
+
             await TelegramShopCartRepo.cart_inc(tenant_id, user_id, pid, 1)
             if cb_id:
                 await bot.answer_callback_query(cb_id, text="✅ Додано в кошик", show_alert=False)
@@ -416,54 +395,6 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
                     await bot.answer_callback_query(cb_id, text="•", show_alert=False)
                 return True
             await _edit_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]), category_id=category_id)
-            if cb_id:
-                await bot.answer_callback_query(cb_id)
-            return True
-
-        if action == "inc" and pid > 0:
-            await TelegramShopCartRepo.cart_inc(tenant_id, user_id, pid, 1)
-            await _edit_cart_inline(bot, chat_id, msg_id, tenant_id, user_id)
-            if cb_id:
-                await bot.answer_callback_query(cb_id)
-            return True
-
-        if action == "dec" and pid > 0:
-            await TelegramShopCartRepo.cart_inc(tenant_id, user_id, pid, -1)
-            await _edit_cart_inline(bot, chat_id, msg_id, tenant_id, user_id)
-            if cb_id:
-                await bot.answer_callback_query(cb_id)
-            return True
-
-        if action == "del" and pid > 0:
-            await TelegramShopCartRepo.cart_delete_item(tenant_id, user_id, pid)
-            await _edit_cart_inline(bot, chat_id, msg_id, tenant_id, user_id)
-            if cb_id:
-                await bot.answer_callback_query(cb_id)
-            return True
-
-        if action == "clear":
-            await TelegramShopCartRepo.cart_clear(tenant_id, user_id)
-            await _edit_cart_inline(bot, chat_id, msg_id, tenant_id, user_id)
-            if cb_id:
-                await bot.answer_callback_query(cb_id)
-            return True
-
-        if action == "checkout":
-            oid = await TelegramShopOrdersRepo.create_order_from_cart(tenant_id, user_id)
-            if not oid:
-                await bot.send_message(
-                    chat_id,
-                    "🛒 Кошик порожній — нічого оформлювати.",
-                    reply_markup=cart_kb(is_admin=is_admin),
-                )
-            else:
-                await bot.send_message(
-                    chat_id,
-                    f"✅ Замовлення *#{oid}* створено!",
-                    parse_mode="Markdown",
-                    reply_markup=main_menu_kb(is_admin=is_admin),
-                )
-            await _edit_cart_inline(bot, chat_id, msg_id, tenant_id, user_id)
             if cb_id:
                 await bot.answer_callback_query(cb_id)
             return True
@@ -497,12 +428,23 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         await _send_menu(bot, chat_id, "🛒 *Магазин*\n\nОбирай розділ кнопками нижче 👇", is_admin=is_admin)
         return True
 
+    # Cart buttons (✅ Оформити / 🧹 Очистити) — делегуємо в user_cart.py
+    handled_cart_btns = await handle_user_cart_message(
+        bot=bot,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        chat_id=chat_id,
+        text=text,
+    )
+    if handled_cart_btns:
+        return True
+
     if text == _normalize_text(BTN_CATALOG):
         await _send_categories_menu(bot, chat_id, tenant_id, is_admin=is_admin)
         return True
 
     if text == _normalize_text(BTN_CART):
-        await _send_cart(bot, chat_id, tenant_id, user_id, is_admin=is_admin)
+        await send_user_cart(bot, chat_id, tenant_id, user_id)
         return True
 
     if text == _normalize_text(BTN_ORDERS):
@@ -538,28 +480,6 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
 
     if text == _normalize_text(BTN_MENU_BACK):
         await _send_menu(bot, chat_id, "⬅️ Повернув у меню 👇", is_admin=is_admin)
-        return True
-
-    if text == _normalize_text(BTN_CLEAR_CART):
-        await TelegramShopCartRepo.cart_clear(tenant_id, user_id)
-        await _send_cart(bot, chat_id, tenant_id, user_id, is_admin=is_admin)
-        return True
-
-    if text == _normalize_text(BTN_CHECKOUT):
-        oid = await TelegramShopOrdersRepo.create_order_from_cart(tenant_id, user_id)
-        if not oid:
-            await bot.send_message(
-                chat_id,
-                "🛒 Кошик порожній — нічого оформлювати.",
-                reply_markup=cart_kb(is_admin=is_admin),
-            )
-        else:
-            await bot.send_message(
-                chat_id,
-                f"✅ Замовлення *#{oid}* створено!",
-                parse_mode="Markdown",
-                reply_markup=main_menu_kb(is_admin=is_admin),
-            )
         return True
 
     if text == _normalize_text(BTN_ADMIN) and is_admin:
