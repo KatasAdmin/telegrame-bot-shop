@@ -886,6 +886,13 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
         if cb_id:
             await bot.answer_callback_query(cb_id)
 
+        # ✅ Orders admin module (separate file)
+        # IMPORTANT: needs:
+        #   from rent_platform.modules.telegram_shop.admin_orders import admin_orders_handle_update
+        if payload.startswith("tgadm:ord"):
+            handled = await admin_orders_handle_update(tenant=tenant, data=data, bot=bot)
+            return bool(handled)
+
         parts = payload.split(":")
         action = parts[1] if len(parts) > 1 else ""
         arg = parts[2] if len(parts) > 2 else ""
@@ -893,6 +900,7 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
 
         if action == "noop":
             return True
+
 
         # HOME / CATALOG
         if action == "home":
