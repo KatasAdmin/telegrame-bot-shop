@@ -1,4 +1,4 @@
-єfrom __future__ import annotations
+from __future__ import annotations
 
 from typing import Any
 
@@ -6,11 +6,6 @@ from rent_platform.modules.telegram_shop.admin.handlers import handle_update as 
 
 
 def is_admin_user(*, tenant: dict[str, Any], user_id: int) -> bool:
-    """
-    Мінімальна, але надійна перевірка адміна.
-    - owner_user_id (основний адмін)
-    - або admin_user_ids (якщо колись додаси список)
-    """
     try:
         owner_id = int(tenant.get("owner_user_id") or 0)
     except Exception:
