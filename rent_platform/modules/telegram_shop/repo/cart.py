@@ -78,10 +78,10 @@ class TelegramShopCartRepo:
     @staticmethod
     async def cart_list(tenant_id: str, user_id: int) -> list[dict[str, Any]]:
         """
-        Join products and return:
-          - price_kop (effective: promo or base)
-          - base_price_kop (for 'saved' calc)
-          - promo_price_kop, promo_until_ts (optional, for UI)
+        Join products and return BOTH prices:
+        - base_price_kop: original price_kop
+        - price_kop: effective price (promo if active else base)
+        Also returns promo_active flag for UI.
         """
         now = int(time.time())
         q = """
@@ -89,18 +89,19 @@ class TelegramShopCartRepo:
             c.product_id,
             c.qty,
             p.name,
-
             COALESCE(p.price_kop, 0) AS base_price_kop,
-            COALESCE(p.promo_price_kop, 0) AS promo_price_kop,
-            COALESCE(p.promo_until_ts, 0) AS promo_until_ts,
-
             CASE
               WHEN COALESCE(p.promo_price_kop, 0) > 0
                AND (COALESCE(p.promo_until_ts, 0) = 0 OR COALESCE(p.promo_until_ts, 0) > :now)
               THEN COALESCE(p.promo_price_kop, 0)
               ELSE COALESCE(p.price_kop, 0)
-            END AS price_kop
-
+            END AS price_kop,
+            CASE
+              WHEN COALESCE(p.promo_price_kop, 0) > 0
+               AND (COALESCE(p.promo_until_ts, 0) = 0 OR COALESCE(p.promo_until_ts, 0) > :now)
+              THEN true
+              ELSE false
+            END AS promo_active
         FROM telegram_shop_cart_items c
         JOIN telegram_shop_products p
           ON p.tenant_id = c.tenant_id AND p.id = c.product_id
