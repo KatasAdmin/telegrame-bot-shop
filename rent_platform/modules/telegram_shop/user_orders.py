@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import datetime as _dt
@@ -28,12 +27,59 @@ def _fmt_dt(ts: int) -> str:
     return _dt.datetime.fromtimestamp(ts).strftime("%d.%m.%Y %H:%M")
 
 
-async def send_orders_list(bot: Bot, chat_id: int, tenant_id: str, user_id: int) -> None:
+async def _send_or_edit_text(
+    bot: Bot,
+    *,
+    chat_id: int,
+    text: str,
+    reply_markup: Any | None = None,
+    message_id: int | None = None,
+) -> None:
+    """
+    Якщо message_id переданий — редагуємо те ж повідомлення (краще UX).
+    Якщо ні — просто шлемо нове.
+    """
+    if message_id:
+        try:
+            await bot.edit_message_text(
+                text,
+                chat_id=chat_id,
+                message_id=int(message_id),
+                parse_mode="Markdown",
+                reply_markup=reply_markup,
+            )
+            return
+        except Exception:
+            # якщо редагування неможливе — просто надішлемо нове
+            pass
+
+    await bot.send_message(
+        chat_id,
+        text,
+        parse_mode="Markdown",
+        reply_markup=reply_markup,
+    )
+
+
+async def send_orders_list(
+    bot: Bot,
+    chat_id: int,
+    tenant_id: str,
+    user_id: int,
+    *,
+    message_id: int | None = None,
+) -> None:
     orders = await TelegramShopOrdersRepo.list_orders(tenant_id, user_id, limit=20)
     orders = orders or []
 
     if not orders:
-        await bot.send_message(chat_id, "🧾 *Історія замовлень*\n\nПоки що порожньо.", parse_mode="Markdown")
+        await _send_or_edit_text(
+            bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            text="🧾 *Історія замовлень*\n\nПоки що порожньо.",
+            reply_markup=None,
+        )
         return
 
     lines = ["🧾 *Історія замовлень*\n"]
@@ -50,23 +96,44 @@ async def send_orders_list(bot: Bot, chat_id: int, tenant_id: str, user_id: int)
         created = _fmt_dt(int(o.get("created_ts") or 0))
         lines.append(f"• #{oid} — {st} — *{total}* — _{created}_")
 
-    await bot.send_message(
-        chat_id,
-        "\n".join(lines),
-        parse_mode="Markdown",
+    await _send_or_edit_text(
+        bot,
+        chat_id=chat_id,
+        message_id=message_id,
+        text="\n".join(lines),
         reply_markup=orders_list_kb(ids),
     )
 
 
-async def send_order_detail(bot: Bot, chat_id: int, tenant_id: str, user_id: int, order_id: int) -> None:
+async def send_order_detail(
+    bot: Bot,
+    chat_id: int,
+    tenant_id: str,
+    user_id: int,
+    order_id: int,
+    *,
+    message_id: int | None = None,
+) -> None:
     o = await TelegramShopOrdersRepo.get_order(tenant_id, int(order_id))
     if not o:
-        await bot.send_message(chat_id, "Замовлення не знайдено 😅")
+        await _send_or_edit_text(
+            bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            text="🧾 *Замовлення*\n\nЗамовлення не знайдено 😅",
+            reply_markup=None,
+        )
         return
 
     # ✅ security: чужі замовлення не показуємо
     if int(o.get("user_id") or 0) != int(user_id):
-        await bot.send_message(chat_id, "⛔ Це замовлення не належить вам.")
+        await _send_or_edit_text(
+            bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            text="⛔ Це замовлення не належить вам.",
+            reply_markup=None,
+        )
         return
 
     oid = int(o.get("id") or 0)
@@ -81,36 +148,58 @@ async def send_order_detail(bot: Bot, chat_id: int, tenant_id: str, user_id: int
         f"Статус: *{st}*\n"
         f"Сума: *{total}*\n"
         f"Створено: _{created}_\n\n"
-        f"_(Далі додамо таймлайн: прийнято/зiбрано/НП/отримано/не отримано/повернення/скасовано…)_\n"
+        f"_(Далі додамо таймлайн: прийнято/зібрано/НП/отримано/не отримано/повернення/скасовано…) _\n"
     )
 
-    await bot.send_message(
-        chat_id,
-        text,
-        parse_mode="Markdown",
+    await _send_or_edit_text(
+        bot,
+        chat_id=chat_id,
+        message_id=message_id,
+        text=text,
         reply_markup=order_detail_kb(oid, is_archived=bool(is_arch)),
     )
 
 
-async def send_order_items(bot: Bot, chat_id: int, tenant_id: str, user_id: int, order_id: int) -> None:
+async def send_order_items(
+    bot: Bot,
+    chat_id: int,
+    tenant_id: str,
+    user_id: int,
+    order_id: int,
+    *,
+    message_id: int | None = None,
+) -> None:
     o = await TelegramShopOrdersRepo.get_order(tenant_id, int(order_id))
     if not o:
-        await bot.send_message(chat_id, "Замовлення не знайдено 😅")
+        await _send_or_edit_text(
+            bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            text="📦 *Товари*\n\nЗамовлення не знайдено 😅",
+            reply_markup=None,
+        )
         return
 
     # ✅ security
     if int(o.get("user_id") or 0) != int(user_id):
-        await bot.send_message(chat_id, "⛔ Це замовлення не належить вам.")
+        await _send_or_edit_text(
+            bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            text="⛔ Це замовлення не належить вам.",
+            reply_markup=None,
+        )
         return
 
     items = await TelegramShopOrdersRepo.list_order_items(int(order_id))
     items = items or []
 
     if not items:
-        await bot.send_message(
-            chat_id,
-            f"📦 *Товари в замовленні #{int(order_id)}*\n\nПоки що порожньо.",
-            parse_mode="Markdown",
+        await _send_or_edit_text(
+            bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            text=f"📦 *Товари в замовленні #{int(order_id)}*\n\nПоки що порожньо.",
             reply_markup=order_items_kb(int(order_id)),
         )
         return
@@ -122,10 +211,11 @@ async def send_order_items(bot: Bot, chat_id: int, tenant_id: str, user_id: int,
         price = _fmt_money(int(it.get("price_kop") or 0))
         lines.append(f"• *{name}* — {qty} шт × {price}")
 
-    await bot.send_message(
-        chat_id,
-        "\n".join(lines),
-        parse_mode="Markdown",
+    await _send_or_edit_text(
+        bot,
+        chat_id=chat_id,
+        message_id=message_id,
+        text="\n".join(lines),
         reply_markup=order_items_kb(int(order_id)),
     )
 
@@ -137,7 +227,18 @@ async def handle_orders_callback(
     user_id: int,
     chat_id: int,
     payload: str,
+    message_id: int | None = None,
 ) -> bool:
+    """
+    callback_data очікуємо таким:
+      tgord:list:0
+      tgord:open:<order_id>
+      tgord:items:<order_id>
+      tgord:arch:<order_id>
+
+    Порада: у роутері краще передавати message_id=msg_id (з callback_query.message.message_id),
+    тоді історія/картки будуть відкриватись в одній і тій самій повідомлюсі (без спаму).
+    """
     if not payload.startswith("tgord:"):
         return False
 
@@ -146,26 +247,26 @@ async def handle_orders_callback(
     raw = parts[2] if len(parts) > 2 else "0"
 
     if action == "list":
-        await send_orders_list(bot, chat_id, tenant_id, user_id)
+        await send_orders_list(bot, chat_id, tenant_id, user_id, message_id=message_id)
         return True
 
     if action == "open":
         oid = int(raw) if raw.isdigit() else 0
         if oid > 0:
-            await send_order_detail(bot, chat_id, tenant_id, user_id, oid)
+            await send_order_detail(bot, chat_id, tenant_id, user_id, oid, message_id=message_id)
         return True
 
     if action == "items":
         oid = int(raw) if raw.isdigit() else 0
         if oid > 0:
-            await send_order_items(bot, chat_id, tenant_id, user_id, oid)
+            await send_order_items(bot, chat_id, tenant_id, user_id, oid, message_id=message_id)
         return True
 
     if action == "arch":
         oid = int(raw) if raw.isdigit() else 0
         if oid > 0:
             await TelegramShopOrdersArchiveRepo.toggle(tenant_id, user_id, oid)
-            await send_order_detail(bot, chat_id, tenant_id, user_id, oid)
+            await send_order_detail(bot, chat_id, tenant_id, user_id, oid, message_id=message_id)
         return True
 
     return True
