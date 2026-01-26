@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import time
 import logging
+import time
 from typing import Any
 
 from aiogram import Bot
@@ -11,13 +11,11 @@ from aiogram.types import InputMediaPhoto
 from rent_platform.modules.telegram_shop.admin import admin_handle_update, is_admin_user
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
 from rent_platform.modules.telegram_shop.repo.cart import TelegramShopCartRepo
-from rent_platform.modules.telegram_shop.repo.orders import TelegramShopOrdersRepo
 from rent_platform.modules.telegram_shop.repo.favorites import TelegramShopFavoritesRepo
+
 from rent_platform.modules.telegram_shop.ui.user_kb import (
     main_menu_kb,
     catalog_kb,
-    favorites_kb,
-    orders_history_kb,
     support_kb,
     BTN_CATALOG,
     BTN_CART,
@@ -30,13 +28,9 @@ from rent_platform.modules.telegram_shop.ui.user_kb import (
     BTN_CHECKOUT,
     BTN_CLEAR_CART,
 )
-from rent_platform.modules.telegram_shop.user_orders import (
-    send_orders_list,
-    handle_orders_callback,
-)
-from rent_platform.modules.telegram_shop.ui.inline_kb import (
-    catalog_categories_kb,
-)
+
+from rent_platform.modules.telegram_shop.ui.inline_kb import catalog_categories_kb
+
 from rent_platform.modules.telegram_shop.user_cart import (
     send_cart,
     handle_cart_message,
@@ -45,6 +39,10 @@ from rent_platform.modules.telegram_shop.user_cart import (
 from rent_platform.modules.telegram_shop.user_favorites import (
     send_favorites,
     handle_favorites_callback,
+)
+from rent_platform.modules.telegram_shop.user_orders import (
+    send_orders_list,
+    handle_orders_callback,
 )
 
 try:
@@ -226,9 +224,7 @@ async def _send_scope_categories(bot: Bot, chat_id: int, tenant_id: str, *, scop
         return
 
     await CategoriesRepo.ensure_default(tenant_id)  # type: ignore[misc]
-
     cats_all = await CategoriesRepo.list_public(tenant_id, limit=100)  # type: ignore[misc]
-    ids_set: set[int]
 
     if scope == "promo":
         ids = await ProductsRepo.list_promo_category_ids(tenant_id)
@@ -419,6 +415,9 @@ async def _edit_product_kb_only(
     category_id: int | None,
     scope: str,
 ) -> None:
+    """
+    Для toggle favorites: не чіпаємо текст/медіа, лише міняємо inline-кнопки.
+    """
     card = await _build_product_card(tenant_id, user_id, product_id, category_id=category_id, scope=scope)
     if not card:
         return
@@ -478,7 +477,7 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
                 await bot.answer_callback_query(cb_id)
             return bool(handled)
 
-        # ✅ 4) Orders callbacks (tgord:*)
+        # 4) Orders callbacks (tgord:*)
         if payload.startswith("tgord:"):
             handled = await handle_orders_callback(
                 bot=bot,
@@ -486,6 +485,7 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
                 user_id=user_id,
                 chat_id=chat_id,
                 payload=payload,
+                message_id=msg_id,  # ✅ відкриваємо/редагуємо в тому ж повідомленні
             )
             if cb_id:
                 await bot.answer_callback_query(cb_id)
@@ -657,7 +657,7 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         )
         return bool(handled)
 
-    # ✅ Orders (NEW UI)
+    # Orders
     if text == _normalize_text(BTN_ORDERS):
         await send_orders_list(bot, chat_id, tenant_id, user_id)
         return True
