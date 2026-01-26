@@ -30,6 +30,10 @@ from rent_platform.modules.telegram_shop.ui.user_kb import (
     BTN_CHECKOUT,
     BTN_CLEAR_CART,
 )
+from rent_platform.modules.telegram_shop.user_orders import (
+    send_orders_list,
+    handle_orders_callback,
+)
 from rent_platform.modules.telegram_shop.ui.inline_kb import (
     catalog_categories_kb,
 )
@@ -41,12 +45,6 @@ from rent_platform.modules.telegram_shop.user_cart import (
 from rent_platform.modules.telegram_shop.user_favorites import (
     send_favorites,
     handle_favorites_callback,
-)
-
-# ✅ NEW: orders UI
-from rent_platform.modules.telegram_shop.user_orders import (
-    send_orders_list,
-    handle_orders_callback,
 )
 
 try:
