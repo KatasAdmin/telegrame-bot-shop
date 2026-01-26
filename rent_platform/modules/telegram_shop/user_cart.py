@@ -7,7 +7,7 @@ from aiogram import Bot
 from rent_platform.modules.telegram_shop.repo.cart import TelegramShopCartRepo
 from rent_platform.modules.telegram_shop.repo.orders import TelegramShopOrdersRepo
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
-from rent_platform.modules.telegram_shop.ui.user_kb import cart_kb, BTN_CLEAR_CART, BTN_CHECKOUT
+from rent_platform.modules.telegram_shop.ui.user_kb import BTN_CLEAR_CART, BTN_CHECKOUT
 
 
 # -------------------------
@@ -34,7 +34,13 @@ def _kb(rows: list[list[tuple[str, str]]]) -> dict:
 
 
 def _cart_list_kb(items: list[dict[str, Any]], *, cart_message_id: int) -> dict:
+    """
+    Інлайн під кошиком:
+    - кнопки товарів (відкривають картку)
+    - нижче: Очистити / Оформити
+    """
     rows: list[list[tuple[str, str]]] = []
+
     for it in items:
         pid = int(it["product_id"])
         name = str(it.get("name") or "")
@@ -44,8 +50,16 @@ def _cart_list_kb(items: list[dict[str, Any]], *, cart_message_id: int) -> dict:
         if len(title) > 28:
             title = title[:27] + "…"
 
-        # IMPORTANT: передаємо cart_message_id, щоб "назад" оновлював саме цей кошик
+        # cart_message_id потрібен, щоб "назад" оновлював саме цей кошик
         rows.append([(f"🛍 {title} ×{qty}", f"tgcart:open:{pid}:0:{cart_message_id}")])
+
+    # дії кошика (без reply-клави і без "Дії кошика" повідомлення)
+    rows.append(
+        [
+            ("🧹 Очистити", f"tgcart:clear:0:0:{cart_message_id}"),
+            ("✅ Оформити", f"tgcart:checkout:0:0:{cart_message_id}"),
+        ]
+    )
 
     return _kb(rows)
 
@@ -72,8 +86,8 @@ async def _render_cart(tenant_id: str, user_id: int) -> tuple[str, list[dict[str
 
     total_kop = 0
     saved_kop = 0
-
     lines: list[str] = []
+
     for it in items:
         name = _html_escape(str(it.get("name") or ""))
         qty = int(it.get("qty") or 0)
@@ -88,7 +102,6 @@ async def _render_cart(tenant_id: str, user_id: int) -> tuple[str, list[dict[str
 
         if base > eff:
             saved_kop += (base_total - eff_total)
-            # красивий рядок: закреслена сума → нова сума
             lines.append(
                 f"• <b>{name}</b> ×{qty}\n"
                 f"  <s>{_fmt_money(base_total)}</s> → <b>{_fmt_money(eff_total)}</b> 🔥"
@@ -115,7 +128,6 @@ async def _edit_cart_message(
     text, items = await _render_cart(tenant_id, user_id)
 
     if not items:
-        # кошик став порожнім — просто оновлюємо текст і прибираємо кнопки
         await bot.edit_message_text(
             text,
             chat_id=chat_id,
@@ -143,15 +155,14 @@ async def send_cart(bot: Bot, chat_id: int, tenant_id: str, user_id: int, *, ext
     if extra_text:
         text += f"\n\n{_html_escape(extra_text)}"
 
-    # 1) надсилаємо кошик
+    # 1) відправляємо повідомлення (БЕЗ reply-клави)
     msg = await bot.send_message(
         chat_id,
         text,
         parse_mode="HTML",
-        reply_markup=cart_kb(),  # залишаємо твою reply-клаву діями (оформити/очистити/меню)
     )
 
-    # 2) якщо є товари — додаємо інлайн-кнопки (з cart_message_id)
+    # 2) чіпляємо inline-кнопки (вже можна, бо це inline)
     if items:
         await bot.edit_message_reply_markup(
             chat_id=chat_id,
@@ -168,6 +179,7 @@ async def handle_cart_message(
     chat_id: int,
     text: str,
 ) -> bool:
+    # На випадок якщо в когось ще лишились старі reply-кнопки
     if text == BTN_CLEAR_CART:
         await TelegramShopCartRepo.cart_clear(tenant_id, user_id)
         await send_cart(bot, chat_id, tenant_id, user_id, extra_text="Кошик очищено ✅")
@@ -178,12 +190,7 @@ async def handle_cart_message(
         if not oid:
             await send_cart(bot, chat_id, tenant_id, user_id, extra_text="Кошик порожній.")
             return True
-        await bot.send_message(
-            chat_id,
-            f"✅ Замовлення <b>#{oid}</b> створено!",
-            parse_mode="HTML",
-            reply_markup=cart_kb(),
-        )
+        await bot.send_message(chat_id, f"✅ Замовлення <b>#{oid}</b> створено!", parse_mode="HTML")
         return True
 
     return False
@@ -216,13 +223,11 @@ async def handle_cart_callback(
         return True
 
     if action == "back":
-        # 1) видаляємо картку товару
         try:
             await bot.delete_message(chat_id, message_id)
         except Exception:
             pass
 
-        # 2) оновлюємо саме той кошик, з якого відкривали
         if cart_message_id > 0:
             try:
                 await _edit_cart_message(bot, chat_id, cart_message_id, tenant_id, user_id)
@@ -230,7 +235,42 @@ async def handle_cart_callback(
             except Exception:
                 pass
 
-        # fallback
+        await send_cart(bot, chat_id, tenant_id, user_id)
+        return True
+
+    if action == "clear":
+        await TelegramShopCartRepo.cart_clear(tenant_id, user_id)
+        if cart_message_id > 0:
+            try:
+                await _edit_cart_message(bot, chat_id, cart_message_id, tenant_id, user_id)
+                return True
+            except Exception:
+                pass
+        await send_cart(bot, chat_id, tenant_id, user_id, extra_text="Кошик очищено ✅")
+        return True
+
+    if action == "checkout":
+        oid = await TelegramShopOrdersRepo.create_order_from_cart(tenant_id, user_id)
+        if not oid:
+            # просто оновимо кошик
+            if cart_message_id > 0:
+                try:
+                    await _edit_cart_message(bot, chat_id, cart_message_id, tenant_id, user_id)
+                except Exception:
+                    pass
+            await bot.send_message(chat_id, "🛒 Кошик порожній — нічого оформлювати.", parse_mode="HTML")
+            return True
+
+        await bot.send_message(chat_id, f"✅ Замовлення <b>#{oid}</b> створено!", parse_mode="HTML")
+
+        # після оформлення cart вже очищений — оновлюємо кошик
+        if cart_message_id > 0:
+            try:
+                await _edit_cart_message(bot, chat_id, cart_message_id, tenant_id, user_id)
+                return True
+            except Exception:
+                pass
+
         await send_cart(bot, chat_id, tenant_id, user_id)
         return True
 
@@ -252,7 +292,6 @@ async def handle_cart_callback(
         qty = await TelegramShopCartRepo.cart_inc(tenant_id, user_id, pid, delta)
 
         if qty <= 0:
-            # позицію прибрали — закриваємо картку, оновлюємо кошик
             try:
                 await bot.delete_message(chat_id, message_id)
             except Exception:
@@ -268,7 +307,6 @@ async def handle_cart_callback(
             await send_cart(bot, chat_id, tenant_id, user_id, extra_text="Позицію видалено 🗑")
             return True
 
-        # оновлюємо картку
         await _edit_cart_item_card(
             bot,
             chat_id,
@@ -280,7 +318,6 @@ async def handle_cart_callback(
             qty_override=qty,
         )
 
-        # + паралельно оновлюємо кошик зверху
         if cart_message_id > 0:
             try:
                 await _edit_cart_message(bot, chat_id, cart_message_id, tenant_id, user_id)
@@ -413,7 +450,6 @@ async def _edit_cart_item_card(
     caption = _build_item_caption(it)
     kb = _cart_item_kb(product_id, qty, cart_message_id=cart_message_id)
 
-    # якщо це було фото — пробуємо edit caption, інакше edit text
     try:
         await bot.edit_message_caption(
             chat_id=chat_id,
