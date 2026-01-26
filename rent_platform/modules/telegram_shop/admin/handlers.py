@@ -276,6 +276,15 @@ def _wiz_nav_kb(*, allow_skip: bool = False) -> dict:
     return _kb([row])
 
 
+def _wiz_promo_ask_kb() -> dict:
+    return _kb(
+        [
+            [("🔥 Так, буде акція", "tgadm:wiz_promo_yes"), ("➡️ Ні", "tgadm:wiz_promo_no")],
+            [("❌ Скасувати", "tgadm:cancel")],
+        ]
+    )
+
+
 def _wiz_photos_kb(*, product_id: int) -> dict:
     return _kb(
         [
@@ -318,10 +327,10 @@ def _admin_product_card_kb(*, product_id: int, category_id: int, has_prev: bool,
         [
             nav_row,
             [("🗃 В архів", f"tgadm:p_to_arch:{product_id}:{cid}"), ("✅ Увімкн.", f"tgadm:p_enable:{product_id}:{cid}")],
-            [("🏷 SKU", f"tgadm:psku:{product_id}:{cid}"), ("📁 Категорія", f"tgadm:p_setcat:{product_id}:{cid}")],
-            [("📝 Опис", f"tgadm:wiz_desc_edit:{product_id}"), ("📷 Додати фото", f"tgadm:p_photo:{product_id}:{cid}")],
-            [("💰 Ціна", f"tgadm:pprice:{product_id}:{cid}"), ("✏️ Назва", f"tgadm:pname:{product_id}:{cid}")],
-            [("⬅️ Категорії", "tgadm:cat_manage")],
+            [("🔥 Акція", f"tgadm:promo_open:{product_id}:{cid}"), ("🏷 SKU", f"tgadm:psku:{product_id}:{cid}")],
+            [("📁 Категорія", f"tgadm:p_setcat:{product_id}:{cid}"), ("📝 Опис", f"tgadm:wiz_desc_edit:{product_id}")],
+            [("📷 Додати фото", f"tgadm:p_photo:{product_id}:{cid}"), ("💰 Ціна", f"tgadm:pprice:{product_id}:{cid}")],
+            [("✏️ Назва", f"tgadm:pname:{product_id}:{cid}"), ("⬅️ Категорії", "tgadm:cat_manage")],
         ]
     )
 
@@ -721,7 +730,8 @@ async def _edit_admin_product_card(bot: Bot, chat_id: int, message_id: int, tena
 
 
 # ============================================================
-# Wizard: create product (name -> sku -> price -> desc -> category -> photos)
+# Wizard: create product
+# name -> sku -> price -> (promo? -> promo_price -> promo_until) -> desc -> category -> photos
 # ============================================================
 async def _wiz_ask_name(bot: Bot, chat_id: int, tenant_id: str) -> None:
     _state_set(tenant_id, chat_id, {"mode": "wiz_name", "draft": {}})
@@ -753,11 +763,41 @@ async def _wiz_ask_price(bot: Bot, chat_id: int, tenant_id: str, draft: dict) ->
     )
 
 
+async def _wiz_ask_promo_ask(bot: Bot, chat_id: int, tenant_id: str, draft: dict) -> None:
+    _state_set(tenant_id, chat_id, {"mode": "wiz_promo_ask", "draft": draft})
+    await bot.send_message(
+        chat_id,
+        "4/6 🔥 *Акція*\n\nЧи буде *акційна ціна* для цього товару?",
+        parse_mode="Markdown",
+        reply_markup=_wiz_promo_ask_kb(),
+    )
+
+
+async def _wiz_ask_promo_price(bot: Bot, chat_id: int, tenant_id: str, draft: dict) -> None:
+    _state_set(tenant_id, chat_id, {"mode": "wiz_promo_price", "draft": draft})
+    await bot.send_message(
+        chat_id,
+        "🔥 Введи *ціну акції* (наприклад `999.99`):",
+        parse_mode="Markdown",
+        reply_markup=_wiz_nav_kb(),
+    )
+
+
+async def _wiz_ask_promo_until(bot: Bot, chat_id: int, tenant_id: str, draft: dict) -> None:
+    _state_set(tenant_id, chat_id, {"mode": "wiz_promo_until", "draft": draft})
+    await bot.send_message(
+        chat_id,
+        "⏰ Введи *дату завершення* у форматі `DD.MM.YYYY HH:MM` або `0` (без кінця):",
+        parse_mode="Markdown",
+        reply_markup=_wiz_nav_kb(),
+    )
+
+
 async def _wiz_ask_desc(bot: Bot, chat_id: int, tenant_id: str, draft: dict) -> None:
     _state_set(tenant_id, chat_id, {"mode": "wiz_desc", "draft": draft})
     await bot.send_message(
         chat_id,
-        "4/6 Додай *опис* (або натисни `Пропустити`):",
+        "5/6 Додай *опис* (або натисни `Пропустити`):",
         parse_mode="Markdown",
         reply_markup=_wiz_nav_kb(allow_skip=True),
     )
@@ -779,7 +819,7 @@ async def _wiz_ask_category(bot: Bot, chat_id: int, tenant_id: str, draft: dict)
 
     await bot.send_message(
         chat_id,
-        "5/6 *Категорія*\n\nОбери категорію для товару:",
+        "6/6 *Категорія*\n\nОбери категорію для товару:",
         parse_mode="Markdown",
         reply_markup=_category_pick_kb(cats, prefix="tgadm:wiz_cat", back_to="tgadm:prod_menu"),
     )
@@ -797,15 +837,21 @@ async def _wiz_create_product(tenant_id: str, draft: dict) -> int | None:
     elif category_id is not None and not isinstance(category_id, int):
         category_id = None
 
-    # IMPORTANT: ProductsRepo.add(...) має приймати sku=...
     pid = await ProductsRepo.add(tenant_id, name, price_kop, is_active=True, category_id=category_id, sku=sku)  # type: ignore[arg-type]
     if not pid:
         return None
 
-    if desc:
-        await ProductsRepo.set_description(tenant_id, int(pid), desc)
+    pid_i = int(pid)
 
-    return int(pid)
+    if desc:
+        await ProductsRepo.set_description(tenant_id, pid_i, desc)
+
+    promo_price_kop = int(draft.get("promo_price_kop") or 0)
+    promo_until_ts = int(draft.get("promo_until_ts") or 0)
+    if promo_price_kop > 0:
+        await ProductsRepo.set_promo(tenant_id, pid_i, promo_price_kop, promo_until_ts)
+
+    return pid_i
 
 
 async def _wiz_create_and_go_photos(bot: Bot, chat_id: int, tenant_id: str, draft: dict) -> None:
@@ -1035,6 +1081,20 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             await _wiz_ask_name(bot, chat_id, tenant_id)
             return True
 
+        if action == "wiz_promo_yes":
+            st = _state_get(tenant_id, chat_id) or {}
+            draft = st.get("draft") or {}
+            await _wiz_ask_promo_price(bot, chat_id, tenant_id, draft)
+            return True
+
+        if action == "wiz_promo_no":
+            st = _state_get(tenant_id, chat_id) or {}
+            draft = st.get("draft") or {}
+            draft["promo_price_kop"] = 0
+            draft["promo_until_ts"] = 0
+            await _wiz_ask_desc(bot, chat_id, tenant_id, draft)
+            return True
+
         if action == "wiz_cat":
             st = _state_get(tenant_id, chat_id) or {}
             draft = st.get("draft") or {}
@@ -1204,7 +1264,7 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
 
         if action == "promo_open" and arg.isdigit():
             _state_clear(tenant_id, chat_id)
-            await _send_promo_product_card(bot, chat_id, tenant_id, int(arg), 0)
+            await _send_promo_product_card(bot, chat_id, tenant_id, int(arg), int(arg2) if arg2.isdigit() else 0)
             return True
 
         if action == "promo_add":
@@ -1337,6 +1397,26 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             return True
         draft = st.get("draft") or {}
         draft["price_kop"] = int(price_kop)
+        await _wiz_ask_promo_ask(bot, chat_id, tenant_id, draft)
+        return True
+
+    if mode == "wiz_promo_price":
+        promo_kop = _parse_price_to_kop(text)
+        if promo_kop is None or promo_kop <= 0:
+            await bot.send_message(chat_id, "Ціна не розпізнана. Приклад: `999.99` або `999`", parse_mode="Markdown")
+            return True
+        draft = st.get("draft") or {}
+        draft["promo_price_kop"] = int(promo_kop)
+        await _wiz_ask_promo_until(bot, chat_id, tenant_id, draft)
+        return True
+
+    if mode == "wiz_promo_until":
+        until_ts = _parse_dt_to_ts(text)
+        if until_ts is None:
+            await bot.send_message(chat_id, "Дата не розпізнана. Формат: `DD.MM.YYYY HH:MM` або `0`", parse_mode="Markdown")
+            return True
+        draft = st.get("draft") or {}
+        draft["promo_until_ts"] = int(until_ts)
         await _wiz_ask_desc(bot, chat_id, tenant_id, draft)
         return True
 
@@ -1362,7 +1442,6 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
         cid = int(st.get("category_id") or 0)
         raw = (text or "").strip()
         sku = "" if raw in ("-", "0") else raw
-        # IMPORTANT: ProductsRepo.set_sku(...) має існувати
         await ProductsRepo.set_sku(tenant_id, pid, sku)  # type: ignore[attr-defined]
         _state_clear(tenant_id, chat_id)
         await bot.send_message(chat_id, "✅ SKU оновлено.", reply_markup=_catalog_kb())
