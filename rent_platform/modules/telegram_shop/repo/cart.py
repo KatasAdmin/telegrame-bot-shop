@@ -78,18 +78,30 @@ class TelegramShopCartRepo:
     @staticmethod
     async def cart_list(tenant_id: str, user_id: int) -> list[dict[str, Any]]:
         """
-        MODE B: join products without hits/promos columns.
+        Join products + apply promo price (effective price in field `price_kop`).
         """
+        now = int(time.time())
         q = """
         SELECT
             c.product_id,
             c.qty,
             p.name,
-            p.price_kop
+            -- effective price:
+            CASE
+                WHEN COALESCE(p.promo_price_kop, 0) > 0
+                 AND (COALESCE(p.promo_until_ts, 0) = 0 OR COALESCE(p.promo_until_ts, 0) > :now)
+                THEN COALESCE(p.promo_price_kop, 0)
+                ELSE COALESCE(p.price_kop, 0)
+            END AS price_kop,
+
+            -- extra fields (optional for UI):
+            COALESCE(p.price_kop, 0)       AS base_price_kop,
+            COALESCE(p.promo_price_kop, 0) AS promo_price_kop,
+            COALESCE(p.promo_until_ts, 0)  AS promo_until_ts
         FROM telegram_shop_cart_items c
         JOIN telegram_shop_products p
           ON p.tenant_id = c.tenant_id AND p.id = c.product_id
         WHERE c.tenant_id = :tid AND c.user_id = :uid AND p.is_active = true
         ORDER BY c.updated_ts DESC
         """
-        return await db_fetch_all(q, {"tid": tenant_id, "uid": int(user_id)}) or []
+        return await db_fetch_all(q, {"tid": tenant_id, "uid": int(user_id), "now": now}) or []
