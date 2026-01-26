@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import datetime as _dt
@@ -36,8 +37,9 @@ async def _send_or_edit_text(
     message_id: int | None = None,
 ) -> None:
     """
-    Якщо message_id переданий — редагуємо те ж повідомлення (краще UX).
-    Якщо ні — просто шлемо нове.
+    Ідеально сумісно з роутером:
+    - якщо передали message_id (з callback_query.message.message_id) — редагуємо те ж повідомлення
+    - якщо не вийшло/немає message_id — шлемо нове повідомлення
     """
     if message_id:
         try:
@@ -148,7 +150,7 @@ async def send_order_detail(
         f"Статус: *{st}*\n"
         f"Сума: *{total}*\n"
         f"Створено: _{created}_\n\n"
-        f"_(Далі додамо таймлайн: прийнято/зібрано/НП/отримано/не отримано/повернення/скасовано…) _\n"
+        f"_(Далі додамо таймлайн: прийнято/зібрано/НП/отримано/не отримано/повернення/скасовано…)_\n"
     )
 
     await _send_or_edit_text(
@@ -236,8 +238,7 @@ async def handle_orders_callback(
       tgord:items:<order_id>
       tgord:arch:<order_id>
 
-    Порада: у роутері краще передавати message_id=msg_id (з callback_query.message.message_id),
-    тоді історія/картки будуть відкриватись в одній і тій самій повідомлюсі (без спаму).
+    Роутер має передавати message_id=msg_id, тоді все відкривається в одному повідомленні.
     """
     if not payload.startswith("tgord:"):
         return False
