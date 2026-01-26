@@ -80,24 +80,26 @@ async def _send_or_edit(
     await bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=reply_markup)
 
 
+async def _count_orders(tenant_id: str) -> int:
+    q = "SELECT COUNT(*) AS cnt FROM telegram_shop_orders WHERE tenant_id = :tid"
+    row = await db_fetch_one(q, {"tid": tenant_id}) or {}
+    return int(row.get("cnt") or 0)
+
+
 async def _list_orders_page(tenant_id: str, *, page: int) -> list[dict]:
     page = max(0, int(page or 0))
-    offset = page * PAGE_SIZE
     q = """
     SELECT id, user_id, status, total_kop, created_ts
     FROM telegram_shop_orders
-    WHERE tenant_id = $1
+    WHERE tenant_id = :tid
     ORDER BY id DESC
-    LIMIT $2 OFFSET $3
+    LIMIT :lim OFFSET :off
     """
-    rows = await db_fetch_all(q, tenant_id, PAGE_SIZE, offset)
+    rows = await db_fetch_all(
+        q,
+        {"tid": tenant_id, "lim": int(PAGE_SIZE), "off": int(page * PAGE_SIZE)},
+    )
     return rows or []
-
-
-async def _count_orders(tenant_id: str) -> int:
-    q = "SELECT COUNT(*) AS cnt FROM telegram_shop_orders WHERE tenant_id = $1"
-    row = await db_fetch_one(q, tenant_id)
-    return int((row or {}).get("cnt") or 0)
 
 
 def _orders_list_kb(order_ids: list[int], *, page: int, has_prev: bool, has_next: bool) -> dict:
@@ -106,11 +108,11 @@ def _orders_list_kb(order_ids: list[int], *, page: int, has_prev: bool, has_next
     for oid in order_ids:
         rows.append([(f"🧾 Замовлення #{oid}", f"tgadm:ord_open:{oid}:{page}")])
 
-    nav: list[tuple[str, str]] = []
-    nav.append(("⬅️", f"tgadm:ord_list:{page-1}") if has_prev else ("·", "tgadm:noop:0"))
-    nav.append(("➡️", f"tgadm:ord_list:{page+1}") if has_next else ("·", "tgadm:noop:0"))
+    nav: list[tuple[str, str]] = [
+        ("⬅️", f"tgadm:ord_list:{page-1}") if has_prev else ("·", "tgadm:noop"),
+        ("➡️", f"tgadm:ord_list:{page+1}") if has_next else ("·", "tgadm:noop"),
+    ]
     rows.append(nav)
-
     rows.append([("⬅️ В адмін-меню", "tgadm:home:0")])
     return _kb(rows)
 
@@ -225,7 +227,7 @@ async def _send_order_detail(
         f"Статус: *{st}* (`{st_raw}`)\n"
         f"Сума: *{total}*\n"
         f"Створено: _{created}_\n\n"
-        f"_Статус змінюється менеджером. Автоматизацію (НП/CRM) додамо окремо._"
+        f"_Статус змінює менеджер. Автоматизацію (НП/CRM) додамо окремо._"
     )
 
     await _send_or_edit(
@@ -275,27 +277,21 @@ async def _send_order_items(
     )
 
 
-async def _set_order_status(
-    bot: Bot,
-    tenant_id: str,
-    order_id: int,
-    new_status: str,
-) -> bool:
+async def _set_order_status(bot: Bot, tenant_id: str, order_id: int, new_status: str) -> bool:
     new_status = (new_status or "").strip()
     if not new_status:
         return False
 
-    # order must exist + grab user_id for notification
     o = await TelegramShopOrdersRepo.get_order(tenant_id, int(order_id))
     if not o:
         return False
 
     q = """
     UPDATE telegram_shop_orders
-    SET status = $1
-    WHERE tenant_id = $2 AND id = $3
+    SET status = :st
+    WHERE tenant_id = :tid AND id = :oid
     """
-    await db_execute(q, new_status, tenant_id, int(order_id))
+    await db_execute(q, {"st": new_status, "tid": tenant_id, "oid": int(order_id)})
 
     # optional notify user
     user_id = int(o.get("user_id") or 0)
@@ -314,16 +310,12 @@ async def _set_order_status(
 
 
 async def admin_orders_handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
-    """
-    Підключається з основного admin.py (tgadm:*).
-    Повертає True якщо ми обробили апдейт.
-    """
     cb = data.get("callback_query")
     if not cb:
         return False
 
     payload = str(cb.get("data") or "").strip()
-    if not payload.startswith("tgadm:ord_") and not payload.startswith("tgadm:ord"):
+    if not payload.startswith("tgadm:ord"):
         return False
 
     chat_id = int(cb["message"]["chat"]["id"])
@@ -332,23 +324,19 @@ async def admin_orders_handle_update(*, tenant: dict, data: dict[str, Any], bot:
 
     parts = payload.split(":")
     action = parts[1] if len(parts) > 1 else ""
-    # формат:
-    # tgadm:ord_menu:0
-    # tgadm:ord_list:<page>
-    # tgadm:ord_open:<oid>:<page>
-    # tgadm:ord_items:<oid>:<page>
-    # tgadm:ord_status_menu:<oid>:<page>
-    # tgadm:ord_setst:<oid>:<status>:<page>
 
+    # tgadm:ord_menu:0
     if action == "ord_menu":
         await _send_admin_orders_menu(bot, chat_id, message_id=msg_id)
         return True
 
+    # tgadm:ord_list:<page>
     if action == "ord_list":
         page = int(parts[2]) if len(parts) > 2 and str(parts[2]).lstrip("-").isdigit() else 0
         await _send_orders_list(bot, chat_id, tenant_id, page=page, message_id=msg_id)
         return True
 
+    # tgadm:ord_open:<oid>:<page>
     if action == "ord_open":
         oid = int(parts[2]) if len(parts) > 2 and str(parts[2]).isdigit() else 0
         page = int(parts[3]) if len(parts) > 3 and str(parts[3]).lstrip("-").isdigit() else 0
@@ -356,6 +344,7 @@ async def admin_orders_handle_update(*, tenant: dict, data: dict[str, Any], bot:
             await _send_order_detail(bot, chat_id, tenant_id, oid, page=page, message_id=msg_id)
         return True
 
+    # tgadm:ord_items:<oid>:<page>
     if action == "ord_items":
         oid = int(parts[2]) if len(parts) > 2 and str(parts[2]).isdigit() else 0
         page = int(parts[3]) if len(parts) > 3 and str(parts[3]).lstrip("-").isdigit() else 0
@@ -363,6 +352,7 @@ async def admin_orders_handle_update(*, tenant: dict, data: dict[str, Any], bot:
             await _send_order_items(bot, chat_id, tenant_id, oid, page=page, message_id=msg_id)
         return True
 
+    # tgadm:ord_status_menu:<oid>:<page>
     if action == "ord_status_menu":
         oid = int(parts[2]) if len(parts) > 2 and str(parts[2]).isdigit() else 0
         page = int(parts[3]) if len(parts) > 3 and str(parts[3]).lstrip("-").isdigit() else 0
@@ -376,6 +366,7 @@ async def admin_orders_handle_update(*, tenant: dict, data: dict[str, Any], bot:
             )
         return True
 
+    # tgadm:ord_setst:<oid>:<status>:<page>
     if action == "ord_setst":
         oid = int(parts[2]) if len(parts) > 2 and str(parts[2]).isdigit() else 0
         new_st = str(parts[3]) if len(parts) > 3 else ""
@@ -385,4 +376,4 @@ async def admin_orders_handle_update(*, tenant: dict, data: dict[str, Any], bot:
             await _send_order_detail(bot, chat_id, tenant_id, oid, page=page, message_id=msg_id)
         return True
 
-    return False
+    return True
