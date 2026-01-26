@@ -23,7 +23,7 @@ class ProductsRepo:
                 tenant_id,
                 category_id,
                 name,
-                COALESCE(sku, '') AS sku,
+                COALESCE(sku,'') AS sku,
                 price_kop,
                 is_active,
                 COALESCE(is_hit, false) AS is_hit,
@@ -44,7 +44,7 @@ class ProductsRepo:
             tenant_id,
             category_id,
             name,
-            COALESCE(sku, '') AS sku,
+            COALESCE(sku,'') AS sku,
             price_kop,
             is_active,
             COALESCE(is_hit, false) AS is_hit,
@@ -73,7 +73,7 @@ class ProductsRepo:
                 tenant_id,
                 category_id,
                 name,
-                COALESCE(sku, '') AS sku,
+                COALESCE(sku,'') AS sku,
                 price_kop,
                 is_active,
                 COALESCE(is_hit, false) AS is_hit,
@@ -94,7 +94,7 @@ class ProductsRepo:
             tenant_id,
             category_id,
             name,
-            COALESCE(sku, '') AS sku,
+            COALESCE(sku,'') AS sku,
             price_kop,
             is_active,
             COALESCE(is_hit, false) AS is_hit,
@@ -117,7 +117,7 @@ class ProductsRepo:
             tenant_id,
             category_id,
             name,
-            COALESCE(sku, '') AS sku,
+            COALESCE(sku,'') AS sku,
             price_kop,
             is_active,
             COALESCE(is_hit, false) AS is_hit,
@@ -221,23 +221,6 @@ class ProductsRepo:
             },
         )
 
-    @staticmethod
-    async def set_sku(tenant_id: str, product_id: int, sku: str | None) -> None:
-        s = (sku or "").strip()[:64]
-        q = """
-        UPDATE telegram_shop_products
-        SET sku = :s
-        WHERE tenant_id = :tid AND id = :pid
-        """
-        await db_execute(
-            q,
-            {
-                "tid": tenant_id,
-                "pid": int(product_id),
-                "s": s if s else None,
-            },
-        )
-
     # --------- navigation helpers (catalog cards) ---------
 
     @staticmethod
@@ -323,6 +306,19 @@ class ProductsRepo:
         WHERE tenant_id = :tid AND id = :pid
         """
         await db_execute(q, {"tid": tenant_id, "pid": int(product_id), "d": (description or "").strip()})
+
+    # --------- sku ---------
+
+    @staticmethod
+    async def set_sku(tenant_id: str, product_id: int, sku: str) -> None:
+        q = """
+        UPDATE telegram_shop_products
+        SET sku = :sku
+        WHERE tenant_id = :tid AND id = :pid
+        """
+        val = (sku or "").strip()[:64]
+        # якщо порожнє — пишемо NULL, щоб COALESCE працював красиво
+        await db_execute(q, {"tid": tenant_id, "pid": int(product_id), "sku": val if val else None})
 
     # --------- product photos (Telegram file_id) ---------
     # Table: telegram_shop_product_photos (tenant_id, product_id, file_id, sort, created_ts)
