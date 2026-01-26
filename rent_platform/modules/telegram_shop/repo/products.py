@@ -317,11 +317,9 @@ class ProductsRepo:
         WHERE tenant_id = :tid AND id = :pid
         """
         val = (sku or "").strip()[:64]
-        # якщо порожнє — пишемо NULL, щоб COALESCE працював красиво
         await db_execute(q, {"tid": tenant_id, "pid": int(product_id), "sku": val if val else None})
 
     # --------- product photos (Telegram file_id) ---------
-    # Table: telegram_shop_product_photos (tenant_id, product_id, file_id, sort, created_ts)
 
     @staticmethod
     async def add_product_photo(tenant_id: str, product_id: int, file_id: str) -> int | None:
@@ -390,3 +388,292 @@ class ProductsRepo:
         WHERE tenant_id = :tid AND id = :pid
         """
         await db_execute(q, {"tid": tenant_id, "pid": int(product_id), "n": (name or "").strip()[:128]})
+
+    # =========================================================
+    # HITS / PROMOS helpers (для "Хіти" та "Акції" як каталог)
+    # =========================================================
+
+    @staticmethod
+    def _promo_where_sql() -> str:
+        # активна акція: promo_price_kop > 0 і (без кінця або ще не закінчилась)
+        return """
+        promo_price_kop > 0
+        AND (promo_until_ts = 0 OR promo_until_ts > :now)
+        """
+
+    # ---------- Category ids: показувати лише категорії, де є контент ----------
+
+    @staticmethod
+    async def list_hit_category_ids(tenant_id: str) -> list[int]:
+        q = """
+        SELECT DISTINCT category_id
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid
+          AND is_active = true
+          AND COALESCE(is_hit, false) = true
+          AND category_id IS NOT NULL
+        ORDER BY category_id ASC
+        """
+        rows = await db_fetch_all(q, {"tid": tenant_id}) or []
+        return [int(r["category_id"]) for r in rows if r.get("category_id") is not None]
+
+    @staticmethod
+    async def list_promo_category_ids(tenant_id: str, *, now: int | None = None) -> list[int]:
+        now_ts = int(now or time.time())
+        q = f"""
+        SELECT DISTINCT category_id
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid
+          AND is_active = true
+          AND category_id IS NOT NULL
+          AND {ProductsRepo._promo_where_sql()}
+        ORDER BY category_id ASC
+        """
+        rows = await db_fetch_all(q, {"tid": tenant_id, "now": now_ts}) or []
+        return [int(r["category_id"]) for r in rows if r.get("category_id") is not None]
+
+    # ---------- List items (всередині категорії) ----------
+
+    @staticmethod
+    async def list_hits_active(
+        tenant_id: str,
+        limit: int = 50,
+        *,
+        category_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        if category_id is None:
+            q = """
+            SELECT
+                id, tenant_id, category_id, name,
+                COALESCE(sku,'') AS sku,
+                price_kop, is_active,
+                COALESCE(is_hit, false) AS is_hit,
+                COALESCE(promo_price_kop, 0) AS promo_price_kop,
+                COALESCE(promo_until_ts, 0) AS promo_until_ts,
+                COALESCE(description, '') AS description,
+                created_ts
+            FROM telegram_shop_products
+            WHERE tenant_id = :tid AND is_active = true AND COALESCE(is_hit, false) = true
+            ORDER BY id ASC
+            LIMIT :lim
+            """
+            return await db_fetch_all(q, {"tid": tenant_id, "lim": int(limit)}) or []
+
+        q = """
+        SELECT
+            id, tenant_id, category_id, name,
+            COALESCE(sku,'') AS sku,
+            price_kop, is_active,
+            COALESCE(is_hit, false) AS is_hit,
+            COALESCE(promo_price_kop, 0) AS promo_price_kop,
+            COALESCE(promo_until_ts, 0) AS promo_until_ts,
+            COALESCE(description, '') AS description,
+            created_ts
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid AND is_active = true AND COALESCE(is_hit, false) = true AND category_id = :cid
+        ORDER BY id ASC
+        LIMIT :lim
+        """
+        return await db_fetch_all(q, {"tid": tenant_id, "cid": int(category_id), "lim": int(limit)}) or []
+
+    @staticmethod
+    async def list_promos_active(
+        tenant_id: str,
+        limit: int = 50,
+        *,
+        category_id: int | None = None,
+        now: int | None = None,
+    ) -> list[dict[str, Any]]:
+        now_ts = int(now or time.time())
+
+        if category_id is None:
+            q = f"""
+            SELECT
+                id, tenant_id, category_id, name,
+                COALESCE(sku,'') AS sku,
+                price_kop, is_active,
+                COALESCE(is_hit, false) AS is_hit,
+                COALESCE(promo_price_kop, 0) AS promo_price_kop,
+                COALESCE(promo_until_ts, 0) AS promo_until_ts,
+                COALESCE(description, '') AS description,
+                created_ts
+            FROM telegram_shop_products
+            WHERE tenant_id = :tid AND is_active = true AND {ProductsRepo._promo_where_sql()}
+            ORDER BY id ASC
+            LIMIT :lim
+            """
+            return await db_fetch_all(q, {"tid": tenant_id, "now": now_ts, "lim": int(limit)}) or []
+
+        q = f"""
+        SELECT
+            id, tenant_id, category_id, name,
+            COALESCE(sku,'') AS sku,
+            price_kop, is_active,
+            COALESCE(is_hit, false) AS is_hit,
+            COALESCE(promo_price_kop, 0) AS promo_price_kop,
+            COALESCE(promo_until_ts, 0) AS promo_until_ts,
+            COALESCE(description, '') AS description,
+            created_ts
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid AND is_active = true AND category_id = :cid AND {ProductsRepo._promo_where_sql()}
+        ORDER BY id ASC
+        LIMIT :lim
+        """
+        return await db_fetch_all(q, {"tid": tenant_id, "cid": int(category_id), "now": now_ts, "lim": int(limit)}) or []
+
+    # ---------- navigation (prev/next) BUT inside hits / promos ----------
+
+    @staticmethod
+    async def get_first_hit_active(tenant_id: str, *, category_id: int | None = None) -> dict | None:
+        if category_id is None:
+            q = """
+            SELECT id
+            FROM telegram_shop_products
+            WHERE tenant_id = :tid AND is_active = true AND COALESCE(is_hit,false) = true
+            ORDER BY id ASC
+            LIMIT 1
+            """
+            return await db_fetch_one(q, {"tid": tenant_id})
+
+        q = """
+        SELECT id
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid AND is_active = true AND COALESCE(is_hit,false) = true AND category_id = :cid
+        ORDER BY id ASC
+        LIMIT 1
+        """
+        return await db_fetch_one(q, {"tid": tenant_id, "cid": int(category_id)})
+
+    @staticmethod
+    async def get_prev_hit_active(
+        tenant_id: str,
+        product_id: int,
+        *,
+        category_id: int | None = None,
+    ) -> dict | None:
+        if category_id is None:
+            q = """
+            SELECT id
+            FROM telegram_shop_products
+            WHERE tenant_id = :tid AND is_active = true AND COALESCE(is_hit,false) = true AND id < :pid
+            ORDER BY id DESC
+            LIMIT 1
+            """
+            return await db_fetch_one(q, {"tid": tenant_id, "pid": int(product_id)})
+
+        q = """
+        SELECT id
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid AND is_active = true AND COALESCE(is_hit,false) = true
+          AND category_id = :cid AND id < :pid
+        ORDER BY id DESC
+        LIMIT 1
+        """
+        return await db_fetch_one(q, {"tid": tenant_id, "cid": int(category_id), "pid": int(product_id)})
+
+    @staticmethod
+    async def get_next_hit_active(
+        tenant_id: str,
+        product_id: int,
+        *,
+        category_id: int | None = None,
+    ) -> dict | None:
+        if category_id is None:
+            q = """
+            SELECT id
+            FROM telegram_shop_products
+            WHERE tenant_id = :tid AND is_active = true AND COALESCE(is_hit,false) = true AND id > :pid
+            ORDER BY id ASC
+            LIMIT 1
+            """
+            return await db_fetch_one(q, {"tid": tenant_id, "pid": int(product_id)})
+
+        q = """
+        SELECT id
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid AND is_active = true AND COALESCE(is_hit,false) = true
+          AND category_id = :cid AND id > :pid
+        ORDER BY id ASC
+        LIMIT 1
+        """
+        return await db_fetch_one(q, {"tid": tenant_id, "cid": int(category_id), "pid": int(product_id)})
+
+    @staticmethod
+    async def get_first_promo_active(tenant_id: str, *, category_id: int | None = None, now: int | None = None) -> dict | None:
+        now_ts = int(now or time.time())
+        if category_id is None:
+            q = f"""
+            SELECT id
+            FROM telegram_shop_products
+            WHERE tenant_id = :tid AND is_active = true AND {ProductsRepo._promo_where_sql()}
+            ORDER BY id ASC
+            LIMIT 1
+            """
+            return await db_fetch_one(q, {"tid": tenant_id, "now": now_ts})
+
+        q = f"""
+        SELECT id
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid AND is_active = true AND category_id = :cid AND {ProductsRepo._promo_where_sql()}
+        ORDER BY id ASC
+        LIMIT 1
+        """
+        return await db_fetch_one(q, {"tid": tenant_id, "cid": int(category_id), "now": now_ts})
+
+    @staticmethod
+    async def get_prev_promo_active(
+        tenant_id: str,
+        product_id: int,
+        *,
+        category_id: int | None = None,
+        now: int | None = None,
+    ) -> dict | None:
+        now_ts = int(now or time.time())
+        if category_id is None:
+            q = f"""
+            SELECT id
+            FROM telegram_shop_products
+            WHERE tenant_id = :tid AND is_active = true AND id < :pid AND {ProductsRepo._promo_where_sql()}
+            ORDER BY id DESC
+            LIMIT 1
+            """
+            return await db_fetch_one(q, {"tid": tenant_id, "pid": int(product_id), "now": now_ts})
+
+        q = f"""
+        SELECT id
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid AND is_active = true AND category_id = :cid AND id < :pid
+          AND {ProductsRepo._promo_where_sql()}
+        ORDER BY id DESC
+        LIMIT 1
+        """
+        return await db_fetch_one(q, {"tid": tenant_id, "cid": int(category_id), "pid": int(product_id), "now": now_ts})
+
+    @staticmethod
+    async def get_next_promo_active(
+        tenant_id: str,
+        product_id: int,
+        *,
+        category_id: int | None = None,
+        now: int | None = None,
+    ) -> dict | None:
+        now_ts = int(now or time.time())
+        if category_id is None:
+            q = f"""
+            SELECT id
+            FROM telegram_shop_products
+            WHERE tenant_id = :tid AND is_active = true AND id > :pid AND {ProductsRepo._promo_where_sql()}
+            ORDER BY id ASC
+            LIMIT 1
+            """
+            return await db_fetch_one(q, {"tid": tenant_id, "pid": int(product_id), "now": now_ts})
+
+        q = f"""
+        SELECT id
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid AND is_active = true AND category_id = :cid AND id > :pid
+          AND {ProductsRepo._promo_where_sql()}
+        ORDER BY id ASC
+        LIMIT 1
+        """
+        return await db_fetch_one(q, {"tid": tenant_id, "cid": int(category_id), "pid": int(product_id), "now": now_ts})
