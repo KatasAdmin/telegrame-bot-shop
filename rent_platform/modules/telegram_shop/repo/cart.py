@@ -22,13 +22,7 @@ class TelegramShopCartRepo:
         """
         await db_execute(
             q,
-            {
-                "tid": tenant_id,
-                "uid": int(user_id),
-                "pid": int(product_id),
-                "q": qty,
-                "ts": int(time.time()),
-            },
+            {"tid": tenant_id, "uid": int(user_id), "pid": int(product_id), "q": qty, "ts": int(time.time())},
         )
 
     @staticmethod
@@ -48,13 +42,7 @@ class TelegramShopCartRepo:
         """
         row = await db_fetch_one(
             q,
-            {
-                "tid": tenant_id,
-                "uid": int(user_id),
-                "pid": int(product_id),
-                "d": delta,
-                "ts": int(time.time()),
-            },
+            {"tid": tenant_id, "uid": int(user_id), "pid": int(product_id), "d": delta, "ts": int(time.time())},
         )
         qty = int(row["qty"]) if row and row.get("qty") is not None else 0
         if qty <= 0:
@@ -78,9 +66,11 @@ class TelegramShopCartRepo:
     @staticmethod
     async def cart_list(tenant_id: str, user_id: int) -> list[dict[str, Any]]:
         """
-        Join products and return EFFECTIVE price:
-        - if promo active -> promo_price_kop
-        - else -> base price_kop
+        Return cart items with:
+          - base_price_kop (звичайна)
+          - promo_price_kop, promo_until_ts
+          - price_kop = EFFECTIVE (для сум/ордерів)
+          - is_promo_active (bool)
         """
         now = int(time.time())
         q = """
@@ -88,6 +78,15 @@ class TelegramShopCartRepo:
             c.product_id,
             c.qty,
             p.name,
+            COALESCE(p.price_kop, 0) AS base_price_kop,
+            COALESCE(p.promo_price_kop, 0) AS promo_price_kop,
+            COALESCE(p.promo_until_ts, 0) AS promo_until_ts,
+            CASE
+              WHEN COALESCE(p.promo_price_kop, 0) > 0
+               AND (COALESCE(p.promo_until_ts, 0) = 0 OR COALESCE(p.promo_until_ts, 0) > :now)
+              THEN true
+              ELSE false
+            END AS is_promo_active,
             CASE
               WHEN COALESCE(p.promo_price_kop, 0) > 0
                AND (COALESCE(p.promo_until_ts, 0) = 0 OR COALESCE(p.promo_until_ts, 0) > :now)
