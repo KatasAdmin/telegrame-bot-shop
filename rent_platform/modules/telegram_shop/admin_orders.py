@@ -8,7 +8,7 @@ from aiogram import Bot
 
 from rent_platform.db.session import db_fetch_all, db_fetch_one, db_execute
 from rent_platform.modules.telegram_shop.repo.orders import TelegramShopOrdersRepo
-from rent_platform.modules.telegram_shop.repo.orders_archive import TelegramShopOrdersArchiveRepo
+from rent_platform.modules.telegram_shop.repo.orders_admin_archive import TelegramShopOrdersAdminArchiveRepo
 
 try:
     from rent_platform.modules.telegram_shop.ui.orders_status import status_label  # type: ignore
@@ -96,9 +96,8 @@ async def _count_orders(tenant_id: str, *, scope: str) -> int:
         WHERE o.tenant_id = :tid
           AND EXISTS (
               SELECT 1
-              FROM telegram_shop_orders_archive a
+              FROM telegram_shop_orders_admin_archive a
               WHERE a.tenant_id = o.tenant_id
-                AND a.user_id = o.user_id
                 AND a.order_id = o.id
           )
         """
@@ -111,9 +110,8 @@ async def _count_orders(tenant_id: str, *, scope: str) -> int:
     WHERE o.tenant_id = :tid
       AND NOT EXISTS (
           SELECT 1
-          FROM telegram_shop_orders_archive a
+          FROM telegram_shop_orders_admin_archive a
           WHERE a.tenant_id = o.tenant_id
-            AND a.user_id = o.user_id
             AND a.order_id = o.id
       )
     """
@@ -132,9 +130,8 @@ async def _list_orders_page(tenant_id: str, *, page: int, scope: str) -> list[di
         WHERE o.tenant_id = :tid
           AND EXISTS (
               SELECT 1
-              FROM telegram_shop_orders_archive a
+              FROM telegram_shop_orders_admin_archive a
               WHERE a.tenant_id = o.tenant_id
-                AND a.user_id = o.user_id
                 AND a.order_id = o.id
           )
         ORDER BY o.id DESC
@@ -148,16 +145,14 @@ async def _list_orders_page(tenant_id: str, *, page: int, scope: str) -> list[di
     WHERE o.tenant_id = :tid
       AND NOT EXISTS (
           SELECT 1
-          FROM telegram_shop_orders_archive a
+          FROM telegram_shop_orders_admin_archive a
           WHERE a.tenant_id = o.tenant_id
-            AND a.user_id = o.user_id
             AND a.order_id = o.id
       )
     ORDER BY o.id DESC
     LIMIT :lim OFFSET :off
     """
     return await db_fetch_all(q, {"tid": tenant_id, "lim": int(PAGE_SIZE), "off": int(page * PAGE_SIZE)}) or []
-
 
 def _orders_list_kb(order_ids: list[int], *, page: int, has_prev: bool, has_next: bool, scope: str) -> dict:
     scope = _scope_norm(scope)
@@ -306,7 +301,7 @@ async def _send_order_detail(
     total = _fmt_money(int(o.get("total_kop") or 0))
     created = _fmt_dt(int(o.get("created_ts") or 0))
 
-    is_arch = await TelegramShopOrdersArchiveRepo.is_archived(tenant_id, uid, oid)
+    is_arch = await TelegramShopOrdersAdminArchiveRepo.is_archived(tenant_id, oid)
 
     text = (
         f"🧾 *Замовлення #{oid}*\n\n"
@@ -460,7 +455,7 @@ async def admin_orders_handle_update(*, tenant: dict, data: dict[str, Any], bot:
             o = await TelegramShopOrdersRepo.get_order(tenant_id, int(oid)) or {}
             uid = int(o.get("user_id") or 0)
             if uid > 0:
-                await TelegramShopOrdersArchiveRepo.toggle(tenant_id, uid, int(oid))
+                await TelegramShopOrdersAdminArchiveRepo.toggle(tenant_id, int(oid))
             await _send_order_detail(bot, chat_id, tenant_id, oid, page=page, scope=scope, message_id=msg_id)
         return True
 
