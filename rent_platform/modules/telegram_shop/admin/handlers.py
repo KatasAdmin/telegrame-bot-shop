@@ -1,12 +1,13 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from typing import Any
-
 import time
+from typing import Any
 
 from aiogram import Bot
 from aiogram.types import InputMediaPhoto
 
+from rent_platform.db.session import db_fetch_all, db_fetch_one, db_execute
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
 
 # CategoriesRepo optional (if file exists)
@@ -28,26 +29,56 @@ _STATE: dict[tuple[str, int], dict[str, Any]] = {}
 # -----------------------------
 def _fmt_money(kop: int) -> str:
     kop = int(kop or 0)
-    грн = kop // 100
-    коп = kop % 100
-    return f"{грн}.{коп:02d} грн"
+    uah = kop // 100
+    cents = kop % 100
+    return f"{uah}.{cents:02d} грн"
 
 
 def _parse_price_to_kop(raw: str) -> int | None:
-    s = (raw or "").replace("грн", "").replace(" ", "").replace(",", ".").strip()
+    """
+    Accepts:
+      - "1200" => 1200 грн
+      - "1200.50" / "1200,50" => 1200 грн 50 коп
+      - "1200 грн"
+    Returns копійки.
+    """
+    s = (raw or "").lower().replace("грн", "").replace("uah", "").strip()
+    s = s.replace(" ", "").replace(",", ".")
     if not s:
         return None
+
+    # decimal
+    if "." in s:
+        left, right = (s.split(".", 1) + ["0"])[:2]
+        if not left.isdigit():
+            return None
+        uah = int(left)
+        right = "".join(ch for ch in right if ch.isdigit())
+        cents = int((right + "0")[:2]) if right else 0
+        return uah * 100 + cents
+
+    # integer
+    if not s.isdigit():
+        return None
+    val = int(s)
+
+    # heuristics: small ints are грн, huge could be already kop
+    if val <= 200000:  # up to 200k грн
+        return val * 100
+    return val  # assume already kop
 
 
 def _fmt_dt(ts: int) -> str:
     try:
         import datetime as _dt
         from zoneinfo import ZoneInfo
+
         tz = ZoneInfo("Europe/Kyiv")
         return _dt.datetime.fromtimestamp(int(ts), tz=tz).strftime("%d.%m.%Y %H:%M")
     except Exception:
         try:
             import datetime as _dt
+
             return _dt.datetime.fromtimestamp(int(ts)).strftime("%d.%m.%Y %H:%M")
         except Exception:
             return str(ts)
@@ -58,12 +89,14 @@ def _parse_dt_to_ts(raw: str) -> int | None:
     s = (raw or "").strip()
     if not s:
         return None
-    # allow "0" / "без" = no end
-    if s in ("0", "-", "без", "безконечно", "never", "no"):
+
+    if s in ("0", "-", "без", "безкінечно", "безконечно", "never", "no"):
         return 0
+
     try:
         import datetime as _dt
         from zoneinfo import ZoneInfo
+
         dt = _dt.datetime.strptime(s, "%d.%m.%Y %H:%M")
         try:
             tz = ZoneInfo("Europe/Kyiv")
@@ -71,20 +104,6 @@ def _parse_dt_to_ts(raw: str) -> int | None:
         except Exception:
             pass
         return int(dt.timestamp())
-    except Exception:
-        return None
-    try:
-        if "." in s:
-            грн_s, коп_s = (s.split(".", 1) + ["0"])[:2]
-            грн = int(грн_s) if грн_s else 0
-            коп = int((коп_s + "0")[:2])
-            return грн * 100 + коп
-        val = int(s)
-        # "1200" => 1200 грн
-        if val < 100000:
-            return val * 100
-        # already kop
-        return val
     except Exception:
         return None
 
@@ -138,46 +157,54 @@ def _extract_image_file_id(msg: dict) -> str | None:
 # Menus
 # -----------------------------
 def _admin_home_kb() -> dict:
-    return _kb([
-        [("📦 Каталог", "tgadm:catalog")],
-        [("❌ Скинути дію", "tgadm:cancel")],
-    ])
+    return _kb(
+        [
+            [("📦 Каталог", "tgadm:catalog")],
+            [("❌ Скинути дію", "tgadm:cancel")],
+        ]
+    )
 
 
 def _catalog_kb() -> dict:
-    return _kb([
-        [("📁 Категорії", "tgadm:cat_menu"), ("📦 Товари", "tgadm:prod_menu")],
-        [("🗃 Архів (вимкнені)", "tgadm:archive:0"), ("🔥 Акції / Знижки", "tgadm:promos")],
-        [("🏠 В адмін-меню", "tgadm:home")],
-    ])
+    return _kb(
+        [
+            [("📁 Категорії", "tgadm:cat_menu"), ("📦 Товари", "tgadm:prod_menu")],
+            [("🗃 Архів (вимкнені)", "tgadm:archive:0"), ("🔥 Акції / Знижки", "tgadm:promos")],
+            [("🏠 В адмін-меню", "tgadm:home")],
+        ]
+    )
 
 
 def _products_menu_kb() -> dict:
-    return _kb([
-        [("➕ Додати товар", "tgadm:wiz_start"), ("📦 Список активних", "tgadm:listp:0")],
-        [("⛔ Вимкнути (ID)", "tgadm:disable"), ("✅ Увімкнути (ID)", "tgadm:enable")],
-        [("⬅️ Назад", "tgadm:catalog")],
-    ])
+    return _kb(
+        [
+            [("➕ Додати товар", "tgadm:wiz_start"), ("📦 Список активних", "tgadm:listp:0")],
+            [("⛔ Вимкнути (ID)", "tgadm:disable"), ("✅ Увімкнути (ID)", "tgadm:enable")],
+            [("⬅️ Назад", "tgadm:catalog")],
+        ]
+    )
 
 
 def _categories_menu_kb(*, default_visible: bool, show_all_enabled: bool) -> dict:
     eye = "👁 ON" if default_visible else "🙈 OFF"
     allb = "🌐 ON" if show_all_enabled else "🌐 OFF"
-    return _kb([
-        [("➕ Додати категорію", "tgadm:cat_create"), ("🧩 Керувати категорією", "tgadm:cat_manage")],
-        [("🗑 Видалити категорію", "tgadm:cat_delete")],
-        [(f"{eye}  'Без категорії'", "tgadm:toggle_default"),
-         (f"{allb}  'Усі товари'", "tgadm:toggle_allbtn")],
-        [("⬅️ Назад", "tgadm:catalog")],
-    ])
-
+    return _kb(
+        [
+            [("➕ Додати категорію", "tgadm:cat_create"), ("🧩 Керувати категорією", "tgadm:cat_manage")],
+            [("🗑 Видалити категорію", "tgadm:cat_delete")],
+            [(f"{eye}  'Без категорії'", "tgadm:toggle_default"), (f"{allb}  'Усі товари'", "tgadm:toggle_allbtn")],
+            [("⬅️ Назад", "tgadm:catalog")],
+        ]
+    )
 
 
 def _promos_kb() -> dict:
-    return _kb([
-        [("➕ Додати акцію (ID)", "tgadm:promo_add"), ("📋 Акційні товари", "tgadm:promo_list:0")],
-        [("⬅️ Назад", "tgadm:catalog")],
-    ])
+    return _kb(
+        [
+            [("➕ Додати акцію (ID)", "tgadm:promo_add"), ("📋 Акційні товари", "tgadm:promo_list:0")],
+            [("⬅️ Назад", "tgadm:catalog")],
+        ]
+    )
 
 
 def _promos_list_kb(items: list[dict[str, Any]], *, page: int, has_next: bool) -> dict:
@@ -221,12 +248,14 @@ def _promo_product_card_kb(*, product_id: int, category_id: int, has_prev: bool,
 
     clear_btn = ("❌ Зняти акцію", f"tgadm:promo_clear:{product_id}:{cid}") if promo_active else ("·", "tgadm:noop")
 
-    return _kb([
-        nav_row,
-        [clear_btn, ("➕/✏️ Налаштувати", f"tgadm:promo_edit:{product_id}:{cid}")],
-        [("💸 Ціна акції", f"tgadm:promo_price:{product_id}:{cid}"), ("⏰ До", f"tgadm:promo_until:{product_id}:{cid}")],
-        [("⬅️ Акції", "tgadm:promos")],
-    ])
+    return _kb(
+        [
+            nav_row,
+            [clear_btn, ("➕/✏️ Налаштувати", f"tgadm:promo_edit:{product_id}:{cid}")],
+            [("💸 Ціна акції", f"tgadm:promo_price:{product_id}:{cid}"), ("⏰ До", f"tgadm:promo_until:{product_id}:{cid}")],
+            [("⬅️ Акції", "tgadm:promos")],
+        ]
+    )
 
 
 def _wiz_nav_kb(*, allow_skip: bool = False) -> dict:
@@ -237,19 +266,23 @@ def _wiz_nav_kb(*, allow_skip: bool = False) -> dict:
 
 
 def _wiz_photos_kb(*, product_id: int) -> dict:
-    return _kb([
-        [("📷 Додати ще фото", "tgadm:wiz_photo_more"), ("✅ Готово", "tgadm:wiz_done")],
-        [("📝 Додати/змінити опис", f"tgadm:wiz_desc_edit:{product_id}")],
-        [("❌ Скасувати", "tgadm:cancel")],
-    ])
+    return _kb(
+        [
+            [("📷 Додати ще фото", "tgadm:wiz_photo_more"), ("✅ Готово", "tgadm:wiz_done")],
+            [("📝 Додати/змінити опис", f"tgadm:wiz_desc_edit:{product_id}")],
+            [("❌ Скасувати", "tgadm:cancel")],
+        ]
+    )
 
 
 def _wiz_finish_kb(*, product_id: int) -> dict:
-    return _kb([
-        [("📷 Додати фото", f"tgadm:wiz_photo_more:{product_id}"), ("📝 Опис", f"tgadm:wiz_desc_edit:{product_id}")],
-        [("➕ Додати ще товар", "tgadm:wiz_start"), ("📦 Товари", "tgadm:prod_menu")],
-        [("📦 Каталог", "tgadm:catalog")],
-    ])
+    return _kb(
+        [
+            [("📷 Додати фото", f"tgadm:wiz_photo_more:{product_id}"), ("📝 Опис", f"tgadm:wiz_desc_edit:{product_id}")],
+            [("➕ Додати ще товар", "tgadm:wiz_start"), ("📦 Товари", "tgadm:prod_menu")],
+            [("📦 Каталог", "tgadm:catalog")],
+        ]
+    )
 
 
 def _category_pick_kb(categories: list[dict], *, prefix: str, back_to: str) -> dict:
@@ -257,7 +290,6 @@ def _category_pick_kb(categories: list[dict], *, prefix: str, back_to: str) -> d
     for c in categories:
         cid = int(c["id"])
         name = str(c["name"])
-        # system names like "__..." do not show
         if name.startswith("__"):
             continue
         rows.append([(f"📁 {name}", f"{prefix}:{cid}")])
@@ -271,14 +303,16 @@ def _admin_product_card_kb(*, product_id: int, category_id: int, has_prev: bool,
     nav_row.append(("⬅️", f"tgadm:pc_prev:{product_id}:{cid}") if has_prev else ("·", "tgadm:noop"))
     nav_row.append(("➡️", f"tgadm:pc_next:{product_id}:{cid}") if has_next else ("·", "tgadm:noop"))
 
-    return _kb([
-        nav_row,
-        [("🗃 В архів", f"tgadm:p_to_arch:{product_id}:{cid}"), ("✅ Увімкн.", f"tgadm:p_enable:{product_id}:{cid}")],
-        [("📁 Категорія", f"tgadm:p_setcat:{product_id}:{cid}"), ("📝 Опис", f"tgadm:wiz_desc_edit:{product_id}")],
-        [("💰 Ціна", f"tgadm:pprice:{product_id}:{cid}"), ("✏️ Назва", f"tgadm:pname:{product_id}:{cid}")],
-        [("📷 Додати фото", f"tgadm:p_photo:{product_id}:{cid}")],
-        [("⬅️ Категорії", "tgadm:cat_manage")],
-    ])
+    return _kb(
+        [
+            nav_row,
+            [("🗃 В архів", f"tgadm:p_to_arch:{product_id}:{cid}"), ("✅ Увімкн.", f"tgadm:p_enable:{product_id}:{cid}")],
+            [("📁 Категорія", f"tgadm:p_setcat:{product_id}:{cid}"), ("📝 Опис", f"tgadm:wiz_desc_edit:{product_id}")],
+            [("💰 Ціна", f"tgadm:pprice:{product_id}:{cid}"), ("✏️ Назва", f"tgadm:pname:{product_id}:{cid}")],
+            [("📷 Додати фото", f"tgadm:p_photo:{product_id}:{cid}")],
+            [("⬅️ Категорії", "tgadm:cat_manage")],
+        ]
+    )
 
 
 def _archive_list_kb(items: list[dict[str, Any]], *, page: int, has_next: bool) -> dict:
@@ -297,12 +331,14 @@ def _archive_list_kb(items: list[dict[str, Any]], *, page: int, has_next: bool) 
 
 
 def _archive_product_kb(*, product_id: int) -> dict:
-    return _kb([
-        [("✅ Увімкнути", f"tgadm:arch_enable:{product_id}"), ("📁 Категорія", f"tgadm:arch_setcat:{product_id}")],
-        [("📝 Опис", f"tgadm:wiz_desc_edit:{product_id}"), ("✏️ Назва", f"tgadm:arch_name:{product_id}")],
-        [("💰 Ціна", f"tgadm:arch_price:{product_id}"), ("📷 Фото", f"tgadm:arch_photo:{product_id}")],
-        [("⬅️ До архіву", "tgadm:archive:0"), ("🏠 Каталог", "tgadm:catalog")],
-    ])
+    return _kb(
+        [
+            [("✅ Увімкнути", f"tgadm:arch_enable:{product_id}"), ("📁 Категорія", f"tgadm:arch_setcat:{product_id}")],
+            [("📝 Опис", f"tgadm:wiz_desc_edit:{product_id}"), ("✏️ Назва", f"tgadm:arch_name:{product_id}")],
+            [("💰 Ціна", f"tgadm:arch_price:{product_id}"), ("📷 Фото", f"tgadm:arch_photo:{product_id}")],
+            [("⬅️ До архіву", "tgadm:archive:0"), ("🏠 Каталог", "tgadm:catalog")],
+        ]
+    )
 
 
 # -----------------------------
@@ -311,7 +347,7 @@ def _archive_product_kb(*, product_id: int) -> dict:
 async def _send_admin_home(bot: Bot, chat_id: int) -> None:
     await bot.send_message(
         chat_id,
-        "🛠 *Адмінка магазину*\n\nОдна точка входу - *📦 Каталог* 👇",
+        "🛠 *Адмінка магазину*\n\nОдна точка входу — *📦 Каталог* 👇",
         parse_mode="Markdown",
         reply_markup=_admin_home_kb(),
     )
@@ -344,22 +380,15 @@ async def _send_categories_menu(bot: Bot, chat_id: int, tenant_id: str) -> None:
     )
 
 
-async def _send_products_list(bot: Bot, chat_id: int, tenant_id: str) -> None:
-    items = await ProductsRepo.list_active(tenant_id, limit=100)
-    if not items:
-        await bot.send_message(chat_id, "Поки що немає активних товарів.")
-        return
-
-
-
-
 async def _send_products_list_inline(bot: Bot, chat_id: int, tenant_id: str, page: int) -> None:
     page = max(0, int(page))
     limit = 12
     offset = page * limit
+
     rows = await ProductsRepo.list_active(tenant_id, limit=500)
     rows_sorted = sorted(rows, key=lambda x: int(x["id"]), reverse=True)
-    chunk = rows_sorted[offset:offset + limit]
+
+    chunk = rows_sorted[offset : offset + limit]
     has_next = len(rows_sorted) > offset + limit
 
     if not chunk:
@@ -386,6 +415,7 @@ async def _send_promos_home(bot: Bot, chat_id: int, tenant_id: str) -> None:
     """
     row = await db_fetch_one(q, {"tid": tenant_id, "now": now}) or {}
     cnt = int(row.get("cnt") or 0)
+
     await bot.send_message(
         chat_id,
         f"🔥 *Акції / Знижки*\n\nАктивних акцій: *{cnt}*\n\n"
@@ -401,6 +431,7 @@ async def _send_promos_list(bot: Bot, chat_id: int, tenant_id: str, page: int) -
     page = max(0, int(page))
     limit = 12
     offset = page * limit
+
     q = """
     SELECT id, name, promo_price_kop, promo_until_ts
     FROM telegram_shop_products
@@ -411,7 +442,7 @@ async def _send_promos_list(bot: Bot, chat_id: int, tenant_id: str, page: int) -
     ORDER BY CASE WHEN promo_until_ts = 0 THEN 2147483647 ELSE promo_until_ts END ASC, id DESC
     """
     rows = await db_fetch_all(q, {"tid": tenant_id, "now": now}) or []
-    chunk = rows[offset:offset + limit]
+    chunk = rows[offset : offset + limit]
     has_next = len(rows) > offset + limit
 
     if not chunk:
@@ -424,6 +455,20 @@ async def _send_promos_list(bot: Bot, chat_id: int, tenant_id: str, page: int) -
         parse_mode="Markdown",
         reply_markup=_promos_list_kb(chunk, page=page, has_next=has_next),
     )
+
+
+async def _get_product_any(tenant_id: str, product_id: int) -> dict | None:
+    q = """
+    SELECT id, tenant_id, category_id, name, price_kop, is_active,
+           COALESCE(is_hit, false) AS is_hit,
+           COALESCE(promo_price_kop, 0) AS promo_price_kop,
+           COALESCE(promo_until_ts, 0) AS promo_until_ts,
+           COALESCE(description,'') AS description
+    FROM telegram_shop_products
+    WHERE tenant_id = :tid AND id = :pid
+    LIMIT 1
+    """
+    return await db_fetch_one(q, {"tid": tenant_id, "pid": int(product_id)})
 
 
 async def _build_promo_product_card(tenant_id: str, product_id: int, category_id: int | None) -> dict | None:
@@ -471,6 +516,7 @@ async def _send_promo_product_card(bot: Bot, chat_id: int, tenant_id: str, produ
     if not card:
         await bot.send_message(chat_id, "❌ Товар не знайдено або він не активний.", reply_markup=_promos_kb())
         return
+
     if card["has_photo"]:
         await bot.send_photo(chat_id, photo=card["file_id"], caption=card["text"], parse_mode="Markdown", reply_markup=card["kb"])
     else:
@@ -481,16 +527,13 @@ async def _edit_promo_product_card(bot: Bot, chat_id: int, message_id: int, tena
     card = await _build_promo_product_card(tenant_id, int(product_id), category_id)
     if not card:
         return False
+
     if card["has_photo"]:
         media = InputMediaPhoto(media=card["file_id"], caption=card["text"], parse_mode="Markdown")
         await bot.edit_message_media(media=media, chat_id=chat_id, message_id=message_id, reply_markup=card["kb"])
     else:
         await bot.edit_message_text(card["text"], chat_id=chat_id, message_id=message_id, parse_mode="Markdown", reply_markup=card["kb"])
     return True
-    lines = ["📦 *Активні товари:*"]
-    for p in items:
-        lines.append(f"{int(p['id'])}) {p['name']} - {_fmt_money(int(p.get('price_kop') or 0))}")
-    await bot.send_message(chat_id, "\n".join(lines), parse_mode="Markdown")
 
 
 # -----------------------------
@@ -504,7 +547,7 @@ async def _send_archive(bot: Bot, chat_id: int, tenant_id: str, page: int) -> No
     rows = await ProductsRepo.list_inactive(tenant_id, limit=500)  # type: ignore[attr-defined]
     rows_sorted = sorted(rows, key=lambda x: int(x["id"]), reverse=True)
 
-    chunk = rows_sorted[offset: offset + limit]
+    chunk = rows_sorted[offset : offset + limit]
     has_next = len(rows_sorted) > offset + limit
 
     if not chunk:
@@ -517,23 +560,6 @@ async def _send_archive(bot: Bot, chat_id: int, tenant_id: str, page: int) -> No
         parse_mode="Markdown",
         reply_markup=_archive_list_kb(chunk, page=page, has_next=has_next),
     )
-
-
-async def _get_product_any(tenant_id: str, product_id: int) -> dict | None:
-    # reuse list/get from ProductsRepo isn't available for inactive
-    q = """
-    SELECT id, tenant_id, category_id, name, price_kop, is_active,
-           COALESCE(is_hit, false) AS is_hit,
-           COALESCE(promo_price_kop, 0) AS promo_price_kop,
-           COALESCE(promo_until_ts, 0) AS promo_until_ts,
-           COALESCE(description,'') AS description
-    FROM telegram_shop_products
-    WHERE tenant_id = :tid AND id = :pid
-    LIMIT 1
-    """
-    # db_fetch_one lives in db.session; import locally to avoid circulars if needed
-    from rent_platform.db.session import db_fetch_one  # local import
-    return await db_fetch_one(q, {"tid": tenant_id, "pid": int(product_id)})
 
 
 async def _send_archive_product(bot: Bot, chat_id: int, tenant_id: str, product_id: int) -> None:
@@ -568,7 +594,7 @@ async def _send_archive_product(bot: Bot, chat_id: int, tenant_id: str, product_
 
 
 # -----------------------------
-# Category browsing (cards like user)
+# Category browsing (admin cards)
 # -----------------------------
 async def _send_manage_categories_pick(bot: Bot, chat_id: int, tenant_id: str) -> None:
     if CategoriesRepo is None:
@@ -613,7 +639,6 @@ async def _build_admin_product_card(tenant_id: str, product_id: int, category_id
         return None
 
     cat = category_id if (category_id and category_id > 0) else None
-
     prev_p = await ProductsRepo.get_prev_active(tenant_id, product_id, category_id=cat)
     next_p = await ProductsRepo.get_next_active(tenant_id, product_id, category_id=cat)
 
@@ -630,7 +655,7 @@ async def _build_admin_product_card(tenant_id: str, product_id: int, category_id
 
     kb = _admin_product_card_kb(
         product_id=pid,
-        category_id=int(category_id),
+        category_id=int(category_id or 0),
         has_prev=bool(prev_p),
         has_next=bool(next_p),
     )
@@ -693,7 +718,11 @@ async def _wiz_ask_category(bot: Bot, chat_id: int, tenant_id: str, draft: dict)
 
     default_cid = await CategoriesRepo.ensure_default(tenant_id)  # type: ignore[misc]
     cats = await CategoriesRepo.list(tenant_id, limit=50)  # type: ignore[misc]
-    _state_set(tenant_id, chat_id, {"mode": "wiz_category", "draft": draft, "default_category_id": int(default_cid or 0)})
+    _state_set(
+        tenant_id,
+        chat_id,
+        {"mode": "wiz_category", "draft": draft, "default_category_id": int(default_cid or 0)},
+    )
 
     await bot.send_message(
         chat_id,
@@ -717,17 +746,21 @@ async def _wiz_create_product(tenant_id: str, draft: dict) -> int | None:
     pid = await ProductsRepo.add(tenant_id, name, price_kop, is_active=True, category_id=category_id)
     if not pid:
         return None
+
     if desc:
         await ProductsRepo.set_description(tenant_id, int(pid), desc)
+
     return int(pid)
 
 
 async def _wiz_create_and_go_photos(bot: Bot, chat_id: int, tenant_id: str, draft: dict) -> None:
     pid = await _wiz_create_product(tenant_id, draft)
     _state_clear(tenant_id, chat_id)
+
     if not pid:
         await bot.send_message(chat_id, "❌ Не вдалося створити товар (перевір БД/міграції).", reply_markup=_admin_home_kb())
         return
+
     await _wiz_photos_start(bot, chat_id, tenant_id, pid)
 
 
@@ -774,7 +807,6 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
         arg = parts[2] if len(parts) > 2 else ""
         arg2 = parts[3] if len(parts) > 3 else ""
 
-        # noop
         if action == "noop":
             return True
 
@@ -903,11 +935,6 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             return True
 
         # Products list / enable-disable by ID
-        if action == "list":
-            _state_clear(tenant_id, chat_id)
-            await _send_products_list_inline(bot, chat_id, tenant_id, 0)
-            return True
-
         if action == "listp":
             _state_clear(tenant_id, chat_id)
             page = int(arg) if arg.isdigit() else 0
@@ -1001,45 +1028,47 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             await bot.send_message(chat_id, f"📝 Надішли новий опис для товару #{pid}:", reply_markup=_wiz_nav_kb(allow_skip=True))
             return True
 
-        # Category browse actions (cards)
+        # Product cards actions (admin + promos)
         if action in ("pc_prev", "pc_next", "p_to_arch", "p_enable", "p_setcat", "pprice", "pname", "p_photo", "pp_prev", "pp_next"):
             if not (arg.isdigit() and arg2.isdigit()):
                 return True
+
             pid = int(arg)
             cid = int(arg2)
+            cat = cid if cid > 0 else None
 
             if action == "pc_prev":
-                p = await ProductsRepo.get_prev_active(tenant_id, pid, category_id=(cid if cid > 0 else None))
+                p = await ProductsRepo.get_prev_active(tenant_id, pid, category_id=cat)
                 if p:
                     await _edit_admin_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]), cid)
                 return True
 
             if action == "pc_next":
-                p = await ProductsRepo.get_next_active(tenant_id, pid, category_id=(cid if cid > 0 else None))
+                p = await ProductsRepo.get_next_active(tenant_id, pid, category_id=cat)
                 if p:
                     await _edit_admin_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]), cid)
                 return True
+
             if action == "pp_prev":
-                cat = cid if cid > 0 else None
                 p = await ProductsRepo.get_prev_active(tenant_id, pid, category_id=cat)
                 if p:
                     await _edit_promo_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]), cid)
                 return True
+
             if action == "pp_next":
-                cat = cid if cid > 0 else None
                 p = await ProductsRepo.get_next_active(tenant_id, pid, category_id=cat)
                 if p:
                     await _edit_promo_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]), cid)
                 return True
 
-if action == "p_to_arch":
+            if action == "p_to_arch":
                 await ProductsRepo.set_active(tenant_id, pid, False)
                 # show next or prev; if none - tell empty
-                p = await ProductsRepo.get_next_active(tenant_id, pid, category_id=(cid if cid > 0 else None))
-                if not p:
-                    p = await ProductsRepo.get_prev_active(tenant_id, pid, category_id=(cid if cid > 0 else None))
-                if p:
-                    await _edit_admin_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]), cid)
+                p2 = await ProductsRepo.get_next_active(tenant_id, pid, category_id=cat)
+                if not p2:
+                    p2 = await ProductsRepo.get_prev_active(tenant_id, pid, category_id=cat)
+                if p2:
+                    await _edit_admin_product_card(bot, chat_id, msg_id, tenant_id, int(p2["id"]), cid)
                 else:
                     await bot.send_message(chat_id, "✅ Товар перенесено в архів. У цій категорії більше нема активних.", reply_markup=_catalog_kb())
                 return True
@@ -1077,6 +1106,8 @@ if action == "p_to_arch":
                 await bot.send_message(chat_id, f"📷 Надішли фото для товару #{pid}:", reply_markup=_wiz_nav_kb())
                 return True
 
+            return True
+
         if action == "p_setcat_do" and arg.isdigit():
             st = _state_get(tenant_id, chat_id) or {}
             pid = int(st.get("product_id") or 0)
@@ -1090,6 +1121,7 @@ if action == "p_to_arch":
                     await _send_admin_category_first_product(bot, chat_id, tenant_id, back_cid)
             return True
 
+        # PROMOS
         if action == "promos":
             _state_clear(tenant_id, chat_id)
             await _send_promos_home(bot, chat_id, tenant_id)
@@ -1117,13 +1149,7 @@ if action == "p_to_arch":
             await bot.send_message(chat_id, f"✅ Акцію знято з товару #{pid}.", reply_markup=_promos_kb())
             return True
 
-        if action == "promo_edit" and arg.isdigit():
-            pid = int(arg)
-            _state_set(tenant_id, chat_id, {"mode": "promo_edit_price", "product_id": pid})
-            await bot.send_message(chat_id, f"💸 Введи *ціну акції* для #{pid} (1200.50):", parse_mode="Markdown", reply_markup=_wiz_nav_kb())
-            return True
-
-        if action == "promo_price" and arg.isdigit():
+        if action in ("promo_edit", "promo_price") and arg.isdigit():
             pid = int(arg)
             _state_set(tenant_id, chat_id, {"mode": "promo_edit_price", "product_id": pid})
             await bot.send_message(chat_id, f"💸 Введи *ціну акції* для #{pid} (1200.50):", parse_mode="Markdown", reply_markup=_wiz_nav_kb())
@@ -1160,7 +1186,7 @@ if action == "p_to_arch":
 
     mode = str(st.get("mode") or "")
 
-    # photo wizard / add photo
+    # photo modes
     if mode in ("wiz_photo", "add_photo_to_pid", "arch_add_photo"):
         product_id = int(st.get("product_id") or 0)
         if product_id <= 0:
@@ -1174,6 +1200,18 @@ if action == "p_to_arch":
             return True
 
         await ProductsRepo.add_product_photo(tenant_id, product_id, file_id)
+
+        if mode == "wiz_photo":
+            # stay in wizard: allow many photos
+            await bot.send_message(
+                chat_id,
+                f"✅ Фото додано до *#{product_id}*.\nНадсилай ще або натисни *Готово* ✅",
+                parse_mode="Markdown",
+                reply_markup=_wiz_photos_kb(product_id=product_id),
+            )
+            return True
+
+        # single-shot modes
         _state_clear(tenant_id, chat_id)
         await bot.send_message(chat_id, f"✅ Фото додано до *#{product_id}*.", parse_mode="Markdown", reply_markup=_catalog_kb())
         return True
@@ -1234,12 +1272,11 @@ if action == "p_to_arch":
         await _wiz_ask_category(bot, chat_id, tenant_id, draft)
         return True
 
-    if mode == "wiz_category":
-        # should be handled by callback wiz_cat / wiz_skip
-        return True
-
     if mode == "desc_edit":
         product_id = int(st.get("product_id") or 0)
+        if not product_id:
+            _state_clear(tenant_id, chat_id)
+            return True
         await ProductsRepo.set_description(tenant_id, product_id, text)
         _state_clear(tenant_id, chat_id)
         await bot.send_message(chat_id, f"✅ Опис оновлено для #{product_id}.", reply_markup=_catalog_kb())
@@ -1297,58 +1334,55 @@ if action == "p_to_arch":
             await _send_admin_category_first_product(bot, chat_id, tenant_id, cid)
         return True
 
-    # "p_setcat_pick" and "arch_setcat_pick" are callback-only
-
-
-# promos wizard / edits
-if mode == "promo_pick_id":
-    if not text.isdigit():
-        await bot.send_message(chat_id, "Надішли тільки цифру ID товару.", reply_markup=_wiz_nav_kb())
-        return True
-    pid = int(text)
-    p = await _get_product_any(tenant_id, pid)
-    if not p or not bool(p.get("is_active")):
-        await bot.send_message(chat_id, "❌ Товар не знайдено або він не активний. Спробуй інший ID.", reply_markup=_wiz_nav_kb())
-        return True
-    _state_set(tenant_id, chat_id, {"mode": "promo_set_price", "product_id": pid})
-    await bot.send_message(chat_id, f"💸 Введи *ціну акції* для #{pid} (1200.50):", parse_mode="Markdown", reply_markup=_wiz_nav_kb())
-    return True
-
-if mode in ("promo_set_price", "promo_edit_price"):
-    pid = int(st.get("product_id") or 0)
-    price_kop = _parse_price_to_kop(text)
-    if price_kop is None or price_kop <= 0:
-        await bot.send_message(chat_id, "Ціна не розпізнана. Приклад: `1200.50` або `1200`", parse_mode="Markdown", reply_markup=_wiz_nav_kb())
+    # PROMOS: wizard
+    if mode == "promo_pick_id":
+        if not text.isdigit():
+            await bot.send_message(chat_id, "Надішли тільки цифру ID товару.", reply_markup=_wiz_nav_kb())
+            return True
+        pid = int(text)
+        p = await _get_product_any(tenant_id, pid)
+        if not p or not bool(p.get("is_active")):
+            await bot.send_message(chat_id, "❌ Товар не знайдено або він не активний. Спробуй інший ID.", reply_markup=_wiz_nav_kb())
+            return True
+        _state_set(tenant_id, chat_id, {"mode": "promo_set_price", "product_id": pid})
+        await bot.send_message(chat_id, f"💸 Введи *ціну акції* для #{pid} (1200.50):", parse_mode="Markdown", reply_markup=_wiz_nav_kb())
         return True
 
-    if mode == "promo_set_price":
-        _state_set(tenant_id, chat_id, {"mode": "promo_set_until", "product_id": pid, "promo_price_kop": int(price_kop)})
-        await bot.send_message(chat_id, "⏰ Введи *дату завершення* у форматі `DD.MM.YYYY HH:MM` або `0`:", parse_mode="Markdown", reply_markup=_wiz_nav_kb())
+    if mode in ("promo_set_price", "promo_edit_price"):
+        pid = int(st.get("product_id") or 0)
+        price_kop = _parse_price_to_kop(text)
+        if price_kop is None or price_kop <= 0:
+            await bot.send_message(chat_id, "Ціна не розпізнана. Приклад: `1200.50` або `1200`", parse_mode="Markdown", reply_markup=_wiz_nav_kb())
+            return True
+
+        if mode == "promo_set_price":
+            _state_set(tenant_id, chat_id, {"mode": "promo_set_until", "product_id": pid, "promo_price_kop": int(price_kop)})
+            await bot.send_message(chat_id, "⏰ Введи *дату завершення* у форматі `DD.MM.YYYY HH:MM` або `0`:", parse_mode="Markdown", reply_markup=_wiz_nav_kb())
+            return True
+
+        p = await _get_product_any(tenant_id, pid) or {}
+        until_ts = int(p.get("promo_until_ts") or 0)
+        await ProductsRepo.set_promo(tenant_id, pid, int(price_kop), until_ts)
+        _state_clear(tenant_id, chat_id)
+        await bot.send_message(chat_id, f"✅ Ціну акції оновлено для #{pid}.", reply_markup=_promos_kb())
         return True
 
-    p = await _get_product_any(tenant_id, pid) or {}
-    until_ts = int(p.get("promo_until_ts") or 0)
-    await ProductsRepo.set_promo(tenant_id, pid, int(price_kop), until_ts)
-    _state_clear(tenant_id, chat_id)
-    await bot.send_message(chat_id, f"✅ Ціну акції оновлено для #{pid}.", reply_markup=_promos_kb())
-    return True
+    if mode in ("promo_set_until", "promo_edit_until"):
+        pid = int(st.get("product_id") or 0)
+        until_ts = _parse_dt_to_ts(text)
+        if until_ts is None:
+            await bot.send_message(chat_id, "Дата не розпізнана. Формат: `DD.MM.YYYY HH:MM` або `0`", parse_mode="Markdown", reply_markup=_wiz_nav_kb())
+            return True
 
-if mode in ("promo_set_until", "promo_edit_until"):
-    pid = int(st.get("product_id") or 0)
-    until_ts = _parse_dt_to_ts(text)
-    if until_ts is None:
-        await bot.send_message(chat_id, "Дата не розпізнана. Формат: `DD.MM.YYYY HH:MM` або `0`", parse_mode="Markdown", reply_markup=_wiz_nav_kb())
+        p = await _get_product_any(tenant_id, pid) or {}
+        promo_price = int(st.get("promo_price_kop") or p.get("promo_price_kop") or 0)
+        if promo_price <= 0:
+            await bot.send_message(chat_id, "Спочатку задай ціну акції.", reply_markup=_wiz_nav_kb())
+            return True
+
+        await ProductsRepo.set_promo(tenant_id, pid, promo_price, int(until_ts))
+        _state_clear(tenant_id, chat_id)
+        await bot.send_message(chat_id, f"✅ Акцію збережено для #{pid}.", reply_markup=_promos_kb())
         return True
-
-    p = await _get_product_any(tenant_id, pid) or {}
-    promo_price = int(st.get("promo_price_kop") or p.get("promo_price_kop") or 0)
-    if promo_price <= 0:
-        await bot.send_message(chat_id, "Спочатку задай ціну акції.", reply_markup=_wiz_nav_kb())
-        return True
-
-    await ProductsRepo.set_promo(tenant_id, pid, promo_price, int(until_ts))
-    _state_clear(tenant_id, chat_id)
-    await bot.send_message(chat_id, f"✅ Акцію збережено для #{pid}.", reply_markup=_promos_kb())
-    return True
 
     return False
