@@ -23,6 +23,7 @@ class ProductsRepo:
                 tenant_id,
                 category_id,
                 name,
+                COALESCE(sku, '') AS sku,
                 price_kop,
                 is_active,
                 COALESCE(is_hit, false) AS is_hit,
@@ -43,6 +44,7 @@ class ProductsRepo:
             tenant_id,
             category_id,
             name,
+            COALESCE(sku, '') AS sku,
             price_kop,
             is_active,
             COALESCE(is_hit, false) AS is_hit,
@@ -71,6 +73,7 @@ class ProductsRepo:
                 tenant_id,
                 category_id,
                 name,
+                COALESCE(sku, '') AS sku,
                 price_kop,
                 is_active,
                 COALESCE(is_hit, false) AS is_hit,
@@ -91,6 +94,7 @@ class ProductsRepo:
             tenant_id,
             category_id,
             name,
+            COALESCE(sku, '') AS sku,
             price_kop,
             is_active,
             COALESCE(is_hit, false) AS is_hit,
@@ -113,6 +117,7 @@ class ProductsRepo:
             tenant_id,
             category_id,
             name,
+            COALESCE(sku, '') AS sku,
             price_kop,
             is_active,
             COALESCE(is_hit, false) AS is_hit,
@@ -133,6 +138,7 @@ class ProductsRepo:
         name: str,
         price_kop: int,
         *,
+        sku: str | None = None,
         is_hit: bool = False,
         promo_price_kop: int = 0,
         promo_until_ts: int = 0,
@@ -141,9 +147,9 @@ class ProductsRepo:
     ) -> int | None:
         q = """
         INSERT INTO telegram_shop_products
-            (tenant_id, name, price_kop, is_active, is_hit, promo_price_kop, promo_until_ts, category_id, created_ts)
+            (tenant_id, name, sku, price_kop, is_active, is_hit, promo_price_kop, promo_until_ts, category_id, created_ts)
         VALUES
-            (:tid, :n, :p, :a, :h, :pp, :pu, :cid, :ts)
+            (:tid, :n, :sku, :p, :a, :h, :pp, :pu, :cid, :ts)
         RETURNING id
         """
         row = await db_fetch_one(
@@ -151,6 +157,7 @@ class ProductsRepo:
             {
                 "tid": str(tenant_id),
                 "n": (name or "").strip()[:128],
+                "sku": (sku or "").strip()[:64] if sku else None,
                 "p": int(price_kop),
                 "a": bool(is_active),
                 "h": bool(is_hit),
@@ -211,6 +218,23 @@ class ProductsRepo:
                 "pid": int(product_id),
                 "pp": int(promo_price_kop),
                 "pu": int(promo_until_ts),
+            },
+        )
+
+    @staticmethod
+    async def set_sku(tenant_id: str, product_id: int, sku: str | None) -> None:
+        s = (sku or "").strip()[:64]
+        q = """
+        UPDATE telegram_shop_products
+        SET sku = :s
+        WHERE tenant_id = :tid AND id = :pid
+        """
+        await db_execute(
+            q,
+            {
+                "tid": tenant_id,
+                "pid": int(product_id),
+                "s": s if s else None,
             },
         )
 
