@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import time
 import logging
 from typing import Any
 
@@ -71,6 +72,20 @@ def _fmt_money(kop: int) -> str:
     uah = kop // 100
     cents = kop % 100
     return f"{uah}.{cents:02d} грн"
+
+
+def _promo_active(p: dict[str, Any], now: int) -> bool:
+    pp = int(p.get("promo_price_kop") or 0)
+    pu = int(p.get("promo_until_ts") or 0)
+    return pp > 0 and (pu == 0 or pu > now)
+
+def _fmt_dt(ts: int) -> str:
+    # простий формат без timezone (достатньо для UI)
+    import datetime as _dt
+    return _dt.datetime.fromtimestamp(int(ts)).strftime("%d.%m.%Y %H:%M")
+
+def _effective_price_kop(p: dict[str, Any], now: int) -> int:
+    return int(p.get("promo_price_kop") or 0) if _promo_active(p, now) else int(p.get("price_kop") or 0)
 
 
 async def _send_menu(bot: Bot, chat_id: int, text: str, *, is_admin: bool) -> None:
