@@ -94,3 +94,21 @@ def cart_inline(items: list[dict[str, Any]]) -> dict:
 
     rows.append([("🧹 Очистити", "tgshop:clear:0:0"), ("✅ Оформити", "tgshop:checkout:0:0")])
     return _kb(rows)
+
+
+def favorites_card_kb(
+    *,
+    product_id: int,
+    has_prev: bool,
+    has_next: bool,
+) -> dict:
+    nav_row: list[tuple[str, str]] = [
+        ("⬅️", f"tgfav:prev:{product_id}") if has_prev else ("·", "tgfav:noop"),
+        ("➡️", f"tgfav:next:{product_id}") if has_next else ("·", "tgfav:noop"),
+    ]
+
+    return _kb([
+        nav_row,
+        [("🛒 Додати", f"tgshop:add:{product_id}:0"), ("⭐ Прибрати", f"tgfav:rm:{product_id}")],
+        [("⬅️ До обраного", "tgfav:back")],
+    ])
