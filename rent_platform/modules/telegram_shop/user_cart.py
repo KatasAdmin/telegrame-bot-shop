@@ -148,6 +148,7 @@ async def send_cart(bot: Bot, chat_id: int, tenant_id: str, user_id: int, *, ext
         chat_id,
         text,
         parse_mode="HTML",
+        reply_markup=cart_kb(),  # залишаємо твою reply-клаву діями (оформити/очистити/меню)
     )
 
     # 2) якщо є товари — додаємо інлайн-кнопки (з cart_message_id)
@@ -157,13 +158,6 @@ async def send_cart(bot: Bot, chat_id: int, tenant_id: str, user_id: int, *, ext
             message_id=msg.message_id,
             reply_markup=_cart_list_kb(items, cart_message_id=msg.message_id),
         )
-
-    # 3) окремо — reply keyboard (твій)
-    await bot.send_message(
-        chat_id,
-        "Дії кошика 👇",
-        reply_markup=cart_kb(),
-    )
 
 
 async def handle_cart_message(
