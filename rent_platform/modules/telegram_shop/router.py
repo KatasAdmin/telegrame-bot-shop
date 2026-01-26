@@ -10,10 +10,12 @@ from aiogram.types import InputMediaPhoto
 
 from rent_platform.modules.telegram_shop.admin import admin_handle_update, is_admin_user
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
+from rent_platform.modules.telegram_shop.repo.cart import TelegramShopCartRepo
 from rent_platform.modules.telegram_shop.repo.orders import TelegramShopOrdersRepo
 from rent_platform.modules.telegram_shop.ui.user_kb import (
     main_menu_kb,
     catalog_kb,
+    cart_kb,
     favorites_kb,
     orders_history_kb,
     support_kb,
@@ -25,17 +27,17 @@ from rent_platform.modules.telegram_shop.ui.user_kb import (
     BTN_SUPPORT,
     BTN_MENU_BACK,
     BTN_ADMIN,
+    BTN_CHECKOUT,
+    BTN_CLEAR_CART,
 )
 from rent_platform.modules.telegram_shop.ui.inline_kb import (
     product_card_kb,
     catalog_categories_kb,
 )
-
-# NEW cart UX (tgcart:*)
 from rent_platform.modules.telegram_shop.user_cart import (
-    send_cart as send_user_cart,
-    handle_cart_message as handle_user_cart_message,
-    handle_cart_callback as handle_user_cart_callback,
+    send_cart,
+    handle_cart_message,
+    handle_cart_callback,
 )
 
 try:
@@ -55,12 +57,8 @@ def _extract_callback(update: dict) -> dict | None:
 
 
 def _normalize_text(s: str) -> str:
-    """
-    Telegram/iOS може слати emoji з variation selectors / joiners.
-    Нормалізуємо, щоб BTN_* стабільно матчились.
-    """
     s = (s or "").strip()
-    s = s.replace("\ufe0f", "").replace("\u200d", "")  # variation selector / joiner
+    s = s.replace("\ufe0f", "").replace("\u200d", "")
     s = " ".join(s.split())
     return s
 
@@ -83,9 +81,7 @@ def _promo_active(p: dict[str, Any], now: int) -> bool:
 
 
 def _fmt_dt(ts: int) -> str:
-    # простий формат без timezone (достатньо для UI)
     import datetime as _dt
-
     return _dt.datetime.fromtimestamp(int(ts)).strftime("%d.%m.%Y %H:%M")
 
 
@@ -99,16 +95,7 @@ async def _send_menu(bot: Bot, chat_id: int, text: str, *, is_admin: bool) -> No
 
 # ---------- Catalog categories ----------
 
-
 async def _send_categories_menu(bot: Bot, chat_id: int, tenant_id: str, *, is_admin: bool) -> None:
-    """
-    Показує юзеру категорії як inline-кнопки.
-
-    Важливо:
-    - беремо тільки публічні категорії (sort >= 0, без __...__)
-    - "🌐 Усі товари" показуємо лише якщо адмін увімкнув
-    - "Без категорії" показується лише якщо адмін зробив її видимою (через sort)
-    """
     if CategoriesRepo is None:
         await bot.send_message(
             chat_id,
@@ -118,7 +105,6 @@ async def _send_categories_menu(bot: Bot, chat_id: int, tenant_id: str, *, is_ad
         )
         return
 
-    # гарантуємо, що дефолт/флаг існують
     await CategoriesRepo.ensure_default(tenant_id)  # type: ignore[misc]
     await CategoriesRepo.ensure_show_all_flag(tenant_id)  # type: ignore[misc]
 
@@ -143,7 +129,6 @@ async def _send_categories_menu(bot: Bot, chat_id: int, tenant_id: str, *, is_ad
 
 
 # ---------- Product card rendering ----------
-
 
 async def _build_product_card(tenant_id: str, product_id: int, *, category_id: int | None) -> dict | None:
     p = await ProductsRepo.get_active(tenant_id, product_id)
@@ -180,7 +165,6 @@ async def _build_product_card(tenant_id: str, product_id: int, *, category_id: i
         text += f"Ціна: *{_fmt_money(base_price)}*\n"
 
     text += f"ID: `{pid}`"
-
     if desc:
         text += f"\n\n{desc}"
 
@@ -295,7 +279,6 @@ async def _send_orders(bot: Bot, chat_id: int, tenant_id: str, user_id: int, *, 
 
 # ---------- Main entry ----------
 
-
 async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
     tenant_id = str(tenant["id"])
 
@@ -309,7 +292,7 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         cb_id = cb.get("id")
         msg_id = int(cb["message"]["message_id"])
 
-        # 1) Admin callbacks first
+        # Admin callbacks first
         if payload.startswith("tgadm:"):
             if not is_admin:
                 if cb_id:
@@ -318,9 +301,9 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
             handled = await admin_handle_update(tenant=tenant, data=data, bot=bot)
             return bool(handled)
 
-        # 2) Cart callbacks (NEW UX)
+        # Cart callbacks (NEW)
         if payload.startswith("tgcart:"):
-            handled = await handle_user_cart_callback(
+            handled = await handle_cart_callback(
                 bot=bot,
                 tenant_id=tenant_id,
                 user_id=user_id,
@@ -329,11 +312,10 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
                 payload=payload,
             )
             if cb_id:
-                # щоб не крутилось "loading"
-                await bot.answer_callback_query(cb_id, text="•", show_alert=False)
+                await bot.answer_callback_query(cb_id)
             return bool(handled)
 
-        # 3) Shop callbacks
+        # Shop callbacks
         if not payload.startswith("tgshop:"):
             return False
 
@@ -350,12 +332,6 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
                 await bot.answer_callback_query(cb_id, text="•", show_alert=False)
             return True
 
-        if action == "cats":
-            await _send_categories_menu(bot, chat_id, tenant_id, is_admin=is_admin)
-            if cb_id:
-                await bot.answer_callback_query(cb_id)
-            return True
-
         if action == "cat":
             await _send_first_product_card(bot, chat_id, tenant_id, is_admin=is_admin, category_id=category_id)
             if cb_id:
@@ -363,10 +339,6 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
             return True
 
         if action == "add" and pid > 0:
-            # додаємо в кошик (через repo)
-            # user_cart працює з tgcart:* для керування, але додавання з картки товару лишаємо тут
-            from rent_platform.modules.telegram_shop.repo.cart import TelegramShopCartRepo
-
             await TelegramShopCartRepo.cart_inc(tenant_id, user_id, pid, 1)
             if cb_id:
                 await bot.answer_callback_query(cb_id, text="✅ Додано в кошик", show_alert=False)
@@ -403,7 +375,7 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
             await bot.answer_callback_query(cb_id)
         return False
 
-    # --- messages (admin must see photo messages too) ---
+    # --- messages ---
     msg = _extract_message(data)
     if not msg:
         return False
@@ -412,7 +384,7 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
     user_id = int(msg["from"]["id"])
     is_admin = is_admin_user(tenant=tenant, user_id=user_id)
 
-    # Admin handler FIRST (щоб wizard ловив фото/документи)
+    # Admin handler FIRST
     if is_admin:
         handled = await admin_handle_update(tenant=tenant, data=data, bot=bot)
         if handled:
@@ -428,24 +400,24 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         await _send_menu(bot, chat_id, "🛒 *Магазин*\n\nОбирай розділ кнопками нижче 👇", is_admin=is_admin)
         return True
 
-    # Cart buttons (✅ Оформити / 🧹 Очистити) — делегуємо в user_cart.py
-    handled_cart_btns = await handle_user_cart_message(
-        bot=bot,
-        tenant_id=tenant_id,
-        user_id=user_id,
-        chat_id=chat_id,
-        text=text,
-    )
-    if handled_cart_btns:
-        return True
-
     if text == _normalize_text(BTN_CATALOG):
         await _send_categories_menu(bot, chat_id, tenant_id, is_admin=is_admin)
         return True
 
     if text == _normalize_text(BTN_CART):
-        await send_user_cart(bot, chat_id, tenant_id, user_id)
+        await send_cart(bot, chat_id, tenant_id, user_id)
         return True
+
+    # Cart actions via reply keyboard (NEW)
+    if text in (_normalize_text(BTN_CLEAR_CART), _normalize_text(BTN_CHECKOUT)):
+        handled = await handle_cart_message(
+            bot=bot,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            chat_id=chat_id,
+            text=text,
+        )
+        return bool(handled)
 
     if text == _normalize_text(BTN_ORDERS):
         await _send_orders(bot, chat_id, tenant_id, user_id, is_admin=is_admin)
