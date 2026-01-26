@@ -143,21 +143,38 @@ async def _build_product_card(tenant_id: str, product_id: int, *, category_id: i
     if not p:
         return None
 
+    now = int(time.time())
+
     pid = int(p["id"])
     name = str(p["name"])
-    price = int(p.get("price_kop") or 0)
+    base_price = int(p.get("price_kop") or 0)
     desc = (p.get("description") or "").strip()
+
+    promo_on = _promo_active(p, now)
+    promo_price = int(p.get("promo_price_kop") or 0)
+    promo_until = int(p.get("promo_until_ts") or 0)
+    effective_price = _effective_price_kop(p, now)
 
     prev_p = await ProductsRepo.get_prev_active(tenant_id, pid, category_id=category_id)
     next_p = await ProductsRepo.get_next_active(tenant_id, pid, category_id=category_id)
 
     cover_file_id = await ProductsRepo.get_cover_photo_file_id(tenant_id, pid)
 
-    text = (
-        f"🛍 *{name}*\n\n"
-        f"Ціна: *{_fmt_money(price)}*\n"
-        f"ID: `{pid}`"
-    )
+    text = f"🛍 *{name}*\n\n"
+
+    if promo_on:
+        until_txt = "без кінця" if promo_until == 0 else _fmt_dt(promo_until)
+        text += (
+            f"🔥 *АКЦІЯ!*\n"
+            f"Було: {_fmt_money(base_price)}\n"
+            f"Зараз: *{_fmt_money(effective_price)}*\n"
+            f"До: {until_txt}\n"
+        )
+    else:
+        text += f"Ціна: *{_fmt_money(base_price)}*\n"
+
+    text += f"ID: `{pid}`"
+
     if desc:
         text += f"\n\n{desc}"
 
@@ -175,79 +192,7 @@ async def _build_product_card(tenant_id: str, product_id: int, *, category_id: i
         "text": text,
         "kb": kb,
     }
-
-
-async def _send_first_product_card(
-    bot: Bot,
-    chat_id: int,
-    tenant_id: str,
-    *,
-    is_admin: bool,
-    category_id: int | None,
-) -> None:
-    p = await ProductsRepo.get_first_active(tenant_id, category_id=category_id)
-    if not p:
-        await bot.send_message(
-            chat_id,
-            "🛍 *Каталог*\n\nПоки що немає товарів у цій категорії.",
-            parse_mode="Markdown",
-        )
-        await _send_categories_menu(bot, chat_id, tenant_id, is_admin=is_admin)
-        return
-
-    card = await _build_product_card(tenant_id, int(p["id"]), category_id=category_id)
-    if not card:
-        await bot.send_message(chat_id, "🛍 Каталог поки що порожній.")
-        return
-
-    if card["has_photo"]:
-        await bot.send_photo(
-            chat_id,
-            photo=card["file_id"],
-            caption=card["text"],
-            parse_mode="Markdown",
-            reply_markup=card["kb"],
-        )
-    else:
-        await bot.send_message(
-            chat_id,
-            card["text"],
-            parse_mode="Markdown",
-            reply_markup=card["kb"],
-        )
-
-
-async def _edit_product_card(
-    bot: Bot,
-    chat_id: int,
-    message_id: int,
-    tenant_id: str,
-    product_id: int,
-    *,
-    category_id: int | None,
-) -> bool:
-    card = await _build_product_card(tenant_id, product_id, category_id=category_id)
-    if not card:
-        return False
-
-    if card["has_photo"]:
-        media = InputMediaPhoto(media=card["file_id"], caption=card["text"], parse_mode="Markdown")
-        await bot.edit_message_media(
-            media=media,
-            chat_id=chat_id,
-            message_id=message_id,
-            reply_markup=card["kb"],
-        )
-    else:
-        await bot.edit_message_text(
-            card["text"],
-            chat_id=chat_id,
-            message_id=message_id,
-            parse_mode="Markdown",
-            reply_markup=card["kb"],
-        )
-    return True
-
+    
 
 # ---------- Cart rendering ----------
 
