@@ -12,10 +12,11 @@ from rent_platform.modules.telegram_shop.admin import admin_handle_update, is_ad
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
 from rent_platform.modules.telegram_shop.repo.cart import TelegramShopCartRepo
 from rent_platform.modules.telegram_shop.repo.orders import TelegramShopOrdersRepo
+from rent_platform.modules.telegram_shop.repo.favorites import TelegramShopFavoritesRepo
+
 from rent_platform.modules.telegram_shop.ui.user_kb import (
     main_menu_kb,
     catalog_kb,
-    cart_kb,
     favorites_kb,
     orders_history_kb,
     support_kb,
@@ -39,6 +40,10 @@ from rent_platform.modules.telegram_shop.user_cart import (
     handle_cart_message,
     handle_cart_callback,
 )
+from rent_platform.modules.telegram_shop.user_favorites import (
+    send_favorites,
+    handle_favorites_callback,
+)
 
 try:
     from rent_platform.modules.telegram_shop.repo.categories import CategoriesRepo  # type: ignore
@@ -48,9 +53,6 @@ except Exception:  # pragma: no cover
 log = logging.getLogger(__name__)
 
 
-# =========================================================
-# basic helpers
-# =========================================================
 def _extract_message(update: dict) -> dict | None:
     return update.get("message") or update.get("edited_message")
 
@@ -92,51 +94,12 @@ def _effective_price_kop(p: dict[str, Any], now: int) -> int:
     return int(p.get("promo_price_kop") or 0) if _promo_active(p, now) else int(p.get("price_kop") or 0)
 
 
-def _kb(rows: list[list[tuple[str, str]]]) -> dict:
-    return {"inline_keyboard": [[{"text": t, "callback_data": d} for (t, d) in row] for row in rows]}
-
-
-def _scope_product_kb(scope: str, *, product_id: int, has_prev: bool, has_next: bool, category_id: int | None) -> dict:
-    """
-    scope:
-      "cat"   - звичайний каталог (використовуємо product_card_kb з inline_kb)
-      "promo" - акції
-      "hit"   - хіти
-    """
-    cid = int(category_id or 0)
-
-    if scope == "cat":
-        return product_card_kb(
-            product_id=product_id,
-            has_prev=has_prev,
-            has_next=has_next,
-            category_id=category_id,
-        )
-
-    # scoped prev/next — щоб не стрибало в звичайний каталог
-    prev_action = "pprev" if scope == "promo" else "hprev"
-    next_action = "pnext" if scope == "promo" else "hnext"
-    cats_action = "pcats" if scope == "promo" else "hcats"
-
-    nav_row: list[tuple[str, str]] = [
-        ("⬅️", f"tgshop:{prev_action}:{product_id}:{cid}") if has_prev else ("·", "tgshop:noop:0:0"),
-        ("➡️", f"tgshop:{next_action}:{product_id}:{cid}") if has_next else ("·", "tgshop:noop:0:0"),
-    ]
-
-    return _kb([
-        nav_row,
-        [("🛒 Додати", f"tgshop:add:{product_id}:{cid}"), ("⭐", f"tgshop:fav:{product_id}:{cid}")],
-        [("📁 Категорії", f"tgshop:{cats_action}:0:0")],
-    ])
-
-
 async def _send_menu(bot: Bot, chat_id: int, text: str, *, is_admin: bool) -> None:
     await bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=main_menu_kb(is_admin=is_admin))
 
 
-# =========================================================
-# Catalog categories
-# =========================================================
+# ---------- Catalog categories ----------
+
 async def _send_categories_menu(bot: Bot, chat_id: int, tenant_id: str, *, is_admin: bool) -> None:
     if CategoriesRepo is None:
         await bot.send_message(
@@ -170,91 +133,9 @@ async def _send_categories_menu(bot: Bot, chat_id: int, tenant_id: str, *, is_ad
     )
 
 
-# =========================================================
-# Hits / Promos menus (categories filtered)
-# =========================================================
-async def _send_hits_promos_entry(bot: Bot, chat_id: int, *, is_admin: bool) -> None:
-    kb = _kb([
-        [("🔥 Акції", "tgshop:pcats:0:0"), ("⭐ Хіти", "tgshop:hcats:0:0")],
-    ])
-    await bot.send_message(
-        chat_id,
-        "🔥 *Хіти / Акції*\n\n"
-        "Обери режим 👇\n\n"
-        "• *Акції* — товари з активною знижкою 🔥\n"
-        "• *Хіти* — добірка найкращих товарів ✨\n",
-        parse_mode="Markdown",
-        reply_markup=kb,
-    )
+# ---------- Product card rendering ----------
 
-
-async def _send_scope_categories(bot: Bot, chat_id: int, tenant_id: str, *, scope: str) -> None:
-    """
-    scope: "promo" | "hit"
-    показує лише ті категорії, де є контент
-    """
-    if CategoriesRepo is None:
-        await bot.send_message(
-            chat_id,
-            "🔥 *Хіти / Акції*\n\nКатегорії ще не підключені.",
-            parse_mode="Markdown",
-        )
-        return
-
-    await CategoriesRepo.ensure_default(tenant_id)  # type: ignore[misc]
-
-    # беремо public категорії і фільтруємо по ids, які реально мають контент
-    cats_all = await CategoriesRepo.list_public(tenant_id, limit=100)  # type: ignore[misc]
-    ids_set: set[int]
-
-    if scope == "promo":
-        ids = await ProductsRepo.list_promo_category_ids(tenant_id)
-        ids_set = set(ids)
-        title = "🔥 *Акції*"
-        empty_txt = "Немає акційних товарів 😅"
-        action = "pcat"
-    else:
-        ids = await ProductsRepo.list_hit_category_ids(tenant_id)
-        ids_set = set(ids)
-        title = "⭐ *Хіти*"
-        empty_txt = "Немає хітів 😅"
-        action = "hcat"
-
-    cats = [c for c in (cats_all or []) if int(c.get("id") or 0) in ids_set]
-
-    if not cats:
-        await bot.send_message(chat_id, f"{title}\n\n{empty_txt}", parse_mode="Markdown")
-        return
-
-    rows: list[list[tuple[str, str]]] = []
-    for c in cats:
-        cid = int(c["id"])
-        name = str(c.get("name") or "").strip()
-        if not name:
-            continue
-        rows.append([(f"📁 {name}", f"tgshop:{action}:0:{cid}")])
-
-    # назад до вибору режиму
-    rows.append([("⬅️ Назад", "tgshop:hp:0:0")])
-
-    await bot.send_message(
-        chat_id,
-        f"{title}\n\nОбери категорію 👇",
-        parse_mode="Markdown",
-        reply_markup=_kb(rows),
-    )
-
-
-# =========================================================
-# Product card rendering (catalog / promo / hit)
-# =========================================================
-async def _build_product_card(
-    tenant_id: str,
-    product_id: int,
-    *,
-    category_id: int | None,
-    scope: str,  # "cat" | "promo" | "hit"
-) -> dict | None:
+async def _build_product_card(tenant_id: str, product_id: int, *, category_id: int | None) -> dict | None:
     p = await ProductsRepo.get_active(tenant_id, product_id)
     if not p:
         return None
@@ -270,27 +151,12 @@ async def _build_product_card(
     promo_until = int(p.get("promo_until_ts") or 0)
     effective_price = _effective_price_kop(p, now)
 
-    # prev/next залежить від scope
-    if scope == "cat":
-        prev_p = await ProductsRepo.get_prev_active(tenant_id, pid, category_id=category_id)
-        next_p = await ProductsRepo.get_next_active(tenant_id, pid, category_id=category_id)
-    elif scope == "promo":
-        prev_p = await ProductsRepo.get_prev_promo_active(tenant_id, pid, category_id=category_id)
-        next_p = await ProductsRepo.get_next_promo_active(tenant_id, pid, category_id=category_id)
-    else:  # hit
-        prev_p = await ProductsRepo.get_prev_hit_active(tenant_id, pid, category_id=category_id)
-        next_p = await ProductsRepo.get_next_hit_active(tenant_id, pid, category_id=category_id)
+    prev_p = await ProductsRepo.get_prev_active(tenant_id, pid, category_id=category_id)
+    next_p = await ProductsRepo.get_next_active(tenant_id, pid, category_id=category_id)
 
     cover_file_id = await ProductsRepo.get_cover_photo_file_id(tenant_id, pid)
 
-    # Заголовок з бейджем режиму
-    badge = ""
-    if scope == "promo":
-        badge = "🔥 "
-    elif scope == "hit":
-        badge = "⭐ "
-
-    text = f"{badge}🛍 *{name}*\n\n"
+    text = f"🛍 *{name}*\n\n"
 
     if promo_on:
         until_txt = "без кінця" if promo_until == 0 else _fmt_dt(promo_until)
@@ -307,8 +173,7 @@ async def _build_product_card(
     if desc:
         text += f"\n\n{desc}"
 
-    kb = _scope_product_kb(
-        scope=scope,
+    kb = product_card_kb(
         product_id=pid,
         has_prev=bool(prev_p),
         has_next=bool(next_p),
@@ -331,35 +196,20 @@ async def _send_first_product_card(
     *,
     is_admin: bool,
     category_id: int | None,
-    scope: str,  # "cat" | "promo" | "hit"
 ) -> None:
-    # беремо перший товар залежно від режиму
-    if scope == "cat":
-        first = await ProductsRepo.get_first_active(tenant_id, category_id=category_id)
-    elif scope == "promo":
-        first = await ProductsRepo.get_first_promo_active(tenant_id, category_id=category_id)
-    else:
-        first = await ProductsRepo.get_first_hit_active(tenant_id, category_id=category_id)
-
-    if not first:
-        if scope == "cat":
-            await bot.send_message(
-                chat_id,
-                "🛍 *Каталог*\n\nПоки що немає товарів у цій категорії.",
-                parse_mode="Markdown",
-            )
-            await _send_categories_menu(bot, chat_id, tenant_id, is_admin=is_admin)
-        elif scope == "promo":
-            await bot.send_message(chat_id, "🔥 *Акції*\n\nУ цій категорії немає акційних товарів.", parse_mode="Markdown")
-            await _send_scope_categories(bot, chat_id, tenant_id, scope="promo")
-        else:
-            await bot.send_message(chat_id, "⭐ *Хіти*\n\nУ цій категорії немає хітів.", parse_mode="Markdown")
-            await _send_scope_categories(bot, chat_id, tenant_id, scope="hit")
+    p = await ProductsRepo.get_first_active(tenant_id, category_id=category_id)
+    if not p:
+        await bot.send_message(
+            chat_id,
+            "🛍 *Каталог*\n\nПоки що немає товарів у цій категорії.",
+            parse_mode="Markdown",
+        )
+        await _send_categories_menu(bot, chat_id, tenant_id, is_admin=is_admin)
         return
 
-    card = await _build_product_card(tenant_id, int(first["id"]), category_id=category_id, scope=scope)
+    card = await _build_product_card(tenant_id, int(p["id"]), category_id=category_id)
     if not card:
-        await bot.send_message(chat_id, "Поки що порожньо 😅", parse_mode="Markdown")
+        await bot.send_message(chat_id, "🛍 Каталог поки що порожній.")
         return
 
     if card["has_photo"]:
@@ -387,9 +237,8 @@ async def _edit_product_card(
     product_id: int,
     *,
     category_id: int | None,
-    scope: str,  # "cat" | "promo" | "hit"
 ) -> bool:
-    card = await _build_product_card(tenant_id, product_id, category_id=category_id, scope=scope)
+    card = await _build_product_card(tenant_id, product_id, category_id=category_id)
     if not card:
         return False
 
@@ -412,9 +261,6 @@ async def _edit_product_card(
     return True
 
 
-# =========================================================
-# Orders
-# =========================================================
 async def _send_orders(bot: Bot, chat_id: int, tenant_id: str, user_id: int, *, is_admin: bool) -> None:
     orders = await TelegramShopOrdersRepo.list_orders(tenant_id, user_id, limit=20)
     if not orders:
@@ -436,9 +282,8 @@ async def _send_orders(bot: Bot, chat_id: int, tenant_id: str, user_id: int, *, 
     await bot.send_message(chat_id, "\n".join(lines), parse_mode="Markdown", reply_markup=orders_history_kb(is_admin=is_admin))
 
 
-# =========================================================
-# Main entry
-# =========================================================
+# ---------- Main entry ----------
+
 async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
     tenant_id = str(tenant["id"])
 
@@ -452,7 +297,7 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         cb_id = cb.get("id")
         msg_id = int(cb["message"]["message_id"])
 
-        # 1) Admin callbacks first
+        # Admin callbacks first
         if payload.startswith("tgadm:"):
             if not is_admin:
                 if cb_id:
@@ -461,7 +306,7 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
             handled = await admin_handle_update(tenant=tenant, data=data, bot=bot)
             return bool(handled)
 
-        # 2) Cart callbacks
+        # Cart callbacks
         if payload.startswith("tgcart:"):
             handled = await handle_cart_callback(
                 bot=bot,
@@ -475,62 +320,43 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
                 await bot.answer_callback_query(cb_id)
             return bool(handled)
 
-        # 3) Shop callbacks
+        # Favorites callbacks
+        if payload.startswith("tgfav:"):
+            handled = await handle_favorites_callback(
+                bot=bot,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                chat_id=chat_id,
+                message_id=msg_id,
+                payload=payload,
+            )
+            if cb_id:
+                await bot.answer_callback_query(cb_id)
+            return bool(handled)
+
+        # Shop callbacks
         if not payload.startswith("tgshop:"):
             return False
 
         parts = payload.split(":")
         action = parts[1] if len(parts) > 1 else ""
         pid = int(parts[2]) if len(parts) > 2 and str(parts[2]).isdigit() else 0
+
         cid_raw = parts[3] if len(parts) > 3 else "0"
         cid = int(cid_raw) if str(cid_raw).isdigit() else 0
         category_id = cid if cid > 0 else None
 
-        # common noop
         if action == "noop":
             if cb_id:
                 await bot.answer_callback_query(cb_id, text="•", show_alert=False)
             return True
 
-        # ---- Hits/Promos entry + categories
-        if action == "hp":
-            await _send_hits_promos_entry(bot, chat_id, is_admin=is_admin)
-            if cb_id:
-                await bot.answer_callback_query(cb_id)
-            return True
-
-        if action == "pcats":
-            await _send_scope_categories(bot, chat_id, tenant_id, scope="promo")
-            if cb_id:
-                await bot.answer_callback_query(cb_id)
-            return True
-
-        if action == "hcats":
-            await _send_scope_categories(bot, chat_id, tenant_id, scope="hit")
-            if cb_id:
-                await bot.answer_callback_query(cb_id)
-            return True
-
-        if action == "pcat":
-            await _send_first_product_card(bot, chat_id, tenant_id, is_admin=is_admin, category_id=category_id, scope="promo")
-            if cb_id:
-                await bot.answer_callback_query(cb_id)
-            return True
-
-        if action == "hcat":
-            await _send_first_product_card(bot, chat_id, tenant_id, is_admin=is_admin, category_id=category_id, scope="hit")
-            if cb_id:
-                await bot.answer_callback_query(cb_id)
-            return True
-
-        # ---- Catalog category open
         if action == "cat":
-            await _send_first_product_card(bot, chat_id, tenant_id, is_admin=is_admin, category_id=category_id, scope="cat")
+            await _send_first_product_card(bot, chat_id, tenant_id, is_admin=is_admin, category_id=category_id)
             if cb_id:
                 await bot.answer_callback_query(cb_id)
             return True
 
-        # ---- Add/fav (same for all scopes)
         if action == "add" and pid > 0:
             await TelegramShopCartRepo.cart_inc(tenant_id, user_id, pid, 1)
             if cb_id:
@@ -538,18 +364,22 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
             return True
 
         if action == "fav" and pid > 0:
+            added = await TelegramShopFavoritesRepo.toggle(tenant_id, user_id, pid)
             if cb_id:
-                await bot.answer_callback_query(cb_id, text="⭐ Додано в обране (скоро буде логіка)", show_alert=False)
+                await bot.answer_callback_query(
+                    cb_id,
+                    text=("⭐ Додано в обране" if added else "🗑 Прибрано з обраного"),
+                    show_alert=False,
+                )
             return True
 
-        # ---- Catalog prev/next
         if action == "prev" and pid > 0:
             p = await ProductsRepo.get_prev_active(tenant_id, pid, category_id=category_id)
             if not p:
                 if cb_id:
                     await bot.answer_callback_query(cb_id, text="•", show_alert=False)
                 return True
-            await _edit_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]), category_id=category_id, scope="cat")
+            await _edit_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]), category_id=category_id)
             if cb_id:
                 await bot.answer_callback_query(cb_id)
             return True
@@ -560,53 +390,7 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
                 if cb_id:
                     await bot.answer_callback_query(cb_id, text="•", show_alert=False)
                 return True
-            await _edit_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]), category_id=category_id, scope="cat")
-            if cb_id:
-                await bot.answer_callback_query(cb_id)
-            return True
-
-        # ---- Promo prev/next
-        if action == "pprev" and pid > 0:
-            p = await ProductsRepo.get_prev_promo_active(tenant_id, pid, category_id=category_id)
-            if not p:
-                if cb_id:
-                    await bot.answer_callback_query(cb_id, text="•", show_alert=False)
-                return True
-            await _edit_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]), category_id=category_id, scope="promo")
-            if cb_id:
-                await bot.answer_callback_query(cb_id)
-            return True
-
-        if action == "pnext" and pid > 0:
-            p = await ProductsRepo.get_next_promo_active(tenant_id, pid, category_id=category_id)
-            if not p:
-                if cb_id:
-                    await bot.answer_callback_query(cb_id, text="•", show_alert=False)
-                return True
-            await _edit_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]), category_id=category_id, scope="promo")
-            if cb_id:
-                await bot.answer_callback_query(cb_id)
-            return True
-
-        # ---- Hit prev/next
-        if action == "hprev" and pid > 0:
-            p = await ProductsRepo.get_prev_hit_active(tenant_id, pid, category_id=category_id)
-            if not p:
-                if cb_id:
-                    await bot.answer_callback_query(cb_id, text="•", show_alert=False)
-                return True
-            await _edit_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]), category_id=category_id, scope="hit")
-            if cb_id:
-                await bot.answer_callback_query(cb_id)
-            return True
-
-        if action == "hnext" and pid > 0:
-            p = await ProductsRepo.get_next_hit_active(tenant_id, pid, category_id=category_id)
-            if not p:
-                if cb_id:
-                    await bot.answer_callback_query(cb_id, text="•", show_alert=False)
-                return True
-            await _edit_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]), category_id=category_id, scope="hit")
+            await _edit_product_card(bot, chat_id, msg_id, tenant_id, int(p["id"]), category_id=category_id)
             if cb_id:
                 await bot.answer_callback_query(cb_id)
             return True
@@ -659,20 +443,20 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         )
         return bool(handled)
 
+    if text == _normalize_text(BTN_FAV):
+        await send_favorites(bot, chat_id, tenant_id, user_id, is_admin=is_admin)
+        return True
+
     if text == _normalize_text(BTN_ORDERS):
         await _send_orders(bot, chat_id, tenant_id, user_id, is_admin=is_admin)
         return True
 
     if text == _normalize_text(BTN_HITS):
-        await _send_hits_promos_entry(bot, chat_id, is_admin=is_admin)
-        return True
-
-    if text == _normalize_text(BTN_FAV):
         await bot.send_message(
             chat_id,
-            "⭐ *Обране*\n\nПоки що в розробці (гачок готовий).",
+            "🔥 *Хіти / Акції*\n\nПоки що в розробці (гачок готовий).",
             parse_mode="Markdown",
-            reply_markup=favorites_kb(is_admin=is_admin),
+            reply_markup=catalog_kb(is_admin=is_admin),
         )
         return True
 
