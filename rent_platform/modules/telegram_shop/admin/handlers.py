@@ -7,7 +7,7 @@ from typing import Any
 from aiogram import Bot
 from aiogram.types import InputMediaPhoto
 
-from rent_platform.db.session import db_fetch_all, db_fetch_one, db_execute
+from rent_platform.db.session import db_fetch_all, db_fetch_one, db_execute  # noqa: F401
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
 
 # CategoriesRepo optional (if file exists)
@@ -276,10 +276,10 @@ def _wiz_nav_kb(*, allow_skip: bool = False) -> dict:
     return _kb([row])
 
 
-def _wiz_promo_ask_kb() -> dict:
+def _wiz_promo_kb() -> dict:
     return _kb(
         [
-            [("🔥 Так, буде акція", "tgadm:wiz_promo_yes"), ("➡️ Ні", "tgadm:wiz_promo_no")],
+            [("🚫 Не буде акції", "tgadm:wiz_no_promo")],
             [("❌ Скасувати", "tgadm:cancel")],
         ]
     )
@@ -731,7 +731,7 @@ async def _edit_admin_product_card(bot: Bot, chat_id: int, message_id: int, tena
 
 # ============================================================
 # Wizard: create product
-# name -> sku -> price -> (promo? -> promo_price -> promo_until) -> desc -> category -> photos
+# name -> sku -> price -> promo_price (or no promo) -> desc -> category -> photos
 # ============================================================
 async def _wiz_ask_name(bot: Bot, chat_id: int, tenant_id: str) -> None:
     _state_set(tenant_id, chat_id, {"mode": "wiz_name", "draft": {}})
@@ -763,33 +763,13 @@ async def _wiz_ask_price(bot: Bot, chat_id: int, tenant_id: str, draft: dict) ->
     )
 
 
-async def _wiz_ask_promo_ask(bot: Bot, chat_id: int, tenant_id: str, draft: dict) -> None:
-    _state_set(tenant_id, chat_id, {"mode": "wiz_promo_ask", "draft": draft})
-    await bot.send_message(
-        chat_id,
-        "4/6 🔥 *Акція*\n\nЧи буде *акційна ціна* для цього товару?",
-        parse_mode="Markdown",
-        reply_markup=_wiz_promo_ask_kb(),
-    )
-
-
 async def _wiz_ask_promo_price(bot: Bot, chat_id: int, tenant_id: str, draft: dict) -> None:
     _state_set(tenant_id, chat_id, {"mode": "wiz_promo_price", "draft": draft})
     await bot.send_message(
         chat_id,
-        "🔥 Введи *ціну акції* (наприклад `999.99`):",
+        "4/6 *Акційна ціна*\n\nВведи *акційну ціну* (наприклад `999.99`) або натисни кнопку нижче 👇",
         parse_mode="Markdown",
-        reply_markup=_wiz_nav_kb(),
-    )
-
-
-async def _wiz_ask_promo_until(bot: Bot, chat_id: int, tenant_id: str, draft: dict) -> None:
-    _state_set(tenant_id, chat_id, {"mode": "wiz_promo_until", "draft": draft})
-    await bot.send_message(
-        chat_id,
-        "⏰ Введи *дату завершення* у форматі `DD.MM.YYYY HH:MM` або `0` (без кінця):",
-        parse_mode="Markdown",
-        reply_markup=_wiz_nav_kb(),
+        reply_markup=_wiz_promo_kb(),
     )
 
 
@@ -837,6 +817,7 @@ async def _wiz_create_product(tenant_id: str, draft: dict) -> int | None:
     elif category_id is not None and not isinstance(category_id, int):
         category_id = None
 
+    # IMPORTANT: ProductsRepo.add(...) має приймати sku=...
     pid = await ProductsRepo.add(tenant_id, name, price_kop, is_active=True, category_id=category_id, sku=sku)  # type: ignore[arg-type]
     if not pid:
         return None
@@ -847,7 +828,7 @@ async def _wiz_create_product(tenant_id: str, draft: dict) -> int | None:
         await ProductsRepo.set_description(tenant_id, pid_i, desc)
 
     promo_price_kop = int(draft.get("promo_price_kop") or 0)
-    promo_until_ts = int(draft.get("promo_until_ts") or 0)
+    promo_until_ts = int(draft.get("promo_until_ts") or 0)  # для створення ставимо 0
     if promo_price_kop > 0:
         await ProductsRepo.set_promo(tenant_id, pid_i, promo_price_kop, promo_until_ts)
 
@@ -869,7 +850,7 @@ async def _wiz_photos_start(bot: Bot, chat_id: int, tenant_id: str, product_id: 
     _state_set(tenant_id, chat_id, {"mode": "wiz_photo", "product_id": int(product_id)})
     await bot.send_message(
         chat_id,
-        f"📷 Фото для товару *#{product_id}*\n\n6/6 Надсилай фото (можна кілька).",
+        f"📷 Фото для товару *#{product_id}*\n\nНадсилай фото (можна кілька).",
         parse_mode="Markdown",
         reply_markup=_wiz_photos_kb(product_id=product_id),
     )
@@ -930,6 +911,15 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
         if action == "cat_menu":
             _state_clear(tenant_id, chat_id)
             await _send_categories_menu(bot, chat_id, tenant_id)
+            return True
+
+        # Wizard: promo quick button (no promo)
+        if action == "wiz_no_promo":
+            st = _state_get(tenant_id, chat_id) or {}
+            draft = st.get("draft") or {}
+            draft["promo_price_kop"] = 0
+            draft["promo_until_ts"] = 0
+            await _wiz_ask_desc(bot, chat_id, tenant_id, draft)
             return True
 
         # settings toggles
@@ -1079,20 +1069,6 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
         # Wizard create product
         if action == "wiz_start":
             await _wiz_ask_name(bot, chat_id, tenant_id)
-            return True
-
-        if action == "wiz_promo_yes":
-            st = _state_get(tenant_id, chat_id) or {}
-            draft = st.get("draft") or {}
-            await _wiz_ask_promo_price(bot, chat_id, tenant_id, draft)
-            return True
-
-        if action == "wiz_promo_no":
-            st = _state_get(tenant_id, chat_id) or {}
-            draft = st.get("draft") or {}
-            draft["promo_price_kop"] = 0
-            draft["promo_until_ts"] = 0
-            await _wiz_ask_desc(bot, chat_id, tenant_id, draft)
             return True
 
         if action == "wiz_cat":
@@ -1397,26 +1373,36 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             return True
         draft = st.get("draft") or {}
         draft["price_kop"] = int(price_kop)
-        await _wiz_ask_promo_ask(bot, chat_id, tenant_id, draft)
+        await _wiz_ask_promo_price(bot, chat_id, tenant_id, draft)
         return True
 
     if mode == "wiz_promo_price":
         promo_kop = _parse_price_to_kop(text)
         if promo_kop is None or promo_kop <= 0:
-            await bot.send_message(chat_id, "Ціна не розпізнана. Приклад: `999.99` або `999`", parse_mode="Markdown")
+            await bot.send_message(
+                chat_id,
+                "Акційна ціна не розпізнана. Приклад: `999.99` або натисни *Не буде акції*.",
+                parse_mode="Markdown",
+                reply_markup=_wiz_promo_kb(),
+            )
             return True
-        draft = st.get("draft") or {}
-        draft["promo_price_kop"] = int(promo_kop)
-        await _wiz_ask_promo_until(bot, chat_id, tenant_id, draft)
-        return True
 
-    if mode == "wiz_promo_until":
-        until_ts = _parse_dt_to_ts(text)
-        if until_ts is None:
-            await bot.send_message(chat_id, "Дата не розпізнана. Формат: `DD.MM.YYYY HH:MM` або `0`", parse_mode="Markdown")
-            return True
         draft = st.get("draft") or {}
-        draft["promo_until_ts"] = int(until_ts)
+        base_kop = int(draft.get("price_kop") or 0)
+
+        # щоб акція була дешевша
+        if base_kop > 0 and int(promo_kop) >= base_kop:
+            await bot.send_message(
+                chat_id,
+                "Акційна ціна має бути *менша* за звичайну.\n"
+                f"Звичайна: `{_fmt_money(base_kop)}`",
+                parse_mode="Markdown",
+                reply_markup=_wiz_promo_kb(),
+            )
+            return True
+
+        draft["promo_price_kop"] = int(promo_kop)
+        draft["promo_until_ts"] = 0  # при створенні: без кінця (можна потім змінити в Акціях)
         await _wiz_ask_desc(bot, chat_id, tenant_id, draft)
         return True
 
@@ -1510,7 +1496,7 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             await _send_admin_category_first_product(bot, chat_id, tenant_id, cid)
         return True
 
-    # PROMOS: wizard
+    # PROMOS: wizard (manual add promo by product id)
     if mode == "promo_pick_id":
         if not text.isdigit():
             await bot.send_message(chat_id, "Надішли тільки цифру ID товару.", reply_markup=_wiz_nav_kb())
