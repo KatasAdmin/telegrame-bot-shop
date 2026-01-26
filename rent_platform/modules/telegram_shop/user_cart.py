@@ -65,40 +65,31 @@ async def _get_cart_item(tenant_id: str, user_id: int, product_id: int) -> dict[
 def _build_item_caption(it: dict[str, Any]) -> str:
     name = _html_escape(str(it.get("name") or ""))
     qty = int(it.get("qty") or 0)
-
     eff = int(it.get("price_kop") or 0)
     base = int(it.get("base_price_kop") or eff)
+    promo_on = bool(it.get("promo_active"))
 
-    unit_txt = _fmt_money(eff)
     total_txt = _fmt_money(eff * qty)
 
-    text = f"<b>{name}</b>\n\n"
+    text = f"🛍 <b>{name}</b>\n\n"
     text += f"К-сть: <b>{qty}</b>\n"
 
-    if base > eff:
-        text += f"Ціна: <s>{_fmt_money(base)}</s>  <b>{unit_txt}</b>\n"
+    if promo_on and base > eff:
+        text += f"Ціна: <s>{_fmt_money(base)}</s>  <b>{_fmt_money(eff)}</b> 🔥\n"
         saved = (base - eff) * qty
         if saved > 0:
-            text += f"Зекономлено: <b>{_fmt_money(saved)}</b> 🔥\n"
+            text += f"Зекономлено: <b>{_fmt_money(saved)}</b> ✨\n"
     else:
-        text += f"Ціна: <b>{unit_txt}</b>\n"
+        text += f"Ціна: <b>{_fmt_money(eff)}</b>\n"
 
-    text += f"\nСума: <b>{total_txt}</b>"
+    text += f"\nСума: <b>{total_txt}</b> ✅"
     return text
 
 
 # -------------------------
 # public API
 # -------------------------
-async def send_cart(
-    bot: Bot,
-    chat_id: int,
-    tenant_id: str,
-    user_id: int,
-    *,
-    extra_text: str = "",
-    show_actions: bool = True,
-) -> None:
+async def send_cart(bot: Bot, chat_id: int, tenant_id: str, user_id: int, *, extra_text: str = "") -> None:
     items = await TelegramShopCartRepo.cart_list(tenant_id, user_id)
 
     if not items:
@@ -106,7 +97,7 @@ async def send_cart(
             chat_id,
             "🛒 <b>Кошик</b>\n\nПоки що порожньо.",
             parse_mode="HTML",
-            reply_markup=(cart_kb() if show_actions else None),
+            reply_markup=cart_kb(),
         )
         return
 
@@ -117,8 +108,10 @@ async def send_cart(
     for it in items:
         name = _html_escape(str(it.get("name") or ""))
         qty = int(it.get("qty") or 0)
-        eff = int(it.get("price_kop") or 0)
-        base = int(it.get("base_price_kop") or eff)
+
+        eff = int(it.get("price_kop") or 0)                 # effective
+        base = int(it.get("base_price_kop") or eff)         # base
+        promo_on = bool(it.get("promo_active"))
 
         line_total = eff * qty
         total_kop += line_total
@@ -126,32 +119,49 @@ async def send_cart(
         if base > eff:
             saved_kop += (base - eff) * qty
 
-        lines.append(f"• {name} ×{qty} — <b>{_fmt_money(line_total)}</b>")
+        # красивий рядок
+        if promo_on and base > eff:
+            lines.append(
+                "• <b>{name}</b> ×{qty}\n"
+                "  💸 <s>{base}</s>  <b>{eff}</b>  →  <b>{sum}</b> 🔥".format(
+                    name=name,
+                    qty=qty,
+                    base=_fmt_money(base),
+                    eff=_fmt_money(eff),
+                    sum=_fmt_money(line_total),
+                )
+            )
+        else:
+            lines.append(
+                "• <b>{name}</b> ×{qty}\n"
+                "  💸 <b>{eff}</b>  →  <b>{sum}</b>".format(
+                    name=name,
+                    qty=qty,
+                    eff=_fmt_money(eff),
+                    sum=_fmt_money(line_total),
+                )
+            )
 
-    text = "🛒 <b>Кошик</b>\n\n" + "\n".join(lines)
-    text += f"\n\n<b>Разом:</b> {_fmt_money(total_kop)}"
+    text = "🛒 <b>Кошик</b>  ✨\n\n" + "\n".join(lines)
+    text += "\n\n──────────────"
+    text += f"\n<b>Разом:</b> <b>{_fmt_money(total_kop)}</b> ✅"
     if saved_kop > 0:
-        text += f"\n<b>Зекономлено:</b> {_fmt_money(saved_kop)} 🔥"
+        text += f"\n<b>Зекономлено:</b> <b>{_fmt_money(saved_kop)}</b> 🔥"
 
     if extra_text:
-        text += f"\n\n{_html_escape(extra_text)}"
+        text += f"\n\n<i>{_html_escape(extra_text)}</i>"
 
-    # 1) головне повідомлення: список + кнопки товарів
     await bot.send_message(
         chat_id,
         text,
         parse_mode="HTML",
         reply_markup=_cart_list_kb(items),
     )
-
-    # 2) один раз “прикріплюємо” ReplyKeyboard для дій кошика
-    if show_actions:
-        await bot.send_message(
-            chat_id,
-            "Дії кошика 👇",
-            reply_markup=cart_kb(),
-        )
-
+    await bot.send_message(
+        chat_id,
+        "Дії кошика 👇",
+        reply_markup=cart_kb(),
+    )
 
 async def handle_cart_message(
     *,
