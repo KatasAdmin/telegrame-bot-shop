@@ -1,114 +1,152 @@
 from __future__ import annotations
 
+import datetime as _dt
 from typing import Any
 
 
-def _kb(rows: list[list[tuple[str, str]]]) -> dict:
+def _kb(rows: list[list[tuple[str, str]]]) -> dict[str, Any]:
     return {"inline_keyboard": [[{"text": t, "callback_data": d} for (t, d) in row] for row in rows]}
 
 
-def catalog_categories_kb(
-    categories: list[dict[str, Any]],
+def _fmt_money(kop: int) -> str:
+    kop = int(kop or 0)
+    return f"{kop // 100}.{kop % 100:02d} грн"
+
+
+def _fmt_dt_short(ts: int) -> str:
+    ts = int(ts or 0)
+    if ts <= 0:
+        return "—"
+    return _dt.datetime.fromtimestamp(ts).strftime("%d.%m")
+
+
+
+def orders_list_kb(
+    orders: list[dict[str, Any]],
     *,
-    include_all: bool = False,
-) -> dict:
-    """
-    Inline-кнопки категорій для покупця.
-
-    include_all:
-      True  -> показує кнопку "🌐 Усі товари"
-      False -> ховає її (за замовчуванням, як ти просив)
-
-    ВАЖЛИВО:
-    - системні категорії з іменами "__..." ми тут ігноруємо
-    - "Без категорії" буде показуватись тільки якщо ти її зробив видимою (repo.categories.sort >= 0),
-      бо в роутері ми беремо CategoriesRepo.list_public().
-    """
-    rows: list[list[tuple[str, str]]] = []
-
-    if include_all:
-        rows.append([("🌐 Усі товари", "tgshop:cat:0:0")])
-
-    for c in categories:
-        name = str(c.get("name") or "")
-        if not name:
-            continue
-        if name.startswith("__"):
-            continue
-
-        cid = int(c["id"])
-        rows.append([(f"📁 {name}", f"tgshop:cat:0:{cid}")])
-
-    return _kb(rows)
-
-
-def product_card_kb(
-    *,
-    product_id: int,
+    page: int,
     has_prev: bool,
     has_next: bool,
-    category_id: int | None = None,
+    scope: str,
 ) -> dict:
     """
-    Inline на картці товару (покупець).
-
-    Повернення в список категорій/каталог:
-    - не робимо кнопки "Категорії" тут (ти просив),
-      користувач повертається через ReplyKeyboard кнопку "🛍 Каталог".
-    """
-    cid = int(category_id or 0)
-
-    nav_row: list[tuple[str, str]] = [
-        ("⬅️", f"tgshop:prev:{product_id}:{cid}") if has_prev else ("·", "tgshop:noop:0:0"),
-        ("➡️", f"tgshop:next:{product_id}:{cid}") if has_next else ("·", "tgshop:noop:0:0"),
-    ]
-
-    return _kb([
-        nav_row,
-        [("🛒 Додати", f"tgshop:add:{product_id}:{cid}"), ("⭐", f"tgshop:fav:{product_id}:{cid}")],
-    ])
-
-
-def cart_inline(items: list[dict[str, Any]]) -> dict:
-    """
-    Inline керування кошиком (qty ➖ ➕ 🗑).
+    Список замовлень + пагінація + перемикач Активні/Архів.
 
     callback_data:
-      tgshop:dec:<pid>:0
-      tgshop:inc:<pid>:0
-      tgshop:del:<pid>:0
-      tgshop:clear:0:0
-      tgshop:checkout:0:0
+      tgord:list:<page>:<scope>
+      tgord:open:<order_id>:<page>:<scope>
+      tgord:toggle_scope:<page>:<scope>
+
+    scope: "active" | "arch"
     """
+    scope = scope if scope in ("active", "arch") else "active"
+    page = max(0, int(page))
+
     rows: list[list[tuple[str, str]]] = []
 
-    for it in items:
-        pid = int(it["product_id"])
-        qty = int(it["qty"])
-        rows.append([
-            ("➖", f"tgshop:dec:{pid}:0"),
-            (f"{qty}", "tgshop:noop:0:0"),
-            ("➕", f"tgshop:inc:{pid}:0"),
-            ("🗑", f"tgshop:del:{pid}:0"),
-        ])
+    # Кнопки замовлень: "дата • сума"
+    for o in orders or []:
+        oid = int(o.get("id") or 0)
+        if oid <= 0:
+            continue
+        created = _fmt_dt_short(int(o.get("created_ts") or 0))
+        total = _fmt_money(int(o.get("total_kop") or 0))
+        rows.append([(f"📅 {created} • {total}", f"tgord:open:{oid}:{page}:{scope}")])
 
-    rows.append([("🧹 Очистити", "tgshop:clear:0:0"), ("✅ Оформити", "tgshop:checkout:0:0")])
+    # пагінація
+    nav: list[tuple[str, str]] = []
+    nav.append(("⬅️", f"tgord:list:{page - 1}:{scope}") if has_prev else ("·", f"tgord:list:{page}:{scope}"))
+    nav.append(("➡️", f"tgord:list:{page + 1}:{scope}") if has_next else ("·", f"tgord:list:{page}:{scope}"))
+    rows.append(nav)
+
+    # перемикач архів/активні
+    toggle_txt = "🗃 Архів" if scope == "active" else "🧾 Активні"
+    rows.append([(toggle_txt, f"tgord:toggle_scope:{page}:{scope}")])
+
     return _kb(rows)
 
 
-def favorites_card_kb(
+def order_detail_kb(
+    order_id: int,
     *,
-    product_id: int,
-    has_prev: bool,
-    has_next: bool,
+    is_archived: bool,
+    page: int,
+    scope: str,
+    items_count: int,
 ) -> dict:
-    nav_row: list[tuple[str, str]] = [
-        ("⬅️", f"tgfav:prev:{product_id}") if has_prev else ("·", "tgfav:noop"),
-        ("➡️", f"tgfav:next:{product_id}") if has_next else ("·", "tgfav:noop"),
-    ]
+    """
+    Деталка: товари + історія статусів + архів toggle + назад.
 
-    return _kb([
-        nav_row,
-        [("🛒 Додати", f"tgshop:add:{product_id}:0"), ("⭐ Прибрати", f"tgfav:rm:{product_id}")],
-        [("⬅️ До обраного", "tgfav:back")],
-    ])
+    callback_data:
+      tgord:items:<order_id>:<page>:<scope>
+      tgord:history:<order_id>:<page>:<scope>
+      tgord:arch:<order_id>:<page>:<scope>
+      tgord:list:<page>:<scope>
+    """
+    scope = scope if scope in ("active", "arch") else "active"
+    oid = int(order_id)
+    page = max(0, int(page))
+
+    arch_txt = "🧾 З архіву" if is_archived else "🗃 В архів"
+
+    return _kb(
+        [
+            [(f"📦 Товари ({int(items_count or 0)})", f"tgord:items:{oid}:{page}:{scope}")],
+            [("📜 Історія статусів", f"tgord:history:{oid}:{page}:{scope}")],
+            [(arch_txt, f"tgord:arch:{oid}:{page}:{scope}")],
+            [("⬅️ Назад", f"tgord:list:{page}:{scope}")],
+        ]
+    )
+
+
+def order_items_list_kb(order_id: int, items: list[dict[str, Any]], *, page: int, scope: str) -> dict:
+    """
+    Список товарів як кнопки, кожна веде на картку товару.
+
+    callback_data:
+      tgord:item:<order_id>:<product_id>:<page>:<scope>
+      tgord:open:<order_id>:<page>:<scope>
+      tgord:list:<page>:<scope>
+    """
+    scope = scope if scope in ("active", "arch") else "active"
+    oid = int(order_id)
+    page = max(0, int(page))
+
+    rows: list[list[tuple[str, str]]] = []
+    for it in items or []:
+        pid = int(it.get("product_id") or 0)
+        if pid <= 0:
+            continue
+        name = str(it.get("name") or f"Товар #{pid}")
+        qty = int(it.get("qty") or 0)
+        price_kop = int(it.get("price_kop") or 0)
+        sum_kop = price_kop * qty
+
+        rows.append([(f"{name} ×{qty} — {_fmt_money(sum_kop)}", f"tgord:item:{oid}:{pid}:{page}:{scope}")])
+
+    rows.append([("⬅️ До замовлення", f"tgord:open:{oid}:{page}:{scope}")])
+    rows.append([("⬅️ До списку", f"tgord:list:{page}:{scope}")])
+    return _kb(rows)
+
+
+def order_item_back_kb(order_id: int, *, page: int, scope: str) -> dict:
+    """
+    Назад з картки товару.
+    """
+    scope = scope if scope in ("active", "arch") else "active"
+    oid = int(order_id)
+    page = max(0, int(page))
+
+    return _kb(
+        [
+            [("⬅️ До товарів", f"tgord:items:{oid}:{page}:{scope}")],
+            [("⬅️ До замовлення", f"tgord:open:{oid}:{page}:{scope}")],
+        ]
+    )
+
+
+def order_history_back_kb(order_id: int, *, page: int, scope: str) -> dict:
+    scope = scope if scope in ("active", "arch") else "active"
+    oid = int(order_id)
+    page = max(0, int(page))
+    return _kb([[("⬅️ Назад", f"tgord:open:{oid}:{page}:{scope}")]])
