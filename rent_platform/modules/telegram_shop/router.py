@@ -9,6 +9,7 @@ from aiogram import Bot
 from aiogram.types import InputMediaPhoto
 
 from rent_platform.modules.telegram_shop.admin import admin_handle_update, is_admin_user
+from rent_platform.modules.telegram_shop.admin_orders import admin_orders_send_menu  # ✅ NEW
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
 from rent_platform.modules.telegram_shop.repo.cart import TelegramShopCartRepo
 from rent_platform.modules.telegram_shop.repo.favorites import TelegramShopFavoritesRepo
@@ -91,6 +92,7 @@ def _promo_active(p: dict[str, Any], now: int) -> bool:
 
 def _fmt_dt(ts: int) -> str:
     import datetime as _dt
+
     return _dt.datetime.fromtimestamp(int(ts)).strftime("%d.%m.%Y %H:%M")
 
 
@@ -113,11 +115,7 @@ def _product_kb(
 ) -> dict:
     """
     Єдина inline-клава для каталогу/акцій/хітів.
-    - prev/next завжди "в своєму scope"
-    - fav кнопка одразу перемикається (⭐ В обране / ⭐ Прибрати)
-
-    callback_data:
-      tgshop:<action>:<pid>:<cid>:<scope>
+    callback_data: tgshop:<action>:<pid>:<cid>:<scope>
     """
     cid = int(category_id or 0)
     sc = (scope or "cat").strip() or "cat"
@@ -146,7 +144,6 @@ def _product_kb(
         ],
     ]
 
-    # Для Акцій/Хітів — покажемо кнопку категорій
     if cats_action:
         rows.append([("📁 Категорії", f"tgshop:{cats_action}:0:0:{sc}")])
 
@@ -197,9 +194,11 @@ async def _send_categories_menu(bot: Bot, chat_id: int, tenant_id: str, *, is_ad
 # Hits / Promos menus (categories filtered)
 # =========================================================
 async def _send_hits_promos_entry(bot: Bot, chat_id: int, *, is_admin: bool) -> None:
-    kb = _kb([
-        [("🔥 Акції", "tgshop:pcats:0:0:promo"), ("⭐ Хіти", "tgshop:hcats:0:0:hit")],
-    ])
+    kb = _kb(
+        [
+            [("🔥 Акції", "tgshop:pcats:0:0:promo"), ("⭐ Хіти", "tgshop:hcats:0:0:hit")],
+        ]
+    )
     await bot.send_message(
         chat_id,
         "🔥 *Хіти / Акції*\n\n"
@@ -416,9 +415,6 @@ async def _edit_product_kb_only(
     category_id: int | None,
     scope: str,
 ) -> None:
-    """
-    Для toggle favorites: не чіпаємо текст/медіа, лише міняємо inline-кнопки.
-    """
     card = await _build_product_card(tenant_id, user_id, product_id, category_id=category_id, scope=scope)
     if not card:
         return
@@ -486,7 +482,7 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
                 user_id=user_id,
                 chat_id=chat_id,
                 payload=payload,
-                message_id=msg_id,  # ✅ відкриваємо/редагуємо в тому ж повідомленні
+                message_id=msg_id,
             )
             if cb_id:
                 await bot.answer_callback_query(cb_id)
@@ -509,7 +505,6 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
                 await bot.answer_callback_query(cb_id, text="•", show_alert=False)
             return True
 
-        # ---- Hits/Promos entry + categories
         if action == "hp":
             await _send_hits_promos_entry(bot, chat_id, is_admin=is_admin)
             if cb_id:
@@ -540,14 +535,12 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
                 await bot.answer_callback_query(cb_id)
             return True
 
-        # ---- Catalog category open
         if action == "cat":
             await _send_first_product_card(bot, chat_id, tenant_id, user_id, is_admin=is_admin, category_id=category_id, scope="cat")
             if cb_id:
                 await bot.answer_callback_query(cb_id)
             return True
 
-        # ---- Add / Fav (toggle)
         if action == "add" and pid > 0:
             await TelegramShopCartRepo.cart_inc(tenant_id, user_id, pid, 1)
             if cb_id:
@@ -556,7 +549,6 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
 
         if action == "fav" and pid > 0:
             added = await TelegramShopFavoritesRepo.toggle(tenant_id, user_id, pid)
-
             try:
                 await _edit_product_kb_only(
                     bot,
@@ -579,7 +571,6 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
                 )
             return True
 
-        # ---- prev/next для кожного scope
         if action in ("prev", "next", "pprev", "pnext", "hprev", "hnext") and pid > 0:
             if action == "prev":
                 p = await ProductsRepo.get_prev_active(tenant_id, pid, category_id=category_id)
@@ -623,17 +614,22 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
     user_id = int(msg["from"]["id"])
     is_admin = is_admin_user(tenant=tenant, user_id=user_id)
 
-    # Admin handler FIRST
-    if is_admin:
-        handled = await admin_handle_update(tenant=tenant, data=data, bot=bot)
-        if handled:
-            return True
-
     text = _get_text(msg)
     if not text:
         return False
 
     log.info("tgshop message text=%r user_id=%s tenant=%s", text, user_id, tenant_id)
+
+    # ✅ Admin message handler ONLY for admin commands / buttons (does NOT eat normal menu)
+    if is_admin and text in (
+        "/a",
+        "/a_help",
+        _normalize_text(BTN_ADMIN),
+        _normalize_text(BTN_ADMIN_ORDERS),
+    ):
+        handled = await admin_handle_update(tenant=tenant, data=data, bot=bot)
+        if handled:
+            return True
 
     if text in ("/start", "/shop"):
         await _send_menu(bot, chat_id, "🛒 *Магазин*\n\nОбирай розділ кнопками нижче 👇", is_admin=is_admin)
@@ -658,8 +654,9 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         )
         return bool(handled)
 
-    # Orders
-    if text == _normalize_text(BTN_ORDERS):
+    # ✅ Orders (user)
+    # fallback щоб ловило навіть якщо текст кнопки трохи інший
+    if text == _normalize_text(BTN_ORDERS) or (text.startswith("🧾") and "Замов" in text):
         await send_orders_list(bot, chat_id, tenant_id, user_id)
         return True
 
@@ -684,23 +681,10 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         await _send_menu(bot, chat_id, "⬅️ Повернув у меню 👇", is_admin=is_admin)
         return True
 
-    # Admin Orders (reply keyboard button) -> open admin orders inline menu
+    # ✅ Admin Orders (reply keyboard button) -> open NEW admin orders menu
     if text == _normalize_text(BTN_ADMIN_ORDERS) and is_admin:
-        kb = _kb(
-            [
-                [("🧾 Останні замовлення", "tgadm:ord_list:0:active")],
-                [("🗃 Архів замовлень", "tgadm:ord_list:0:arch")],
-                [("⬅️ В адмін-меню", "tgadm:home:0")],
-            ]
-        )
-        await bot.send_message(
-            chat_id,
-            "🧾 *Адмін — Замовлення*\n\nОбери дію 👇",
-            parse_mode="Markdown",
-            reply_markup=kb,
-        )
+        await admin_orders_send_menu(bot, chat_id)
         return True
-
 
     if text == _normalize_text(BTN_ADMIN) and is_admin:
         await bot.send_message(chat_id, "🛠 Адмінка: /a_help", reply_markup=main_menu_kb(is_admin=True))
