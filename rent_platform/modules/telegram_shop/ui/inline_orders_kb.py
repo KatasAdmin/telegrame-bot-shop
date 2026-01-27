@@ -92,3 +92,8 @@ def order_items_kb(order_id: int, *, page: int, scope: str) -> dict:
             [("⬅️ До списку", f"tgord:list:{page}:{scope}")],
         ]
     )
+
+
+# Backward-compat alias (старий імпорт у user_orders.py)
+def order_items_list_kb(order_id: int, items: list[dict[str, Any]], *, page: int, scope: str) -> dict:
+    return order_items_list_kb(order_id, items, page=page, scope=scope)
