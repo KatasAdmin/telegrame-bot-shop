@@ -176,3 +176,34 @@ def catalog_categories_kb(categories: list[dict[str, Any]], include_all: bool = 
         rows = [[("🧺 Усе", "tgshop:cat:0:0:cat")]]
 
     return _kb(rows)
+
+def favorites_card_kb(
+    product_id: int,
+    *,
+    has_prev: bool,
+    has_next: bool,
+) -> dict[str, Any]:
+    """
+    Inline-клава для картки товару в "Обране".
+
+    callback_data:
+      tgfav:prev:<pid>
+      tgfav:next:<pid>
+      tgshop:add:<pid>:0:cat   (додаємо в кошик, category_id не важливий)
+      tgfav:del:<pid>          (прибрати з обраного)
+      tgfav:back:0             (назад до списку обраного)
+    """
+    pid = int(product_id)
+
+    nav_row: list[tuple[str, str]] = [
+        ("⬅️", f"tgfav:prev:{pid}") if has_prev else ("·", "tgshop:noop:0:0:0"),
+        ("➡️", f"tgfav:next:{pid}") if has_next else ("·", "tgshop:noop:0:0:0"),
+    ]
+
+    return _kb(
+        [
+            nav_row,
+            [("🛒 Додати", f"tgshop:add:{pid}:0:cat"), ("⭐ Прибрати", f"tgfav:del:{pid}")],
+            [("⬅️ Назад", "tgfav:back:0")],
+        ]
+    )
