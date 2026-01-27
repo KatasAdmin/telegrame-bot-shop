@@ -154,6 +154,7 @@ async def _list_orders_page(tenant_id: str, *, page: int, scope: str) -> list[di
     """
     return await db_fetch_all(q, {"tid": tenant_id, "lim": int(PAGE_SIZE), "off": int(page * PAGE_SIZE)}) or []
 
+
 def _orders_list_kb(order_ids: list[int], *, page: int, has_prev: bool, has_next: bool, scope: str) -> dict:
     scope = _scope_norm(scope)
 
@@ -176,7 +177,6 @@ def _orders_list_kb(order_ids: list[int], *, page: int, has_prev: bool, has_next
 
 def _order_detail_kb(order_id: int, *, page: int, scope: str, is_archived: bool) -> dict:
     scope = _scope_norm(scope)
-
     arch_txt = "🧾 З архіву" if is_archived else "🗃 В архів"
 
     return _kb(
@@ -272,6 +272,35 @@ async def _send_orders_list(
     )
 
 
+def _short_items_block(items: list[dict], *, limit: int = 3) -> str:
+    """
+    Короткий блок: показує 2-3 позиції з SKU, щоб в деталці було "коротко але повно".
+    """
+    if not items:
+        return "—"
+
+    out: list[str] = []
+    for it in items[: max(0, int(limit))]:
+        name = str(it.get("name") or f"Товар #{it.get('product_id')}")
+        qty = int(it.get("qty") or 0)
+        sku = str(it.get("sku") or "").strip()
+        pid = int(it.get("product_id") or 0)
+
+        badge = []
+        if sku:
+            badge.append(f"SKU:`{sku}`")
+        if pid > 0:
+            badge.append(f"ID:`{pid}`")
+        b = f" ({', '.join(badge)})" if badge else ""
+
+        out.append(f"• {name} × *{qty}*{b}")
+
+    if len(items) > limit:
+        out.append(f"…і ще *{len(items) - limit}* позицій")
+
+    return "\n".join(out)
+
+
 async def _send_order_detail(
     bot: Bot,
     chat_id: int,
@@ -303,13 +332,19 @@ async def _send_order_detail(
 
     is_arch = await TelegramShopOrdersAdminArchiveRepo.is_archived(tenant_id, oid)
 
+    # короткий summary по товарах прямо тут
+    items = await TelegramShopOrdersRepo.list_order_items(int(oid))
+    items = items or []
+    short_items = _short_items_block(items, limit=3)
+
     text = (
         f"🧾 *Замовлення #{oid}*\n\n"
         f"Юзер: `{uid}`\n"
         f"Статус: *{st}* (`{st_raw}`)\n"
         f"Сума: *{total}*\n"
         f"Створено: _{created}_\n\n"
-        f"_Статус змінює менеджер. Автоматизацію (НП/CRM) можна підʼєднати окремо._"
+        f"*Товари (коротко):*\n{short_items}\n\n"
+        f"_Статус змінює менеджер. Далі додамо події/таймлайни: оплачено, взято в роботу, відправлено тощо._"
     )
 
     await _send_or_edit(
@@ -349,7 +384,18 @@ async def _send_order_items(
         name = str(it.get("name") or f"Товар #{it.get('product_id')}")
         qty = int(it.get("qty") or 0)
         price = _fmt_money(int(it.get("price_kop") or 0))
-        lines.append(f"• *{name}* — {qty} шт × {price}")
+
+        pid = int(it.get("product_id") or 0)
+        sku = str(it.get("sku") or "").strip()
+
+        meta: list[str] = []
+        if sku:
+            meta.append(f"SKU:`{sku}`")
+        if pid > 0:
+            meta.append(f"ID:`{pid}`")
+        meta_s = f" ({', '.join(meta)})" if meta else ""
+
+        lines.append(f"• *{name}*{meta_s} — {qty} шт × {price}")
 
     await _send_or_edit(
         bot,
@@ -452,10 +498,7 @@ async def admin_orders_handle_update(*, tenant: dict, data: dict[str, Any], bot:
         page = int(parts[3]) if len(parts) > 3 and str(parts[3]).lstrip("-").isdigit() else 0
         scope = str(parts[4]) if len(parts) > 4 else "active"
         if oid > 0:
-            o = await TelegramShopOrdersRepo.get_order(tenant_id, int(oid)) or {}
-            uid = int(o.get("user_id") or 0)
-            if uid > 0:
-                await TelegramShopOrdersAdminArchiveRepo.toggle(tenant_id, int(oid))
+            await TelegramShopOrdersAdminArchiveRepo.toggle(tenant_id, int(oid))
             await _send_order_detail(bot, chat_id, tenant_id, oid, page=page, scope=scope, message_id=msg_id)
         return True
 
