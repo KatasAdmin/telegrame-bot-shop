@@ -444,7 +444,10 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
                     await bot.answer_callback_query(cb_id, text="⛔ Нема доступу", show_alert=False)
                 return True
             handled = await admin_handle_update(tenant=tenant, data=data, bot=bot)
-            return bool(handled)
+            if cb_id:
+                await bot.answer_callback_query(cb_id)
+# навіть якщо адмін-хендлер нічого не зробив — вважаємо апдейт обробленим
+            return True
 
         # 2) Cart callbacks
         if payload.startswith("tgcart:"):
