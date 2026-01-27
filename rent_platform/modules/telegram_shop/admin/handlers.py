@@ -10,6 +10,7 @@ from aiogram.types import InputMediaPhoto
 from rent_platform.db.session import db_fetch_all, db_fetch_one, db_execute  # noqa: F401
 from rent_platform.modules.telegram_shop.admin_orders import admin_orders_handle_update
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
+from rent_platform.modules.telegram_shop.channel_announce import maybe_post_new_product
 
 # CategoriesRepo optional (if file exists)
 try:
@@ -848,7 +849,7 @@ async def _wiz_create_and_go_photos(bot: Bot, chat_id: int, tenant_id: str, draf
 
 
 async def _wiz_photos_start(bot: Bot, chat_id: int, tenant_id: str, product_id: int) -> None:
-    _state_set(tenant_id, chat_id, {"mode": "wiz_photo", "product_id": int(product_id)})
+    _state_set(tenant_id, chat_id, {"mode": "wiz_photo", "product_id": int(product_id), "announced": False})
     await bot.send_message(
         chat_id,
         f"📷 Фото для товару *#{product_id}*\n\nНадсилай фото (можна кілька).",
@@ -1312,6 +1313,15 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             return True
 
         await ProductsRepo.add_product_photo(tenant_id, product_id, file_id)
+
+# ✅ автопост у канал — лише для "нового товару" у wizard і тільки 1 раз
+        if mode == "wiz_photo" and not bool(st.get("announced")):
+            try:
+                await maybe_post_new_product(bot, tenant_id, product_id)
+                st["announced"] = True
+                _state_set(tenant_id, chat_id, st)  # зберегли прапорець
+            except Exception:
+                pass
 
         if mode == "wiz_photo":
             await bot.send_message(
