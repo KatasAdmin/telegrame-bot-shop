@@ -32,20 +32,11 @@ def orders_list_kb(
     has_next: bool,
     scope: str,
 ) -> dict[str, Any]:
-    """
-    callback_data:
-      tgord:list:<page>:<scope>
-      tgord:open:<order_id>:<page>:<scope>
-      tgord:toggle_scope:<page>:<scope>
-
-    scope: "active" | "arch"
-    """
     scope = scope if scope in ("active", "arch") else "active"
     page = max(0, int(page))
 
     rows: list[list[tuple[str, str]]] = []
 
-    # Кнопки замовлень: "дата • сума"
     for o in orders or []:
         oid = int(o.get("id") or 0)
         if oid <= 0:
@@ -54,13 +45,11 @@ def orders_list_kb(
         total = _fmt_money(int(o.get("total_kop") or 0))
         rows.append([(f"📅 {created} • {total}", f"tgord:open:{oid}:{page}:{scope}")])
 
-    # пагінація
     nav: list[tuple[str, str]] = []
     nav.append(("⬅️", f"tgord:list:{page - 1}:{scope}") if has_prev else ("·", f"tgord:list:{page}:{scope}"))
     nav.append(("➡️", f"tgord:list:{page + 1}:{scope}") if has_next else ("·", f"tgord:list:{page}:{scope}"))
     rows.append(nav)
 
-    # перемикач архів/активні
     toggle_txt = "🗃 Архів" if scope == "active" else "🧾 Активні"
     rows.append([(toggle_txt, f"tgord:toggle_scope:{page}:{scope}")])
 
@@ -78,13 +67,6 @@ def order_detail_kb(
     scope: str,
     items_count: int = 0,
 ) -> dict[str, Any]:
-    """
-    callback_data:
-      tgord:items:<order_id>:<page>:<scope>
-      tgord:history:<order_id>:<page>:<scope>
-      tgord:arch:<order_id>:<page>:<scope>
-      tgord:list:<page>:<scope>
-    """
     scope = scope if scope in ("active", "arch") else "active"
     oid = int(order_id)
     page = max(0, int(page))
@@ -104,19 +86,13 @@ def order_detail_kb(
 # =========================================================
 # Order items list (items as buttons -> open product card)
 # =========================================================
-def order_items_list_kb(
+def _order_items_list_kb_impl(
     order_id: int,
     items: list[dict[str, Any]],
     *,
     page: int,
     scope: str,
 ) -> dict[str, Any]:
-    """
-    callback_data:
-      tgord:item:<order_id>:<product_id>:<page>:<scope>
-      tgord:open:<order_id>:<page>:<scope>
-      tgord:list:<page>:<scope>
-    """
     scope = scope if scope in ("active", "arch") else "active"
     oid = int(order_id)
     page = max(0, int(page))
@@ -142,9 +118,6 @@ def order_items_list_kb(
 
 
 def order_item_back_kb(order_id: int, *, page: int, scope: str) -> dict[str, Any]:
-    """
-    Назад з картки товару.
-    """
     scope = scope if scope in ("active", "arch") else "active"
     oid = int(order_id)
     page = max(0, int(page))
@@ -158,9 +131,6 @@ def order_item_back_kb(order_id: int, *, page: int, scope: str) -> dict[str, Any
 
 
 def order_history_back_kb(order_id: int, *, page: int, scope: str) -> dict[str, Any]:
-    """
-    Назад з історії статусів у деталку.
-    """
     scope = scope if scope in ("active", "arch") else "active"
     oid = int(order_id)
     page = max(0, int(page))
@@ -170,13 +140,7 @@ def order_history_back_kb(order_id: int, *, page: int, scope: str) -> dict[str, 
 # =========================================================
 # Backward compatibility
 # =========================================================
-
-# старий хелпер (якщо десь ще викликається)
 def order_items_kb(order_id: int, *, page: int, scope: str) -> dict[str, Any]:
-    """
-    З товарів назад у деталку / список.
-    (старий варіант — залишили для сумісності)
-    """
     scope = scope if scope in ("active", "arch") else "active"
     oid = int(order_id)
     page = max(0, int(page))
@@ -188,8 +152,6 @@ def order_items_kb(order_id: int, *, page: int, scope: str) -> dict[str, Any]:
     )
 
 
-# 🔥 Оце саме фіксить твою помилку імпорту:
-# якщо десь імпортують `order_items_list_kb` (без "s" після item),
-# то воно буде існувати і працювати.
+# ✅ Оце і є “правильний” експорт (і одночасно сумісність з імпортами)
 def order_items_list_kb(order_id: int, items: list[dict[str, Any]], *, page: int, scope: str) -> dict[str, Any]:
-    return order_items_list_kb(order_id, items, page=page, scope=scope)
+    return _order_items_list_kb_impl(order_id, items, page=page, scope=scope)
