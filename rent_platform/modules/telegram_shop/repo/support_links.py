@@ -1,139 +1,103 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import time
 from typing import Any
 
-from rent_platform.db.session import db_fetch_all, db_fetch_one, db_execute
+from rent_platform.db.session import db_execute, db_fetch_all, db_fetch_one
 
 
 class TelegramShopSupportLinksRepo:
     """
-    Табличка конфігів для "Підтримка" + для announce_chat_id.
-    key — унікальний в рамках tenant.
+    Таблиця: telegram_shop_support_links
+    Очікувані колонки:
+      - tenant_id (text)
+      - key (text)
+      - title (text, nullable)
+      - url (text, nullable)
+      - enabled (bool/int)
+      - sort (int, nullable)
+    PK бажано (tenant_id, key)
     """
-
-    DEFAULTS: list[dict[str, Any]] = [
-        {"key": "support_channel", "title": "Наш канал", "url": "", "enabled": False, "sort": 10},
-        {"key": "support_site", "title": "Наш сайт", "url": "", "enabled": False, "sort": 20},
-        {"key": "support_manager", "title": "Менеджер", "url": "", "enabled": False, "sort": 30},
-        {"key": "support_chat", "title": "Наш чат", "url": "", "enabled": False, "sort": 40},
-        {"key": "support_email", "title": "Пошта", "url": "", "enabled": False, "sort": 50},
-        # автопост нових товарів (url тут = chat_id каналу, наприклад -1001234567890)
-        {"key": "announce_chat_id", "title": "Автопост новинок: chat_id", "url": "", "enabled": False, "sort": 1000},
-    ]
-
-    @staticmethod
-    async def ensure_defaults(tenant_id: str) -> None:
-        now = int(time.time())
-        for d in TelegramShopSupportLinksRepo.DEFAULTS:
-            q = """
-            INSERT INTO telegram_shop_support_links
-                (tenant_id, key, title, url, enabled, sort, created_ts, updated_ts)
-            VALUES
-                (:tid, :k, :t, :u, :e, :s, :ts, :ts)
-            ON CONFLICT (tenant_id, key) DO NOTHING
-            """
-            await db_execute(
-                q,
-                {
-                    "tid": str(tenant_id),
-                    "k": str(d["key"]),
-                    "t": str(d["title"]),
-                    "u": str(d.get("url") or ""),
-                    "e": bool(d.get("enabled") or False),
-                    "s": int(d.get("sort") or 100),
-                    "ts": now,
-                },
-            )
-
-    @staticmethod
-    async def list_all(tenant_id: str) -> list[dict[str, Any]]:
-        q = """
-        SELECT id, tenant_id, key, title, url, enabled, sort, created_ts, updated_ts
-        FROM telegram_shop_support_links
-        WHERE tenant_id = :tid
-        ORDER BY sort ASC, id ASC
-        """
-        return await db_fetch_all(q, {"tid": str(tenant_id)}) or []
-
-    @staticmethod
-    async def list_enabled(tenant_id: str) -> list[dict[str, Any]]:
-        q = """
-        SELECT id, tenant_id, key, title, url, enabled, sort, created_ts, updated_ts
-        FROM telegram_shop_support_links
-        WHERE tenant_id = :tid AND enabled = true
-        ORDER BY sort ASC, id ASC
-        """
-        return await db_fetch_all(q, {"tid": str(tenant_id)}) or []
 
     @staticmethod
     async def get(tenant_id: str, key: str) -> dict[str, Any] | None:
         q = """
-        SELECT id, tenant_id, key, title, url, enabled, sort, created_ts, updated_ts
+        SELECT tenant_id, key, COALESCE(title,'') AS title, COALESCE(url,'') AS url,
+               COALESCE(enabled,false) AS enabled, COALESCE(sort,0) AS sort
         FROM telegram_shop_support_links
-        WHERE tenant_id = :tid AND key = :k
+        WHERE tenant_id = :tid AND key = :key
         LIMIT 1
         """
-        row = await db_fetch_one(q, {"tid": str(tenant_id), "k": str(key)})
-        return row if row else None
+        return await db_fetch_one(q, {"tid": tenant_id, "key": key})
 
     @staticmethod
-    async def upsert(
-        tenant_id: str,
-        key: str,
-        *,
-        title: str | None = None,
-        url: str | None = None,
-        enabled: bool | None = None,
-        sort: int | None = None,
-    ) -> None:
-        now = int(time.time())
-        # якщо не існує — створимо
-        q_ins = """
-        INSERT INTO telegram_shop_support_links
-            (tenant_id, key, title, url, enabled, sort, created_ts, updated_ts)
-        VALUES
-            (:tid, :k, :t, :u, :e, :s, :ts, :ts)
+    async def list_all(tenant_id: str) -> list[dict[str, Any]]:
+        q = """
+        SELECT tenant_id, key, COALESCE(title,'') AS title, COALESCE(url,'') AS url,
+               COALESCE(enabled,false) AS enabled, COALESCE(sort,0) AS sort
+        FROM telegram_shop_support_links
+        WHERE tenant_id = :tid
+        ORDER BY COALESCE(sort,0) ASC, key ASC
+        """
+        return await db_fetch_all(q, {"tid": tenant_id}) or []
+
+    @staticmethod
+    async def upsert(tenant_id: str, key: str, *, title: str | None = None, url: str | None = None, enabled: bool | None = None, sort: int | None = None) -> None:
+        """
+        Postgres upsert по (tenant_id, key).
+        """
+        q = """
+        INSERT INTO telegram_shop_support_links (tenant_id, key, title, url, enabled, sort)
+        VALUES (:tid, :key, COALESCE(:title,''), COALESCE(:url,''), COALESCE(:enabled,false), COALESCE(:sort,0))
         ON CONFLICT (tenant_id, key)
         DO UPDATE SET
-            title = COALESCE(:t2, telegram_shop_support_links.title),
-            url = COALESCE(:u2, telegram_shop_support_links.url),
-            enabled = COALESCE(:e2, telegram_shop_support_links.enabled),
-            sort = COALESCE(:s2, telegram_shop_support_links.sort),
-            updated_ts = :ts2
+            title = CASE WHEN :title IS NULL THEN telegram_shop_support_links.title ELSE COALESCE(:title,'') END,
+            url   = CASE WHEN :url   IS NULL THEN telegram_shop_support_links.url   ELSE COALESCE(:url,'')   END,
+            enabled = CASE WHEN :enabled IS NULL THEN telegram_shop_support_links.enabled ELSE COALESCE(:enabled,false) END,
+            sort  = CASE WHEN :sort  IS NULL THEN telegram_shop_support_links.sort  ELSE COALESCE(:sort,0)  END
         """
         await db_execute(
-            q_ins,
+            q,
             {
-                "tid": str(tenant_id),
-                "k": str(key),
-                "t": (title or "") if title is not None else "",
-                "u": (url or "") if url is not None else "",
-                "e": bool(enabled) if enabled is not None else False,
-                "s": int(sort) if sort is not None else 100,
-                "ts": now,
-                # update поля (якщо None — не чіпаємо)
-                "t2": (title or "").strip() if title is not None else None,
-                "u2": (url or "").strip() if url is not None else None,
-                "e2": bool(enabled) if enabled is not None else None,
-                "s2": int(sort) if sort is not None else None,
-                "ts2": now,
+                "tid": tenant_id,
+                "key": key,
+                "title": title,
+                "url": url,
+                "enabled": enabled,
+                "sort": sort,
             },
         )
 
     @staticmethod
-    async def set_enabled(tenant_id: str, key: str, enabled: bool) -> None:
-        q = """
-        UPDATE telegram_shop_support_links
-        SET enabled = :e, updated_ts = :ts
-        WHERE tenant_id = :tid AND key = :k
+    async def set_url(tenant_id: str, key: str, url: str) -> None:
         """
-        await db_execute(q, {"tid": str(tenant_id), "k": str(key), "e": bool(enabled), "ts": int(time.time())})
+        Те, чого не вистачало (у тебе падало саме тут).
+        """
+        await TelegramShopSupportLinksRepo.upsert(tenant_id, key, url=(url or "").strip())
 
     @staticmethod
-    async def delete(tenant_id: str, key: str) -> None:
-        q = """
-        DELETE FROM telegram_shop_support_links
-        WHERE tenant_id = :tid AND key = :k
+    async def set_enabled(tenant_id: str, key: str, enabled: bool) -> None:
+        await TelegramShopSupportLinksRepo.upsert(tenant_id, key, enabled=bool(enabled))
+
+    @staticmethod
+    async def toggle_enabled(tenant_id: str, key: str) -> bool:
+        cur = await TelegramShopSupportLinksRepo.get(tenant_id, key) or {}
+        now = bool(cur.get("enabled"))
+        newv = not now
+        await TelegramShopSupportLinksRepo.set_enabled(tenant_id, key, newv)
+        return newv
+
+    @staticmethod
+    async def ensure_defaults(tenant_id: str) -> None:
         """
-        await db_execute(q, {"tid": str(tenant_id), "k": str(key)})
+        Створює дефолтні ключі (щоб меню було завжди з пунктами).
+        """
+        defaults: list[tuple[str, str, int]] = [
+            ("support_chat", "Наш чат", 10),
+            ("support_site", "Наш сайт", 20),
+            ("support_manager", "Менеджер", 30),
+            ("support_email", "Пошта", 40),
+            ("announce_chat_id", "Автопост новинок: chat_id", 90),
+        ]
+        for key, title, sort in defaults:
+            await TelegramShopSupportLinksRepo.upsert(tenant_id, key, title=title, sort=sort)
