@@ -585,3 +585,21 @@ async def admin_orders_handle_update(*, tenant: dict, data: dict[str, Any], bot:
         return True
 
     return True
+
+# --- public wrappers (for reply-keyboard entry points) ---
+
+async def admin_orders_send_menu(bot: Bot, chat_id: int) -> None:
+    # menu with buttons "Останні / Архів / Назад"
+    await _send_admin_orders_menu(bot, chat_id, message_id=None)
+
+
+async def admin_orders_send_list(bot: Bot, chat_id: int, tenant_id: str, *, scope: str) -> None:
+    # scope: "active" | "arch"
+    await _send_orders_list(
+        bot,
+        chat_id,
+        tenant_id,
+        page=0,
+        scope=scope,
+        message_id=None,
+    )
