@@ -32,6 +32,14 @@ def orders_list_kb(
     has_next: bool,
     scope: str,
 ) -> dict[str, Any]:
+    """
+    callback_data:
+      tgord:list:<page>:<scope>
+      tgord:open:<order_id>:<page>:<scope>
+      tgord:toggle_scope:<page>:<scope>
+
+    scope: "active" | "arch"
+    """
     scope = scope if scope in ("active", "arch") else "active"
     page = max(0, int(page))
 
@@ -67,6 +75,13 @@ def order_detail_kb(
     scope: str,
     items_count: int = 0,
 ) -> dict[str, Any]:
+    """
+    callback_data:
+      tgord:items:<order_id>:<page>:<scope>
+      tgord:history:<order_id>:<page>:<scope>
+      tgord:arch:<order_id>:<page>:<scope>
+      tgord:list:<page>:<scope>
+    """
     scope = scope if scope in ("active", "arch") else "active"
     oid = int(order_id)
     page = max(0, int(page))
@@ -86,13 +101,19 @@ def order_detail_kb(
 # =========================================================
 # Order items list (items as buttons -> open product card)
 # =========================================================
-def _order_items_list_kb_impl(
+def order_items_list_kb(
     order_id: int,
     items: list[dict[str, Any]],
     *,
     page: int,
     scope: str,
 ) -> dict[str, Any]:
+    """
+    callback_data:
+      tgord:item:<order_id>:<product_id>:<page>:<scope>
+      tgord:open:<order_id>:<page>:<scope>
+      tgord:list:<page>:<scope>
+    """
     scope = scope if scope in ("active", "arch") else "active"
     oid = int(order_id)
     page = max(0, int(page))
@@ -141,6 +162,7 @@ def order_history_back_kb(order_id: int, *, page: int, scope: str) -> dict[str, 
 # Backward compatibility
 # =========================================================
 def order_items_kb(order_id: int, *, page: int, scope: str) -> dict[str, Any]:
+    """Старий варіант (якщо десь ще викликається)."""
     scope = scope if scope in ("active", "arch") else "active"
     oid = int(order_id)
     page = max(0, int(page))
@@ -151,7 +173,6 @@ def order_items_kb(order_id: int, *, page: int, scope: str) -> dict[str, Any]:
         ]
     )
 
-
-# ✅ Оце і є “правильний” експорт (і одночасно сумісність з імпортами)
-def order_items_list_kb(order_id: int, items: list[dict[str, Any]], *, page: int, scope: str) -> dict[str, Any]:
-    return _order_items_list_kb_impl(order_id, items, page=page, scope=scope)
+# Якщо десь був старий “typo”-імпорт — даємо окремий аліас з іншим імʼям (без рекурсії)
+def order_item_list_kb(order_id: int, items: list[dict[str, Any]], *, page: int, scope: str) -> dict[str, Any]:
+    return order_items_list_kb(order_id, items, page=page, scope=scope)
