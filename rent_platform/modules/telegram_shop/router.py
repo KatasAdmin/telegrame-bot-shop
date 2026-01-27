@@ -8,6 +8,7 @@ from typing import Any
 from aiogram import Bot
 from aiogram.types import InputMediaPhoto
 
+from rent_platform.modules.telegram_shop.user_support import send_support_menu
 from rent_platform.modules.telegram_shop.admin import admin_handle_update, is_admin_user
 from rent_platform.modules.telegram_shop.admin_orders import admin_orders_send_menu  # ✅ existing
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
@@ -817,7 +818,7 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         return True
 
     if text == _normalize_text(BTN_SUPPORT):
-        await _send_support(bot, chat_id, tenant_id, is_admin=is_admin)
+        await send_support_menu(bot, chat_id, tenant_id, is_admin=is_admin)
         return True
 
     if text == _normalize_text(BTN_MENU_BACK):
