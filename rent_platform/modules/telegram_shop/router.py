@@ -9,7 +9,6 @@ from aiogram import Bot
 from aiogram.types import InputMediaPhoto
 
 from rent_platform.modules.telegram_shop.admin import admin_handle_update, is_admin_user
-from rent_platform.modules.telegram_shop.admin_orders import admin_orders_send_menu  # ✅ NEW
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
 from rent_platform.modules.telegram_shop.repo.cart import TelegramShopCartRepo
 from rent_platform.modules.telegram_shop.repo.favorites import TelegramShopFavoritesRepo
@@ -437,16 +436,16 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         cb_id = cb.get("id")
         msg_id = int(cb["message"]["message_id"])
 
-        # 1) Admin callbacks first
+        # 1) Admin callbacks first (FIXED)
         if payload.startswith("tgadm:"):
             if not is_admin:
                 if cb_id:
                     await bot.answer_callback_query(cb_id, text="⛔ Нема доступу", show_alert=False)
                 return True
-            handled = await admin_handle_update(tenant=tenant, data=data, bot=bot)
+
+            await admin_handle_update(tenant=tenant, data=data, bot=bot)
             if cb_id:
                 await bot.answer_callback_query(cb_id)
-# навіть якщо адмін-хендлер нічого не зробив — вважаємо апдейт обробленим
             return True
 
         # 2) Cart callbacks
@@ -623,7 +622,7 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
 
     log.info("tgshop message text=%r user_id=%s tenant=%s", text, user_id, tenant_id)
 
-    # ✅ Admin message handler ONLY for admin commands / buttons (does NOT eat normal menu)
+    # ✅ Admin message handler ONLY for admin commands / buttons
     if is_admin and text in (
         "/a",
         "/a_help",
@@ -657,26 +656,24 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         )
         return bool(handled)
 
-    # Admin Orders FIRST (щоб адмінська кнопка не відкривала юзер-історію)
+    # ✅ Admin Orders FIRST (opens admin orders tabs)
     if is_admin and text == _normalize_text(BTN_ADMIN_ORDERS):
         kb = _kb(
             [
-                [("🧾 Останні замовлення", "tgadm:ord_list:0:active")],
-                [("🗃 Архів замовлень", "tgadm:ord_list:0:arch")],
+                [("🧾 Останні замовлення", "tgadm:ord_tab:new:0")],
+                [("🗃 Архів замовлень", "tgadm:ord_tab:arch:0")],
                 [("⬅️ В адмін-меню", "tgadm:home:0")],
             ]
         )
         await bot.send_message(
             chat_id,
-            "🧾 *Адмін — Замовлення*\n\nОбери дію 👇",
+            "🧾 *Адмін — Замовлення*\n\nОбери вкладку 👇",
             parse_mode="Markdown",
             reply_markup=kb,
         )
         return True
 
-
     # ✅ Orders (user)
-    # fallback щоб ловило навіть якщо текст кнопки трохи інший
     if text == _normalize_text(BTN_ORDERS) or (text.startswith("🧾") and "Замов" in text):
         await send_orders_list(bot, chat_id, tenant_id, user_id)
         return True
@@ -700,11 +697,6 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
 
     if text == _normalize_text(BTN_MENU_BACK):
         await _send_menu(bot, chat_id, "⬅️ Повернув у меню 👇", is_admin=is_admin)
-        return True
-
-    # ✅ Admin Orders (reply keyboard button) -> open NEW admin orders menu
-    if text == _normalize_text(BTN_ADMIN_ORDERS) and is_admin:
-        await admin_orders_send_menu(bot, chat_id)
         return True
 
     if text == _normalize_text(BTN_ADMIN) and is_admin:
