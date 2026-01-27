@@ -25,6 +25,7 @@ from rent_platform.modules.telegram_shop.ui.user_kb import (
     BTN_SUPPORT,
     BTN_MENU_BACK,
     BTN_ADMIN,
+    BTN_ADMIN_ORDERS,
     BTN_CHECKOUT,
     BTN_CLEAR_CART,
 )
@@ -682,6 +683,24 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
     if text == _normalize_text(BTN_MENU_BACK):
         await _send_menu(bot, chat_id, "⬅️ Повернув у меню 👇", is_admin=is_admin)
         return True
+
+    # Admin Orders (reply keyboard button) -> open admin orders inline menu
+    if text == _normalize_text(BTN_ADMIN_ORDERS) and is_admin:
+        kb = _kb(
+            [
+                [("🧾 Останні замовлення", "tgadm:ord_list:0:active")],
+                [("🗃 Архів замовлень", "tgadm:ord_list:0:arch")],
+                [("⬅️ В адмін-меню", "tgadm:home:0")],
+            ]
+        )
+        await bot.send_message(
+            chat_id,
+            "🧾 *Адмін — Замовлення*\n\nОбери дію 👇",
+            parse_mode="Markdown",
+            reply_markup=kb,
+        )
+        return True
+
 
     if text == _normalize_text(BTN_ADMIN) and is_admin:
         await bot.send_message(chat_id, "🛠 Адмінка: /a_help", reply_markup=main_menu_kb(is_admin=True))
