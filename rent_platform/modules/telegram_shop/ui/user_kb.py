@@ -11,6 +11,7 @@ BTN_ORDERS = "🧾 Історія замовлень"
 BTN_SUPPORT = "🆘 Підтримка"
 BTN_MENU_BACK = "⬅️ Меню"
 BTN_ADMIN = "🛠 Адмінка"
+BTN_ADMIN_ORDERS = "🧾 Замовлення"
 
 BTN_CHECKOUT = "✅ Оформити замовлення"
 BTN_CLEAR_CART = "🧹 Очистити кошик"
