@@ -199,6 +199,7 @@ async def _list_orders_page(tenant_id: str, *, page: int, tab: str) -> list[dict
 
 def _tabs_row(active_tab: str, page: int) -> list[tuple[str, str]]:
     t = _tab_norm(active_tab)
+
     def _btn(title: str, tab: str) -> tuple[str, str]:
         prefix = "• " if t == tab else ""
         return (f"{prefix}{title}", f"tgadm:ord_tab:{tab}:{page}")
@@ -240,7 +241,6 @@ def _orders_list_kb(order_ids: list[int], *, page: int, has_prev: bool, has_next
 def _order_detail_kb(order_id: int, *, page: int, tab: str, is_archived: bool) -> dict:
     tab = _tab_norm(tab)
     arch_txt = "🧾 З архіву" if is_archived else "🗃 В архів"
-
     return _kb(
         [
             [("📦 Товари", f"tgadm:ord_items:{order_id}:{page}:{tab}")],
@@ -585,6 +585,7 @@ async def admin_orders_handle_update(*, tenant: dict, data: dict[str, Any], bot:
         return True
 
     return True
+
 
 # --- public wrappers (for reply-keyboard entry points) ---
 
