@@ -10,7 +10,7 @@ import time
 from alembic import op
 
 revision = "tg_shop_orders_admin_archive_0128b"
-down_revision = "tg_shop_orders_archive_0128a"
+down_revision = "tg_alembic_ver_0128"
 branch_labels = None
 depends_on = None
 
