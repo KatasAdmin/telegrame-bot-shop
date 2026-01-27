@@ -33,20 +33,34 @@ class TelegramShopOrdersRepo:
             return None
         order_id = int(row["id"])
 
-        # 2) order items snapshot
-        q2 = """
-        INSERT INTO telegram_shop_order_items (order_id, product_id, name, price_kop, qty)
-        VALUES (:oid, :pid, :n, :p, :q)
+        # 2) order items snapshot (+ sku snapshot)
+        # IMPORTANT: requires telegram_shop_order_items.sku column (migration 4.1)
+        qsku = """
+        SELECT COALESCE(sku,'') AS sku
+        FROM telegram_shop_products
+        WHERE tenant_id = :tid AND id = :pid
+        LIMIT 1
         """
+
+        q2 = """
+        INSERT INTO telegram_shop_order_items (order_id, product_id, name, price_kop, qty, sku)
+        VALUES (:oid, :pid, :n, :p, :q, :sku)
+        """
+
         for it in items:
+            pid = int(it["product_id"])
+            row_sku = await db_fetch_one(qsku, {"tid": tenant_id, "pid": pid}) or {}
+            sku = str(row_sku.get("sku") or "")[:64]
+
             await db_execute(
                 q2,
                 {
                     "oid": order_id,
-                    "pid": int(it["product_id"]),
+                    "pid": pid,
                     "n": str(it["name"])[:128],
                     "p": int(it.get("price_kop") or 0),
                     "q": int(it.get("qty") or 0),
+                    "sku": sku,
                 },
             )
 
@@ -76,8 +90,10 @@ class TelegramShopOrdersRepo:
 
     @staticmethod
     async def list_order_items(order_id: int) -> list[dict[str, Any]]:
+        # sku може бути відсутній, якщо міграцію ще не накатили
+        # але після 4.1 він буде і все ок
         q = """
-        SELECT id, order_id, product_id, name, price_kop, qty
+        SELECT id, order_id, product_id, name, price_kop, qty, COALESCE(sku,'') AS sku
         FROM telegram_shop_order_items
         WHERE order_id = :oid
         ORDER BY id ASC
