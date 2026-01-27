@@ -150,3 +150,29 @@ def order_history_back_kb(order_id: int, *, page: int, scope: str) -> dict:
     oid = int(order_id)
     page = max(0, int(page))
     return _kb([[("⬅️ Назад", f"tgord:open:{oid}:{page}:{scope}")]])
+
+
+def catalog_categories_kb(categories: list[dict[str, Any]], include_all: bool = True) -> dict[str, Any]:
+    """
+    Inline-клава категорій каталогу.
+
+    callback_data:
+      tgshop:cat:0:<category_id>:cat
+      tgshop:cat:0:0:cat   (для "Усе" коли include_all=True)
+    """
+    rows: list[list[tuple[str, str]]] = []
+
+    if include_all:
+        rows.append([("🧺 Усе", "tgshop:cat:0:0:cat")])
+
+    for c in categories or []:
+        cid = int(c.get("id") or 0)
+        name = str(c.get("name") or "").strip()
+        if cid <= 0 or not name:
+            continue
+        rows.append([(f"📁 {name}", f"tgshop:cat:0:{cid}:cat")])
+
+    if not rows:
+        rows = [[("🧺 Усе", "tgshop:cat:0:0:cat")]]
+
+    return _kb(rows)
