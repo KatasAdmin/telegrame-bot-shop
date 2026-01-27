@@ -10,6 +10,7 @@ BTN_FAV = "⭐ Обране"
 BTN_ORDERS = "🧾 Історія замовлень"
 BTN_SUPPORT = "🆘 Підтримка"
 BTN_MENU_BACK = "⬅️ Меню"
+
 BTN_ADMIN = "🛠 Адмінка"
 BTN_ADMIN_ORDERS = "🧾 Замовлення"
 
@@ -24,6 +25,11 @@ def _kb(rows: list[list[str]], *, resize: bool = True) -> ReplyKeyboardMarkup:
     )
 
 
+def _admin_row() -> list[str]:
+    # одна строка зверху для адміна: поруч "Адмінка" + "Замовлення"
+    return [BTN_ADMIN, BTN_ADMIN_ORDERS]
+
+
 def main_menu_kb(*, is_admin: bool = False) -> ReplyKeyboardMarkup:
     rows = [
         [BTN_CATALOG, BTN_CART],
@@ -31,7 +37,7 @@ def main_menu_kb(*, is_admin: bool = False) -> ReplyKeyboardMarkup:
         [BTN_ORDERS, BTN_SUPPORT],
     ]
     if is_admin:
-        rows.insert(0, [BTN_ADMIN])
+        rows.insert(0, _admin_row())
     return _kb(rows)
 
 
@@ -46,7 +52,7 @@ def catalog_kb(*, is_admin: bool = False) -> ReplyKeyboardMarkup:
         [BTN_MENU_BACK],
     ]
     if is_admin:
-        rows.insert(0, [BTN_ADMIN])
+        rows.insert(0, _admin_row())
     return _kb(rows)
 
 
@@ -57,7 +63,7 @@ def cart_kb(*, is_admin: bool = False) -> ReplyKeyboardMarkup:
         [BTN_MENU_BACK],
     ]
     if is_admin:
-        rows.insert(0, [BTN_ADMIN])
+        rows.insert(0, _admin_row())
     return _kb(rows)
 
 
@@ -67,7 +73,7 @@ def favorites_kb(*, is_admin: bool = False) -> ReplyKeyboardMarkup:
         [BTN_MENU_BACK],
     ]
     if is_admin:
-        rows.insert(0, [BTN_ADMIN])
+        rows.insert(0, _admin_row())
     return _kb(rows)
 
 
@@ -77,7 +83,7 @@ def orders_history_kb(*, is_admin: bool = False) -> ReplyKeyboardMarkup:
         [BTN_MENU_BACK],
     ]
     if is_admin:
-        rows.insert(0, [BTN_ADMIN])
+        rows.insert(0, _admin_row())
     return _kb(rows)
 
 
@@ -87,5 +93,5 @@ def support_kb(*, is_admin: bool = False) -> ReplyKeyboardMarkup:
         [BTN_MENU_BACK],
     ]
     if is_admin:
-        rows.insert(0, [BTN_ADMIN])
+        rows.insert(0, _admin_row())
     return _kb(rows)
