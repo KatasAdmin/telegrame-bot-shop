@@ -7,9 +7,8 @@ from typing import Any
 from aiogram import Bot
 from aiogram.types import InputMediaPhoto
 
-
-from rent_platform.modules.telegram_shop.admin_orders import admin_orders_handle_update
 from rent_platform.db.session import db_fetch_all, db_fetch_one, db_execute  # noqa: F401
+from rent_platform.modules.telegram_shop.admin_orders import admin_orders_handle_update
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
 
 # CategoriesRepo optional (if file exists)
@@ -820,7 +819,6 @@ async def _wiz_create_product(tenant_id: str, draft: dict) -> int | None:
     elif category_id is not None and not isinstance(category_id, int):
         category_id = None
 
-    # IMPORTANT: ProductsRepo.add(...) має приймати sku=...
     pid = await ProductsRepo.add(tenant_id, name, price_kop, is_active=True, category_id=category_id, sku=sku)  # type: ignore[arg-type]
     if not pid:
         return None
@@ -831,7 +829,7 @@ async def _wiz_create_product(tenant_id: str, draft: dict) -> int | None:
         await ProductsRepo.set_description(tenant_id, pid_i, desc)
 
     promo_price_kop = int(draft.get("promo_price_kop") or 0)
-    promo_until_ts = int(draft.get("promo_until_ts") or 0)  # для створення ставимо 0
+    promo_until_ts = int(draft.get("promo_until_ts") or 0)
     if promo_price_kop > 0:
         await ProductsRepo.set_promo(tenant_id, pid_i, promo_price_kop, promo_until_ts)
 
@@ -888,8 +886,6 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             await bot.answer_callback_query(cb_id)
 
         # ✅ Orders admin module (separate file)
-        # IMPORTANT: needs:
-        #   from rent_platform.modules.telegram_shop.admin_orders import admin_orders_handle_update
         if payload.startswith("tgadm:ord"):
             handled = await admin_orders_handle_update(tenant=tenant, data=data, bot=bot)
             if handled:
@@ -902,7 +898,6 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
 
         if action == "noop":
             return True
-
 
         # HOME / CATALOG
         if action == "home":
