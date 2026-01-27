@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import time
@@ -34,7 +35,7 @@ class TelegramShopOrdersRepo:
         order_id = int(row["id"])
 
         # 2) order items snapshot (+ sku snapshot)
-        # IMPORTANT: requires telegram_shop_order_items.sku column (migration 4.1)
+        # Беремо SKU з products (навіть якщо cart не повертає sku)
         qsku = """
         SELECT COALESCE(sku,'') AS sku
         FROM telegram_shop_products
@@ -42,27 +43,36 @@ class TelegramShopOrdersRepo:
         LIMIT 1
         """
 
-        q2 = """
+        # NOTE: потребує telegram_shop_order_items.sku (окрема міграція під order_items)
+        q2_with_sku = """
         INSERT INTO telegram_shop_order_items (order_id, product_id, name, price_kop, qty, sku)
         VALUES (:oid, :pid, :n, :p, :q, :sku)
+        """
+        q2 = """
+        INSERT INTO telegram_shop_order_items (order_id, product_id, name, price_kop, qty)
+        VALUES (:oid, :pid, :n, :p, :q)
         """
 
         for it in items:
             pid = int(it["product_id"])
-            row_sku = await db_fetch_one(qsku, {"tid": tenant_id, "pid": pid}) or {}
-            sku = str(row_sku.get("sku") or "")[:64]
 
-            await db_execute(
-                q2,
-                {
-                    "oid": order_id,
-                    "pid": pid,
-                    "n": str(it["name"])[:128],
-                    "p": int(it.get("price_kop") or 0),
-                    "q": int(it.get("qty") or 0),
-                    "sku": sku,
-                },
-            )
+            sku_row = await db_fetch_one(qsku, {"tid": tenant_id, "pid": pid}) or {}
+            sku_val = str(sku_row.get("sku") or "")[:64]
+
+            payload = {
+                "oid": order_id,
+                "pid": pid,
+                "n": str(it["name"])[:128],
+                "p": int(it.get("price_kop") or 0),
+                "q": int(it.get("qty") or 0),
+                "sku": sku_val,
+            }
+
+            try:
+                await db_execute(q2_with_sku, payload)
+            except Exception:
+                # якщо колонки sku ще немає в order_items — вставляємо старим запитом
+                await db_execute(q2, payload)
 
         # 3) clear cart
         await TelegramShopCartRepo.cart_clear(tenant_id, user_id)
@@ -90,12 +100,20 @@ class TelegramShopOrdersRepo:
 
     @staticmethod
     async def list_order_items(order_id: int) -> list[dict[str, Any]]:
-        # sku може бути відсутній, якщо міграцію ще не накатили
-        # але після 4.1 він буде і все ок
-        q = """
-        SELECT id, order_id, product_id, name, price_kop, qty, COALESCE(sku,'') AS sku
+        # sku може бути відсутній, якщо міграцію order_items.sku ще не накатили
+        q_with_sku = """
+        SELECT id, order_id, product_id, name, price_kop, qty, sku
         FROM telegram_shop_order_items
         WHERE order_id = :oid
         ORDER BY id ASC
         """
-        return await db_fetch_all(q, {"oid": int(order_id)}) or []
+        q = """
+        SELECT id, order_id, product_id, name, price_kop, qty
+        FROM telegram_shop_order_items
+        WHERE order_id = :oid
+        ORDER BY id ASC
+        """
+        try:
+            return await db_fetch_all(q_with_sku, {"oid": int(order_id)}) or []
+        except Exception:
+            return await db_fetch_all(q, {"oid": int(order_id)}) or []
