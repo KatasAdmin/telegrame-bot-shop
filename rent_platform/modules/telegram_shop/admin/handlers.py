@@ -1406,7 +1406,9 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
     
     if text in ("/sup", "🆘 Підтримка", "SOS Підтримка", "Підтримка"):
         _state_clear(tenant_id, chat_id)
-        await _send_support_admin_menu(bot, chat_id, tenant_id)
+        mid = _SUP_MENU_MSG_ID.get((tenant_id, chat_id))
+        mid = await _send_support_admin_menu(bot, chat_id, tenant_id, edit_message_id=mid)
+        _SUP_MENU_MSG_ID[(tenant_id, chat_id)] = int(mid)
         return True
 
     st = _state_get(tenant_id, chat_id)
