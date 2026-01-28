@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from rent_platform.db.session import db_execute, db_fetch_all, db_fetch_one
@@ -16,7 +17,9 @@ class TelegramShopSupportLinksRepo:
       - url (text, nullable)
       - enabled (bool/int)
       - sort (int, nullable)
-    PK бажано (tenant_id, key)
+      - created_ts (int/bigint) NOT NULL  <-- у тебе є, бо БД ругається
+      - updated_ts (int/bigint) NOT NULL  <-- дуже ймовірно теж є
+    PK: (tenant_id, key)
     """
 
     @staticmethod
@@ -42,19 +45,32 @@ class TelegramShopSupportLinksRepo:
         return await db_fetch_all(q, {"tid": tenant_id}) or []
 
     @staticmethod
-    async def upsert(tenant_id: str, key: str, *, title: str | None = None, url: str | None = None, enabled: bool | None = None, sort: int | None = None) -> None:
+    async def upsert(
+        tenant_id: str,
+        key: str,
+        *,
+        title: str | None = None,
+        url: str | None = None,
+        enabled: bool | None = None,
+        sort: int | None = None,
+    ) -> None:
         """
         Postgres upsert по (tenant_id, key).
+        ФІКС: created_ts/updated_ts, бо в таблиці NOT NULL.
         """
+        now = int(time.time())
         q = """
-        INSERT INTO telegram_shop_support_links (tenant_id, key, title, url, enabled, sort)
-        VALUES (:tid, :key, COALESCE(:title,''), COALESCE(:url,''), COALESCE(:enabled,false), COALESCE(:sort,0))
+        INSERT INTO telegram_shop_support_links
+            (tenant_id, key, title, url, enabled, sort, created_ts, updated_ts)
+        VALUES
+            (:tid, :key, COALESCE(:title,''), COALESCE(:url,''), COALESCE(:enabled,false), COALESCE(:sort,0), :now, :now)
         ON CONFLICT (tenant_id, key)
         DO UPDATE SET
             title = CASE WHEN :title IS NULL THEN telegram_shop_support_links.title ELSE COALESCE(:title,'') END,
             url   = CASE WHEN :url   IS NULL THEN telegram_shop_support_links.url   ELSE COALESCE(:url,'')   END,
             enabled = CASE WHEN :enabled IS NULL THEN telegram_shop_support_links.enabled ELSE COALESCE(:enabled,false) END,
-            sort  = CASE WHEN :sort  IS NULL THEN telegram_shop_support_links.sort  ELSE COALESCE(:sort,0)  END
+            sort  = CASE WHEN :sort  IS NULL THEN telegram_shop_support_links.sort  ELSE COALESCE(:sort,0)  END,
+            updated_ts = :now
         """
         await db_execute(
             q,
@@ -65,14 +81,12 @@ class TelegramShopSupportLinksRepo:
                 "url": url,
                 "enabled": enabled,
                 "sort": sort,
+                "now": now,
             },
         )
 
     @staticmethod
     async def set_url(tenant_id: str, key: str, url: str) -> None:
-        """
-        Те, чого не вистачало (у тебе падало саме тут).
-        """
         await TelegramShopSupportLinksRepo.upsert(tenant_id, key, url=(url or "").strip())
 
     @staticmethod
@@ -99,5 +113,5 @@ class TelegramShopSupportLinksRepo:
             ("support_email", "Пошта", 40),
             ("announce_chat_id", "Автопост новинок: chat_id", 90),
         ]
-        for key, title, sort in defaults:
-            await TelegramShopSupportLinksRepo.upsert(tenant_id, key, title=title, sort=sort)
+        for k, t, s in defaults:
+            await TelegramShopSupportLinksRepo.upsert(tenant_id, k, title=t, sort=s)
