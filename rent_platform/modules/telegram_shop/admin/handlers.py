@@ -7,11 +7,11 @@ from typing import Any
 from aiogram import Bot
 from aiogram.types import InputMediaPhoto
 
-from rent_platform.modules.telegram_shop.repo.support_links import TelegramShopSupportLinksRepo
 from rent_platform.db.session import db_fetch_all, db_fetch_one, db_execute  # noqa: F401
 from rent_platform.modules.telegram_shop.admin_orders import admin_orders_handle_update
-from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
 from rent_platform.modules.telegram_shop.channel_announce import maybe_post_new_product
+from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
+from rent_platform.modules.telegram_shop.repo.support_links import TelegramShopSupportLinksRepo
 
 # CategoriesRepo optional (if file exists)
 try:
@@ -26,7 +26,61 @@ except Exception:  # pragma: no cover
 # ============================================================
 _STATE: dict[tuple[str, int], dict[str, Any]] = {}
 
+# Remember last support menu message_id to edit in-place
 _SUP_MENU_MSG_ID: dict[tuple[str, int], int] = {}
+
+
+# ============================================================
+# Public helpers (imported by router)
+# ============================================================
+def admin_has_state(tenant_id: str, chat_id: int) -> bool:
+    return (tenant_id, chat_id) in _STATE
+
+
+def is_admin_user(*, tenant: dict, user_id: int) -> bool:
+    """
+    Гнучка перевірка адміна (щоб не ламалось при різних схемах tenant-а).
+    Підтримує:
+      - tenant["owner_user_id"]
+      - tenant["admin_user_ids"] як list[int] / str з комами
+      - tenant["admins"] як list[int]
+    """
+    try:
+        uid = int(user_id)
+    except Exception:
+        return False
+
+    # owner
+    owner = tenant.get("owner_user_id")
+    try:
+        if owner is not None and int(owner) == uid:
+            return True
+    except Exception:
+        pass
+
+    # list fields
+    for k in ("admin_user_ids", "admins"):
+        v = tenant.get(k)
+        if not v:
+            continue
+
+        if isinstance(v, (list, tuple, set)):
+            try:
+                return uid in {int(x) for x in v}
+            except Exception:
+                continue
+
+        if isinstance(v, str):
+            try:
+                ids = {int(x.strip()) for x in v.split(",") if x.strip().isdigit()}
+                if uid in ids:
+                    return True
+            except Exception:
+                continue
+
+    return False
+
+
 # ============================================================
 # Helpers
 # ============================================================
@@ -378,14 +432,15 @@ def _archive_product_kb(*, product_id: int) -> dict:
 # tgadm:sup_toggle:<key>
 # tgadm:sup_edit:<key>
 # ============================================================
-
 _SUPPORT_HINTS: dict[str, str] = {
+    "support_channel": "Введи @username каналу або посилання.\nПриклад: https://t.me/your_channel",
     "support_chat": "Введи chat_id (краще) або @username або посилання.\nПриклад chat_id: -1001234567890",
     "support_site": "Введи посилання на сайт.\nПриклад: https://example.com",
     "support_manager": "Введи @username менеджера або телефон.\nПриклад: @manager_name",
     "support_email": "Введи email.\nПриклад: hello@example.com",
     "announce_chat_id": "Введи chat_id каналу для автопосту новинок.\nПриклад: -1001234567890",
 }
+
 
 def _sup_short(v: str, n: int = 18) -> str:
     v = (v or "").strip()
@@ -395,11 +450,8 @@ def _sup_short(v: str, n: int = 18) -> str:
         return v
     return v[: n - 1] + "…"
 
+
 def _sup_admin_kb(items: list[dict[str, Any]]) -> dict:
-    """
-    На кожен пункт:
-      [✅/⛔ Назва]  [✏️ Значення]
-    """
     rows: list[list[tuple[str, str]]] = []
     for it in items:
         key = str(it.get("key") or "")
@@ -418,24 +470,30 @@ def _sup_admin_kb(items: list[dict[str, Any]]) -> dict:
     rows.append([("⬅️ В адмін-меню", "tgadm:home")])
     return _kb(rows)
 
+
 async def _send_support_admin_menu(bot: Bot, chat_id: int, tenant_id: str, *, edit_message_id: int | None = None) -> int:
     await TelegramShopSupportLinksRepo.ensure_defaults(tenant_id)
     items = await TelegramShopSupportLinksRepo.list_all(tenant_id)
 
     text = (
         "🆘 Підтримка — налаштування\n\n"
-        "• ЛКМ по назві: увімк/вимк кнопку\n"
+        "• Тап по назві: увімк/вимк кнопку\n"
         "• ✏️: встановити значення (chat_id / @username / URL / email)\n\n"
-        "Для автопосту новинок: ввімкни 'Автопост новинок: chat_id' і задай chat_id каналу."
+        "Для автопосту новинок: ввімкни 'Автопост новинок (канал): chat_id' і задай chat_id каналу."
     )
     kb = _sup_admin_kb(items)
 
     if edit_message_id:
-        await bot.edit_message_text(text, chat_id=chat_id, message_id=edit_message_id, reply_markup=kb)
-        return int(edit_message_id)
+        try:
+            await bot.edit_message_text(text, chat_id=chat_id, message_id=edit_message_id, reply_markup=kb)
+            return int(edit_message_id)
+        except Exception:
+            # якщо редагування неможливе — просто шлемо нове меню
+            pass
 
     m = await bot.send_message(chat_id, text, reply_markup=kb)
     return int(m.message_id)
+
 
 async def _send_support_edit_prompt(bot: Bot, chat_id: int, tenant_id: str, key: str) -> None:
     it = await TelegramShopSupportLinksRepo.get(tenant_id, key) or {}
@@ -453,6 +511,7 @@ async def _send_support_edit_prompt(bot: Bot, chat_id: int, tenant_id: str, key:
         f"Скасувати: /cancel",
         reply_markup=_kb([[("❌ Скасувати", "tgadm:cancel")]]),
     )
+
 
 # ============================================================
 # Senders
@@ -646,12 +705,15 @@ async def _edit_promo_product_card(bot: Bot, chat_id: int, message_id: int, tena
     if not card:
         return False
 
-    if card["has_photo"]:
-        media = InputMediaPhoto(media=card["file_id"], caption=card["text"], parse_mode="Markdown")
-        await bot.edit_message_media(media=media, chat_id=chat_id, message_id=message_id, reply_markup=card["kb"])
-    else:
-        await bot.edit_message_text(card["text"], chat_id=chat_id, message_id=message_id, parse_mode="Markdown", reply_markup=card["kb"])
-    return True
+    try:
+        if card["has_photo"]:
+            media = InputMediaPhoto(media=card["file_id"], caption=card["text"], parse_mode="Markdown")
+            await bot.edit_message_media(media=media, chat_id=chat_id, message_id=message_id, reply_markup=card["kb"])
+        else:
+            await bot.edit_message_text(card["text"], chat_id=chat_id, message_id=message_id, parse_mode="Markdown", reply_markup=card["kb"])
+        return True
+    except Exception:
+        return False
 
 
 # ============================================================
@@ -808,12 +870,15 @@ async def _edit_admin_product_card(bot: Bot, chat_id: int, message_id: int, tena
     if not card:
         return False
 
-    if card["has_photo"]:
-        media = InputMediaPhoto(media=card["file_id"], caption=card["text"], parse_mode="Markdown")
-        await bot.edit_message_media(media=media, chat_id=chat_id, message_id=message_id, reply_markup=card["kb"])
-    else:
-        await bot.edit_message_text(card["text"], chat_id=chat_id, message_id=message_id, parse_mode="Markdown", reply_markup=card["kb"])
-    return True
+    try:
+        if card["has_photo"]:
+            media = InputMediaPhoto(media=card["file_id"], caption=card["text"], parse_mode="Markdown")
+            await bot.edit_message_media(media=media, chat_id=chat_id, message_id=message_id, reply_markup=card["kb"])
+        else:
+            await bot.edit_message_text(card["text"], chat_id=chat_id, message_id=message_id, parse_mode="Markdown", reply_markup=card["kb"])
+        return True
+    except Exception:
+        return False
 
 
 # ============================================================
@@ -1005,9 +1070,8 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             await _send_categories_menu(bot, chat_id, tenant_id)
             return True
 
-#Підтримка частина
-
-
+        # =====================
+        # SUPPORT (admin)
         if action == "sup_menu":
             _state_clear(tenant_id, chat_id)
             mid = await _send_support_admin_menu(bot, chat_id, tenant_id, edit_message_id=None)
@@ -1393,17 +1457,18 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
 
     chat_id = int(msg["chat"]["id"])
     text = (msg.get("text") or "").strip()
-    
+
+    # cancel always
     if text == "/cancel":
         _state_clear(tenant_id, chat_id)
         await bot.send_message(chat_id, "✅ Скасовано.", reply_markup=_admin_home_kb())
         return True
-    
-    
+
+    # shortcuts
     if text in ("/a", "/a_help"):
         await _send_admin_home(bot, chat_id)
         return True
-    
+
     if text in ("/sup", "🆘 Підтримка", "SOS Підтримка", "Підтримка"):
         _state_clear(tenant_id, chat_id)
         mid = _SUP_MENU_MSG_ID.get((tenant_id, chat_id))
@@ -1419,7 +1484,6 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
 
     # =========================
     # SUPPORT (admin) message modes
-
     if mode == "sup_edit":
         key = str(st.get("key") or "").strip()
         val = (text or "").strip()
@@ -1429,7 +1493,6 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             return True
 
         await TelegramShopSupportLinksRepo.set_url(tenant_id, key, val)
-
         if val:
             await TelegramShopSupportLinksRepo.set_enabled(tenant_id, key, True)
 
@@ -1461,7 +1524,7 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             try:
                 await maybe_post_new_product(bot, tenant_id, product_id)
                 st["announced"] = True
-                _state_set(tenant_id, chat_id, st)  # зберегли прапорець
+                _state_set(tenant_id, chat_id, st)
             except Exception:
                 pass
 
@@ -1549,7 +1612,6 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
         draft = st.get("draft") or {}
         base_kop = int(draft.get("price_kop") or 0)
 
-        # щоб акція була дешевша
         if base_kop > 0 and int(promo_kop) >= base_kop:
             await bot.send_message(
                 chat_id,
@@ -1561,7 +1623,7 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             return True
 
         draft["promo_price_kop"] = int(promo_kop)
-        draft["promo_until_ts"] = 0  # при створенні: без кінця (можна потім змінити в Акціях)
+        draft["promo_until_ts"] = 0
         await _wiz_ask_desc(bot, chat_id, tenant_id, draft)
         return True
 
@@ -1707,3 +1769,7 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
         return True
 
     return False
+
+
+# Backward-compatible alias (router imports admin_handle_update)
+admin_handle_update = handle_update
