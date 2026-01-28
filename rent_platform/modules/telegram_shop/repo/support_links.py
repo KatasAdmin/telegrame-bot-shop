@@ -11,28 +11,29 @@ class TelegramShopSupportLinksRepo:
     """
     Таблиця: telegram_shop_support_links
 
-    Очікувані колонки (твій варіант з created_ts/updated_ts):
-      - id (bigint, optional)
-      - tenant_id (text)
-      - key (text)
-      - title (text)
-      - url (text)
-      - enabled (bool)
-      - sort (int)
-      - created_ts (int, NOT NULL)
-      - updated_ts (int, NOT NULL)
-
-    Конфлікт: ON CONFLICT (tenant_id, key)
+    Рекомендована схема (як у твоїй міграції create_table):
+      - id (bigint pk)
+      - tenant_id (text not null)
+      - key (text not null)
+      - title (text not null default '')
+      - url (text not null default '')
+      - enabled (bool not null default false)
+      - sort (int not null default 0)
+      - created_ts (int not null)
+      - updated_ts (int not null)
+    + unique (tenant_id, key)
     """
 
     @staticmethod
     async def get(tenant_id: str, key: str) -> dict[str, Any] | None:
         q = """
-        SELECT tenant_id, key,
+        SELECT id, tenant_id, key,
                COALESCE(title,'') AS title,
                COALESCE(url,'') AS url,
                COALESCE(enabled,false) AS enabled,
-               COALESCE(sort,0) AS sort
+               COALESCE(sort,0) AS sort,
+               COALESCE(created_ts,0) AS created_ts,
+               COALESCE(updated_ts,0) AS updated_ts
         FROM telegram_shop_support_links
         WHERE tenant_id = :tid AND key = :key
         LIMIT 1
@@ -42,14 +43,32 @@ class TelegramShopSupportLinksRepo:
     @staticmethod
     async def list_all(tenant_id: str) -> list[dict[str, Any]]:
         q = """
-        SELECT tenant_id, key,
+        SELECT id, tenant_id, key,
+               COALESCE(title,'') AS title,
+               COALESCE(url,'') AS url,
+               COALESCE(enabled,false) AS enabled,
+               COALESCE(sort,0) AS sort,
+               COALESCE(created_ts,0) AS created_ts,
+               COALESCE(updated_ts,0) AS updated_ts
+        FROM telegram_shop_support_links
+        WHERE tenant_id = :tid
+        ORDER BY COALESCE(sort,0) ASC, id ASC
+        """
+        return await db_fetch_all(q, {"tid": tenant_id}) or []
+
+    @staticmethod
+    async def list_enabled(tenant_id: str) -> list[dict[str, Any]]:
+        q = """
+        SELECT id, tenant_id, key,
                COALESCE(title,'') AS title,
                COALESCE(url,'') AS url,
                COALESCE(enabled,false) AS enabled,
                COALESCE(sort,0) AS sort
         FROM telegram_shop_support_links
         WHERE tenant_id = :tid
-        ORDER BY COALESCE(sort,0) ASC, key ASC
+          AND COALESCE(enabled,false) = true
+          AND COALESCE(url,'') <> ''
+        ORDER BY COALESCE(sort,0) ASC, id ASC
         """
         return await db_fetch_all(q, {"tid": tenant_id}) or []
 
@@ -64,37 +83,27 @@ class TelegramShopSupportLinksRepo:
         sort: int | None = None,
     ) -> None:
         """
-        Postgres upsert по (tenant_id, key).
-        ВАЖЛИВО: created_ts/updated_ts NOT NULL -> завжди підставляємо now.
+        Upsert по (tenant_id, key) з нормальними created_ts/updated_ts.
+        Якщо в таблиці created_ts/updated_ts NOT NULL — це критично.
         """
         now = int(time.time())
-
         q = """
         INSERT INTO telegram_shop_support_links
             (tenant_id, key, title, url, enabled, sort, created_ts, updated_ts)
         VALUES
             (:tid, :key,
-             COALESCE(:title,''), COALESCE(:url,''),
-             COALESCE(:enabled,false), COALESCE(:sort,0),
-             :now, :now)
+             COALESCE(:title,''),
+             COALESCE(:url,''),
+             COALESCE(:enabled,false),
+             COALESCE(:sort,0),
+             :now,
+             :now)
         ON CONFLICT (tenant_id, key)
         DO UPDATE SET
-            title = CASE
-                WHEN :title IS NULL THEN telegram_shop_support_links.title
-                ELSE COALESCE(:title,'')
-            END,
-            url = CASE
-                WHEN :url IS NULL THEN telegram_shop_support_links.url
-                ELSE COALESCE(:url,'')
-            END,
-            enabled = CASE
-                WHEN :enabled IS NULL THEN telegram_shop_support_links.enabled
-                ELSE COALESCE(:enabled,false)
-            END,
-            sort = CASE
-                WHEN :sort IS NULL THEN telegram_shop_support_links.sort
-                ELSE COALESCE(:sort,0)
-            END,
+            title = CASE WHEN :title IS NULL THEN telegram_shop_support_links.title ELSE COALESCE(:title,'') END,
+            url   = CASE WHEN :url   IS NULL THEN telegram_shop_support_links.url   ELSE COALESCE(:url,'')   END,
+            enabled = CASE WHEN :enabled IS NULL THEN telegram_shop_support_links.enabled ELSE COALESCE(:enabled,false) END,
+            sort  = CASE WHEN :sort  IS NULL THEN telegram_shop_support_links.sort  ELSE COALESCE(:sort,0)  END,
             updated_ts = :now
         """
         await db_execute(
@@ -103,7 +112,7 @@ class TelegramShopSupportLinksRepo:
                 "tid": tenant_id,
                 "key": key,
                 "title": title,
-                "url": url,
+                "url": (url or None),
                 "enabled": enabled,
                 "sort": sort,
                 "now": now,
@@ -127,12 +136,17 @@ class TelegramShopSupportLinksRepo:
 
     @staticmethod
     async def ensure_defaults(tenant_id: str) -> None:
+        """
+        Дефолтні ключі для меню.
+        Автопост — це саме КАНАЛ (channel_id).
+        """
         defaults: list[tuple[str, str, int]] = [
+            ("support_channel", "Наш канал", 5),
             ("support_chat", "Наш чат", 10),
             ("support_site", "Наш сайт", 20),
             ("support_manager", "Менеджер", 30),
             ("support_email", "Пошта", 40),
-            ("announce_chat_id", "Автопост новинок: chat_id", 90),
+            ("announce_chat_id", "Автопост новинок (канал): chat_id", 90),
         ]
-        for k, title, sort in defaults:
-            await TelegramShopSupportLinksRepo.upsert(tenant_id, k, title=title, sort=sort)
+        for k, t, s in defaults:
+            await TelegramShopSupportLinksRepo.upsert(tenant_id, k, title=t, sort=s)
