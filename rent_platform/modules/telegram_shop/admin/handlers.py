@@ -26,7 +26,7 @@ except Exception:  # pragma: no cover
 # ============================================================
 _STATE: dict[tuple[str, int], dict[str, Any]] = {}
 
-
+_SUP_MENU_MSG_ID: dict[tuple[str, int], int] = {}
 # ============================================================
 # Helpers
 # ============================================================
@@ -418,19 +418,24 @@ def _sup_admin_kb(items: list[dict[str, Any]]) -> dict:
     rows.append([("⬅️ В адмін-меню", "tgadm:home")])
     return _kb(rows)
 
-async def _send_support_admin_menu(bot: Bot, chat_id: int, tenant_id: str) -> None:
+async def _send_support_admin_menu(bot: Bot, chat_id: int, tenant_id: str, *, edit_message_id: int | None = None) -> int:
     await TelegramShopSupportLinksRepo.ensure_defaults(tenant_id)
     items = await TelegramShopSupportLinksRepo.list_all(tenant_id)
 
-    # ВАЖЛИВО: без Markdown -> не буде падати "parse entities"
-    await bot.send_message(
-        chat_id,
+    text = (
         "🆘 Підтримка — налаштування\n\n"
         "• ЛКМ по назві: увімк/вимк кнопку\n"
         "• ✏️: встановити значення (chat_id / @username / URL / email)\n\n"
-        "Для автопосту новинок: ввімкни 'Автопост новинок: chat_id' і задай chat_id каналу.",
-        reply_markup=_sup_admin_kb(items),
+        "Для автопосту новинок: ввімкни 'Автопост новинок: chat_id' і задай chat_id каналу."
     )
+    kb = _sup_admin_kb(items)
+
+    if edit_message_id:
+        await bot.edit_message_text(text, chat_id=chat_id, message_id=edit_message_id, reply_markup=kb)
+        return int(edit_message_id)
+
+    m = await bot.send_message(chat_id, text, reply_markup=kb)
+    return int(m.message_id)
 
 async def _send_support_edit_prompt(bot: Bot, chat_id: int, tenant_id: str, key: str) -> None:
     it = await TelegramShopSupportLinksRepo.get(tenant_id, key) or {}
@@ -1005,12 +1010,15 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
 
         if action == "sup_menu":
             _state_clear(tenant_id, chat_id)
-            await _send_support_admin_menu(bot, chat_id, tenant_id)
+            mid = await _send_support_admin_menu(bot, chat_id, tenant_id, edit_message_id=None)
+            _SUP_MENU_MSG_ID[(tenant_id, chat_id)] = int(mid)
             return True
 
         if action == "sup_toggle" and arg:
             await TelegramShopSupportLinksRepo.toggle_enabled(tenant_id, arg)
-            await _send_support_admin_menu(bot, chat_id, tenant_id)
+            mid = _SUP_MENU_MSG_ID.get((tenant_id, chat_id))
+            mid = await _send_support_admin_menu(bot, chat_id, tenant_id, edit_message_id=mid)
+            _SUP_MENU_MSG_ID[(tenant_id, chat_id)] = int(mid)
             return True
 
         if action == "sup_edit" and arg:
@@ -1418,16 +1426,17 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             _state_clear(tenant_id, chat_id)
             return True
 
-        # set_url є у твоєму repo (ти вже додав)
         await TelegramShopSupportLinksRepo.set_url(tenant_id, key, val)
 
-        # якщо ввели значення — логічно одразу увімкнути кнопку
         if val:
             await TelegramShopSupportLinksRepo.set_enabled(tenant_id, key, True)
 
         _state_clear(tenant_id, chat_id)
         await bot.send_message(chat_id, "✅ Збережено.")
-        await _send_support_admin_menu(bot, chat_id, tenant_id)
+
+        mid = _SUP_MENU_MSG_ID.get((tenant_id, chat_id))
+        mid = await _send_support_admin_menu(bot, chat_id, tenant_id, edit_message_id=mid)
+        _SUP_MENU_MSG_ID[(tenant_id, chat_id)] = int(mid)
         return True
 
     # photo modes
