@@ -13,6 +13,7 @@ BTN_MENU_BACK = "⬅️ Меню"
 
 BTN_ADMIN = "🛠 Адмінка"
 BTN_ADMIN_ORDERS = "🧾 Замовлення"
+BTN_ADMIN_INTEGRATIONS = "⚙️ Інтеграції"  # NEW
 
 BTN_CHECKOUT = "✅ Оформити замовлення"
 BTN_CLEAR_CART = "🧹 Очистити кошик"
@@ -25,9 +26,12 @@ def _kb(rows: list[list[str]], *, resize: bool = True) -> ReplyKeyboardMarkup:
     )
 
 
-def _admin_row() -> list[str]:
-    # одна строка зверху для адміна: поруч "Адмінка" + "Замовлення"
-    return [BTN_ADMIN, BTN_ADMIN_ORDERS]
+def _admin_rows() -> list[list[str]]:
+    # 2 рядки, щоб не було “каші” в одному рядку
+    return [
+        [BTN_ADMIN, BTN_ADMIN_ORDERS],
+        [BTN_ADMIN_INTEGRATIONS],
+    ]
 
 
 def main_menu_kb(*, is_admin: bool = False) -> ReplyKeyboardMarkup:
@@ -37,7 +41,7 @@ def main_menu_kb(*, is_admin: bool = False) -> ReplyKeyboardMarkup:
         [BTN_ORDERS, BTN_SUPPORT],
     ]
     if is_admin:
-        rows.insert(0, _admin_row())
+        rows = _admin_rows() + rows
     return _kb(rows)
 
 
@@ -52,7 +56,7 @@ def catalog_kb(*, is_admin: bool = False) -> ReplyKeyboardMarkup:
         [BTN_MENU_BACK],
     ]
     if is_admin:
-        rows.insert(0, _admin_row())
+        rows = _admin_rows() + rows
     return _kb(rows)
 
 
@@ -63,7 +67,7 @@ def cart_kb(*, is_admin: bool = False) -> ReplyKeyboardMarkup:
         [BTN_MENU_BACK],
     ]
     if is_admin:
-        rows.insert(0, _admin_row())
+        rows = _admin_rows() + rows
     return _kb(rows)
 
 
@@ -73,7 +77,7 @@ def favorites_kb(*, is_admin: bool = False) -> ReplyKeyboardMarkup:
         [BTN_MENU_BACK],
     ]
     if is_admin:
-        rows.insert(0, _admin_row())
+        rows = _admin_rows() + rows
     return _kb(rows)
 
 
@@ -83,7 +87,7 @@ def orders_history_kb(*, is_admin: bool = False) -> ReplyKeyboardMarkup:
         [BTN_MENU_BACK],
     ]
     if is_admin:
-        rows.insert(0, _admin_row())
+        rows = _admin_rows() + rows
     return _kb(rows)
 
 
@@ -93,5 +97,5 @@ def support_kb(*, is_admin: bool = False) -> ReplyKeyboardMarkup:
         [BTN_MENU_BACK],
     ]
     if is_admin:
-        rows.insert(0, _admin_row())
+        rows = _admin_rows() + rows
     return _kb(rows)
