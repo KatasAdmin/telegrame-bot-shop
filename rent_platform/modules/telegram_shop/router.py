@@ -744,9 +744,13 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         return True
 
     # B) Admin quick
-    if is_admin and (text == _normalize_text(BTN_ADMIN) or text_l == "/a" or text_l == "/a_help"):
-        handled = await admin_handle_update(tenant=tenant, data=data, bot=bot)
-        return bool(handled)
+    if is_admin:
+        t = _normalize_text(text).lower()
+
+#кнопка/слово "адмінка" (з емодзі/без) + /a /a_help
+        if t in ("/a", "/a_help") or "адмін" in t:
+            handled = await admin_handle_update(tenant=tenant, data=data, bot=bot)
+            return bool(handled)
 
     # C) Support admin menu
     if is_admin and text_l in ("/sup", "/support_admin"):
