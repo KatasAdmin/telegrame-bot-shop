@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from rent_platform.modules.telegram_shop.admin.handlers import handle_update as admin_handle_update
+from rent_platform.modules.telegram_shop.admin.handlers import (
+    handle_update as admin_handle_update,
+    admin_has_state,
+)
 
 
 def is_admin_user(*, tenant: dict[str, Any], user_id: int) -> bool:
@@ -21,4 +24,4 @@ def is_admin_user(*, tenant: dict[str, Any], user_id: int) -> bool:
         return False
 
 
-__all__ = ["admin_handle_update", "is_admin_user"]
+__all__ = ["admin_handle_update", "admin_has_state", "is_admin_user"]
