@@ -9,11 +9,7 @@ from aiogram import Bot
 from aiogram.types import InputMediaPhoto
 
 from rent_platform.modules.telegram_shop.user_support import send_support_menu
-from rent_platform.modules.telegram_shop.admin import (
-    admin_handle_update,
-    is_admin_user,
-    admin_has_state,  # ✅ NEW: щоб wizard (додати товар) працював далі
-)
+from rent_platform.modules.telegram_shop.admin import admin_handle_update, is_admin_user
 from rent_platform.modules.telegram_shop.admin_orders import admin_orders_send_menu  # ✅ existing
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
 from rent_platform.modules.telegram_shop.repo.cart import TelegramShopCartRepo
@@ -173,7 +169,7 @@ async def _send_menu(bot: Bot, chat_id: int, text: str, *, is_admin: bool) -> No
 
 
 # =========================================================
-# Support (user view) - лишаю, але у тебе викликається send_support_menu()
+# Support (user view)
 # =========================================================
 async def _send_support(bot: Bot, chat_id: int, tenant_id: str, *, is_admin: bool) -> None:
     await TelegramShopSupportLinksRepo.ensure_defaults(tenant_id)
@@ -276,11 +272,7 @@ async def _send_categories_menu(bot: Bot, chat_id: int, tenant_id: str, *, is_ad
 # Hits / Promos menus (categories filtered)
 # =========================================================
 async def _send_hits_promos_entry(bot: Bot, chat_id: int, *, is_admin: bool) -> None:
-    kb = _kb(
-        [
-            [("🔥 Акції", "tgshop:pcats:0:0:promo"), ("⭐ Хіти", "tgshop:hcats:0:0:hit")],
-        ]
-    )
+    kb = _kb([[("🔥 Акції", "tgshop:pcats:0:0:promo"), ("⭐ Хіти", "tgshop:hcats:0:0:hit")]])
     await bot.send_message(
         chat_id,
         "🔥 *Хіти / Акції*\n\n"
@@ -293,16 +285,8 @@ async def _send_hits_promos_entry(bot: Bot, chat_id: int, *, is_admin: bool) -> 
 
 
 async def _send_scope_categories(bot: Bot, chat_id: int, tenant_id: str, *, scope: str) -> None:
-    """
-    scope: "promo" | "hit"
-    показує лише ті категорії, де реально є контент
-    """
     if CategoriesRepo is None:
-        await bot.send_message(
-            chat_id,
-            "🔥 *Хіти / Акції*\n\nКатегорії ще не підключені.",
-            parse_mode="Markdown",
-        )
+        await bot.send_message(chat_id, "🔥 *Хіти / Акції*\n\nКатегорії ще не підключені.", parse_mode="Markdown")
         return
 
     await CategoriesRepo.ensure_default(tenant_id)  # type: ignore[misc]
@@ -339,12 +323,7 @@ async def _send_scope_categories(bot: Bot, chat_id: int, tenant_id: str, *, scop
 
     rows.append([("⬅️ Назад", "tgshop:hp:0:0:0")])
 
-    await bot.send_message(
-        chat_id,
-        f"{title}\n\nОбери категорію 👇",
-        parse_mode="Markdown",
-        reply_markup=_kb(rows),
-    )
+    await bot.send_message(chat_id, f"{title}\n\nОбери категорію 👇", parse_mode="Markdown", reply_markup=_kb(rows))
 
 
 # =========================================================
@@ -356,7 +335,7 @@ async def _build_product_card(
     product_id: int,
     *,
     category_id: int | None,
-    scope: str,  # "cat" | "promo" | "hit"
+    scope: str,
 ) -> dict | None:
     p = await ProductsRepo.get_active(tenant_id, product_id)
     if not p:
@@ -379,7 +358,7 @@ async def _build_product_card(
     elif scope == "promo":
         prev_p = await ProductsRepo.get_prev_promo_active(tenant_id, pid, category_id=category_id)
         next_p = await ProductsRepo.get_next_promo_active(tenant_id, pid, category_id=category_id)
-    else:  # hit
+    else:
         prev_p = await ProductsRepo.get_prev_hit_active(tenant_id, pid, category_id=category_id)
         next_p = await ProductsRepo.get_next_hit_active(tenant_id, pid, category_id=category_id)
 
@@ -414,13 +393,7 @@ async def _build_product_card(
         is_fav=bool(is_fav),
     )
 
-    return {
-        "pid": pid,
-        "has_photo": bool(cover_file_id),
-        "file_id": cover_file_id,
-        "text": text,
-        "kb": kb,
-    }
+    return {"pid": pid, "has_photo": bool(cover_file_id), "file_id": cover_file_id, "text": text, "kb": kb}
 
 
 async def _send_first_product_card(
@@ -431,7 +404,7 @@ async def _send_first_product_card(
     *,
     is_admin: bool,
     category_id: int | None,
-    scope: str,  # "cat" | "promo" | "hit"
+    scope: str,
 ) -> None:
     if scope == "cat":
         first = await ProductsRepo.get_first_active(tenant_id, category_id=category_id)
@@ -472,7 +445,7 @@ async def _edit_product_card(
     product_id: int,
     *,
     category_id: int | None,
-    scope: str,  # "cat" | "promo" | "hit"
+    scope: str,
 ) -> bool:
     card = await _build_product_card(tenant_id, user_id, product_id, category_id=category_id, scope=scope)
     if not card:
@@ -514,7 +487,7 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
     if cb:
         payload = (cb.get("data") or "").strip()
         chat_id = int(cb["message"]["chat"]["id"])
-        user_id = int(cb["from"]["id"])
+        user_id = int(cb["fromfrom := cb["from"]["id"] and cb["from"]["id"]) if False else int(cb["from"]["id"])  # keep safe
         is_admin = is_admin_user(tenant=tenant, user_id=user_id)
         cb_id = cb.get("id")
         msg_id = int(cb["message"]["message_id"])
@@ -531,7 +504,6 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
             key = parts[2] if len(parts) > 2 else ""
 
             if action == "back":
-                # назад в адмін-меню (у тебе це ок)
                 await admin_orders_send_menu(bot, chat_id)
                 if cb_id:
                     await bot.answer_callback_query(cb_id)
@@ -752,6 +724,16 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
     text_l = text.lower()
     log.info("tgshop message text=%r user_id=%s tenant=%s", text, user_id, tenant_id)
 
+    # ✅ 0) если админ — пробуем отдать сообщение в админ-хендлер (wizard/состояния)
+    if is_admin:
+        try:
+            handled = await admin_handle_update(tenant=tenant, data=data, bot=bot)
+            if handled:
+                return True
+        except Exception:
+            # не валим весь роутер если админка не захотела обрабатывать
+            pass
+
     # A) pending support edit (admin)
     pend = _PENDING_SUPPORT_EDIT.get((tenant_id, user_id))
     if is_admin and pend:
@@ -766,36 +748,7 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         await bot.send_message(chat_id, "✅ Оновив значення. /sup щоб глянути меню ще раз.")
         return True
 
-    # ✅ ADMIN ORDERS from main menu (fix)
-    # "Замовлення" (адмін) ≠ "Історія замовлень" (юзер)
-    if is_admin:
-        is_history = ("істор" in text_l) and ("замов" in text_l)
-        is_admin_orders_btn = (("замов" in text_l) and (not is_history)) and (
-            text == _normalize_text(BTN_ADMIN_ORDERS)
-            or text_l.strip() in ("замовлення", "замовлення адмiн", "адмін — замовлення")
-            or ("🧾" in text and "замов" in text_l and not is_history)
-        )
-        if is_admin_orders_btn:
-            await admin_orders_send_menu(bot, chat_id)
-            return True
-
-    # ✅ ADMIN wizard/state forwarding (fix for add product steps etc.)
-    if is_admin and admin_has_state(tenant_id, chat_id):
-        handled = await admin_handle_update(tenant=tenant, data=data, bot=bot)
-        return bool(handled)
-
-    # B) Admin open (button + /a) (fix)
-    if is_admin and (
-        text in ("/a", "/a_help")
-        or text == _normalize_text(BTN_ADMIN)
-        or ("адмін" in text_l)
-        or text.startswith("🛠")
-        or text_l.strip() == "адмінка"
-    ):
-        handled = await admin_handle_update(tenant=tenant, data=data, bot=bot)
-        return bool(handled)
-
-    # C) Support admin menu
+    # B) Support admin menu
     if is_admin and text in ("/sup", "/support_admin"):
         await _send_support_admin(bot, chat_id, tenant_id)
         return True
@@ -822,6 +775,17 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
             text=text,
         )
         return bool(handled)
+
+    # Admin Orders (main menu button)
+    if is_admin:
+        is_history = ("істор" in text_l) and ("замов" in text_l)
+        if (("замов" in text_l) and not is_history) and (
+            text == _normalize_text(BTN_ADMIN_ORDERS)
+            or text_l.strip() == "замовлення"
+            or ("🧾" in text and "замов" in text_l and not is_history)
+        ):
+            await admin_orders_send_menu(bot, chat_id)
+            return True
 
     # Orders (user history)
     if text == _normalize_text(BTN_ORDERS) or (("істор" in text_l) and ("замов" in text_l)):
