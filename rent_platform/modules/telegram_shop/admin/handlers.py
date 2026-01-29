@@ -7,6 +7,7 @@ from typing import Any
 from aiogram import Bot
 from aiogram.types import InputMediaPhoto
 
+from rent_platform.modules.telegram_shop.ui.user_kb import BTN_ADMIN, BTN_ADMIN_ORDERS
 from rent_platform.db.session import db_fetch_all, db_fetch_one, db_execute  # noqa: F401
 from rent_platform.modules.telegram_shop.admin_orders import admin_orders_handle_update
 from rent_platform.modules.telegram_shop.channel_announce import maybe_post_new_product
@@ -1464,9 +1465,21 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
         await bot.send_message(chat_id, "✅ Скасовано.", reply_markup=_admin_home_kb())
         return True
 
-    # shortcuts
-    if text in ("/a", "/a_help"):
+    # shortcuts (commands + reply keyboard buttons)
+    if text in ("/a", "/a_help", BTN_ADMIN):
+        _state_clear(tenant_id, chat_id)
         await _send_admin_home(bot, chat_id)
+        return True
+
+    if text == BTN_ADMIN_ORDERS:
+        _state_clear(tenant_id, chat_id)
+        # одразу відкриваємо меню замовлень (інлайн), далі вже відпрацює admin_orders_handle_update по callback
+        await bot.send_message(
+            chat_id,
+            "🧾 *Замовлення*\n\nВідкриваю меню замовлень 👇",
+            parse_mode="Markdown",
+            reply_markup=_kb([[("🧾 Замовлення", "tgadm:ord_menu:0")], [("⬅️ В адмін-меню", "tgadm:home")]]),
+        )
         return True
 
     if text in ("/sup", "🆘 Підтримка", "SOS Підтримка", "Підтримка"):
