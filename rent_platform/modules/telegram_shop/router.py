@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import InputMediaPhoto
 
 from rent_platform.modules.telegram_shop.user_support import send_support_menu
@@ -56,6 +57,14 @@ except Exception:  # pragma: no cover
     CategoriesRepo = None  # type: ignore
 
 log = logging.getLogger(__name__)
+
+# =========================================================
+# IMPORTANT: placeholder for products without photo
+# Put either:
+#  - Telegram file_id (recommended)
+#  - or a public HTTPS URL to an image
+# =========================================================
+DEFAULT_PRODUCT_PHOTO: str = "PUT_YOUR_DEFAULT_PHOTO_FILE_ID_OR_URL_HERE"
 
 # =========================================================
 # Admin "edit value" state (simple pending input)
@@ -412,11 +421,18 @@ async def _build_product_card(
 
     return {
         "pid": pid,
-        "has_photo": bool(cover_file_id),
-        "file_id": cover_file_id,
+        "cover_file_id": cover_file_id,
         "text": text,
         "kb": kb,
     }
+
+
+def _card_photo_id(card: dict) -> str:
+    """Always return something usable for photo media."""
+    fid = (card.get("cover_file_id") or "").strip()
+    if fid:
+        return fid
+    return DEFAULT_PRODUCT_PHOTO
 
 
 async def _send_first_product_card(
@@ -453,10 +469,15 @@ async def _send_first_product_card(
         await bot.send_message(chat_id, "Поки що порожньо 😅", parse_mode="Markdown")
         return
 
-    if card["has_photo"]:
-        await bot.send_photo(chat_id, photo=card["file_id"], caption=card["text"], parse_mode="Markdown", reply_markup=card["kb"])
-    else:
-        await bot.send_message(chat_id, card["text"], parse_mode="Markdown", reply_markup=card["kb"])
+    # ✅ ALWAYS send as photo message (stabilize type)
+    photo_id = _card_photo_id(card)
+    await bot.send_photo(
+        chat_id,
+        photo=photo_id,
+        caption=card["text"],
+        parse_mode="Markdown",
+        reply_markup=card["kb"],
+    )
 
 
 async def _edit_product_card(
@@ -474,12 +495,30 @@ async def _edit_product_card(
     if not card:
         return False
 
-    if card["has_photo"]:
-        media = InputMediaPhoto(media=card["file_id"], caption=card["text"], parse_mode="Markdown")
+    # ✅ ALWAYS try to edit as media (photo message)
+    media = InputMediaPhoto(media=_card_photo_id(card), caption=card["text"], parse_mode="Markdown")
+
+    try:
         await bot.edit_message_media(media=media, chat_id=chat_id, message_id=message_id, reply_markup=card["kb"])
-    else:
-        await bot.edit_message_text(card["text"], chat_id=chat_id, message_id=message_id, parse_mode="Markdown", reply_markup=card["kb"])
-    return True
+        return True
+    except TelegramBadRequest:
+        # fallback if somehow message_id is a text message
+        try:
+            await bot.edit_message_text(
+                card["text"],
+                chat_id=chat_id,
+                message_id=message_id,
+                parse_mode="Markdown",
+                reply_markup=card["kb"],
+            )
+            return True
+        except TelegramBadRequest:
+            # last resort: update only keyboard
+            try:
+                await bot.edit_message_reply_markup(chat_id=chat_id, message_id=message_id, reply_markup=card["kb"])
+                return True
+            except Exception:
+                return False
 
 
 async def _edit_product_kb_only(
@@ -722,7 +761,16 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
                     await bot.answer_callback_query(cb_id, text="•", show_alert=False)
                 return True
 
-            await _edit_product_card(bot, chat_id, msg_id, tenant_id, user_id, int(p["id"]), category_id=category_id, scope=sc)
+            await _edit_product_card(
+                bot,
+                chat_id,
+                msg_id,
+                tenant_id,
+                user_id,
+                int(p["id"]),
+                category_id=category_id,
+                scope=sc,
+            )
             if cb_id:
                 await bot.answer_callback_query(cb_id)
             return True
@@ -769,11 +817,7 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
         return True
 
     # B) Admin open (тільки /a, /a_help або кнопка "Адмінка")
-    if is_admin and text in (
-        "/a",
-        "/a_help",
-        _normalize_text(BTN_ADMIN),
-    ):
+    if is_admin and text in ("/a", "/a_help", _normalize_text(BTN_ADMIN)):
         handled = await admin_handle_update(tenant=tenant, data=data, bot=bot)
         return bool(handled)
 
@@ -833,7 +877,11 @@ async def handle_update(tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
 
     # запасний текст-хелп
     if text == _normalize_text(BTN_ADMIN) and is_admin:
-        await bot.send_message(chat_id, "🛠 Адмінка: /a_help\n🆘 Підтримка (адмін): /sup", reply_markup=main_menu_kb(is_admin=True))
+        await bot.send_message(
+            chat_id,
+            "🛠 Адмінка: /a_help\n🆘 Підтримка (адмін): /sup",
+            reply_markup=main_menu_kb(is_admin=True),
+        )
         return True
 
     return False
