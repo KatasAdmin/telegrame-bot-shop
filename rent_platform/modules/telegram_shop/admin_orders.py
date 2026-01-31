@@ -17,20 +17,32 @@ try:
 except Exception:  # pragma: no cover
     status_label = None  # type: ignore
 
-
 PAGE_SIZE = 10
 
-# вкладки адміна
+# tabs
 TAB_NEW = "new"
 TAB_WORK = "work"
 TAB_DONE = "done"
 TAB_ARCH = "arch"
 
-# групи статусів
+# status groups
 NEW_STATUSES = ("new",)
 WORK_STATUSES = ("accepted", "packed", "shipped")
 DONE_STATUSES = ("delivered", "not_received", "returned", "cancelled")
 
+STATUSES: list[tuple[str, str]] = [
+    ("new", "🆕 Створено"),
+    ("accepted", "✅ Прийнято"),
+    ("packed", "📦 Зібрано"),
+    ("shipped", "🚚 Відправлено"),
+    ("delivered", "📬 Отримано"),
+    ("not_received", "⛔ Не отримано"),
+    ("returned", "↩️ Повернення"),
+    ("cancelled", "❌ Скасовано"),
+]
+
+
+# ---------------- helpers ----------------
 
 def _kb(rows: list[list[tuple[str, str]]]) -> dict:
     return {"inline_keyboard": [[{"text": t, "callback_data": d} for (t, d) in row] for row in rows]}
@@ -45,7 +57,13 @@ def _fmt_dt(ts: int) -> str:
     ts = int(ts or 0)
     if ts <= 0:
         return "—"
-    return _dt.datetime.fromtimestamp(ts).strftime("%d.%m.%Y %H:%M")
+    try:
+        from zoneinfo import ZoneInfo  # py3.9+
+
+        tz = ZoneInfo("Europe/Kyiv")
+        return _dt.datetime.fromtimestamp(ts, tz=tz).strftime("%d.%m.%Y %H:%M")
+    except Exception:
+        return _dt.datetime.fromtimestamp(ts).strftime("%d.%m.%Y %H:%M")
 
 
 def _st_label(st: str) -> str:
@@ -56,42 +74,6 @@ def _st_label(st: str) -> str:
         except Exception:
             pass
     return st or "—"
-
-
-STATUSES: list[tuple[str, str]] = [
-    ("new", "🆕 Створено"),
-    ("accepted", "✅ Прийнято"),
-    ("packed", "📦 Зібрано"),
-    ("shipped", "🚚 Відправлено"),
-    ("delivered", "📬 Отримано"),
-    ("not_received", "⛔ Не отримано"),
-    ("returned", "↩️ Повернення"),
-    ("cancelled", "❌ Скасовано"),
-]
-
-
-async def _send_or_edit(
-    bot: Bot,
-    *,
-    chat_id: int,
-    text: str,
-    message_id: int | None,
-    reply_markup: Any | None = None,
-) -> None:
-    if message_id:
-        try:
-            await bot.edit_message_text(
-                text,
-                chat_id=chat_id,
-                message_id=int(message_id),
-                parse_mode="Markdown",
-                reply_markup=reply_markup,
-            )
-            return
-        except Exception:
-            pass
-
-    await bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=reply_markup)
 
 
 def _tab_norm(tab: str) -> str:
@@ -118,8 +100,40 @@ def _statuses_for_tab(tab: str) -> tuple[str, ...] | None:
         return WORK_STATUSES
     if tab == TAB_DONE:
         return DONE_STATUSES
-    return None  # архів не по статусу
+    return None  # arch: not by status
 
+
+def _to_int(v: Any, default: int = 0) -> int:
+    try:
+        return int(v)
+    except Exception:
+        return default
+
+
+async def _send_or_edit(
+    bot: Bot,
+    *,
+    chat_id: int,
+    text: str,
+    message_id: int | None,
+    reply_markup: Any | None = None,
+) -> None:
+    if message_id:
+        try:
+            await bot.edit_message_text(
+                text,
+                chat_id=chat_id,
+                message_id=int(message_id),
+                parse_mode="Markdown",
+                reply_markup=reply_markup,
+            )
+            return
+        except Exception:
+            pass
+    await bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=reply_markup)
+
+
+# ---------------- data queries ----------------
 
 async def _count_orders(tenant_id: str, *, tab: str) -> int:
     tab = _tab_norm(tab)
@@ -137,7 +151,7 @@ async def _count_orders(tenant_id: str, *, tab: str) -> int:
           )
         """
         row = await db_fetch_one(q, {"tid": tenant_id}) or {}
-        return int(row.get("cnt") or 0)
+        return _to_int(row.get("cnt"), 0)
 
     statuses = _statuses_for_tab(tab) or ()
     q = """
@@ -153,7 +167,7 @@ async def _count_orders(tenant_id: str, *, tab: str) -> int:
       )
     """
     row = await db_fetch_one(q, {"tid": tenant_id, "sts": list(statuses)}) or {}
-    return int(row.get("cnt") or 0)
+    return _to_int(row.get("cnt"), 0)
 
 
 async def _list_orders_page(tenant_id: str, *, page: int, tab: str) -> list[dict]:
@@ -174,7 +188,10 @@ async def _list_orders_page(tenant_id: str, *, page: int, tab: str) -> list[dict
         ORDER BY o.id DESC
         LIMIT :lim OFFSET :off
         """
-        return await db_fetch_all(q, {"tid": tenant_id, "lim": int(PAGE_SIZE), "off": int(page * PAGE_SIZE)}) or []
+        return await db_fetch_all(
+            q,
+            {"tid": tenant_id, "lim": int(PAGE_SIZE), "off": int(page * PAGE_SIZE)},
+        ) or []
 
     statuses = _statuses_for_tab(tab) or ()
     q = """
@@ -197,6 +214,8 @@ async def _list_orders_page(tenant_id: str, *, page: int, tab: str) -> list[dict
     ) or []
 
 
+# ---------------- keyboards ----------------
+
 def _tabs_row(active_tab: str, page: int) -> list[tuple[str, str]]:
     t = _tab_norm(active_tab)
 
@@ -216,31 +235,30 @@ def _orders_list_kb(order_ids: list[int], *, page: int, has_prev: bool, has_next
     tab = _tab_norm(tab)
     rows: list[list[tuple[str, str]]] = []
 
-    # вкладки
     rows.append(_tabs_row(tab, page))
 
-    # експорт тільки для "Нові"
     if tab == TAB_NEW:
         rows.append([("📦 Скачати накладну (Нові)", f"tgadm:ord_export:new:{page}")])
 
-    # замовлення
     for oid in order_ids:
         rows.append([(f"🧾 Замовлення #{oid}", f"tgadm:ord_open:{oid}:{page}:{tab}")])
 
-    # навігація
-    nav: list[tuple[str, str]] = [
-        ("⬅️", f"tgadm:ord_tab:{tab}:{page-1}") if has_prev else ("·", "tgadm:noop"),
-        ("➡️", f"tgadm:ord_tab:{tab}:{page+1}") if has_next else ("·", "tgadm:noop"),
-    ]
-    rows.append(nav)
-
+    rows.append(
+        [
+            ("⬅️", f"tgadm:ord_tab:{tab}:{page-1}") if has_prev else ("·", "tgadm:noop"),
+            ("➡️", f"tgadm:ord_tab:{tab}:{page+1}") if has_next else ("·", "tgadm:noop"),
+        ]
+    )
     rows.append([("⬅️ В адмін-меню", "tgadm:home:0")])
     return _kb(rows)
 
 
 def _order_detail_kb(order_id: int, *, page: int, tab: str, is_archived: bool) -> dict:
     tab = _tab_norm(tab)
-    arch_txt = "🧾 З архіву" if is_archived else "🗃 В архів"
+
+    # ✅ UX: different label depending on archived state
+    arch_txt = "🧾 Прибрати з архіву" if is_archived else "🗃 В архів"
+
     return _kb(
         [
             [("📦 Товари", f"tgadm:ord_items:{order_id}:{page}:{tab}")],
@@ -264,6 +282,8 @@ def _order_status_menu_kb(order_id: int, *, page: int, tab: str) -> dict:
     rows.append([("⬅️ Назад", f"tgadm:ord_open:{order_id}:{page}:{tab}")])
     return _kb(rows)
 
+
+# ---------------- send screens ----------------
 
 async def _send_admin_orders_menu(bot: Bot, chat_id: int, *, message_id: int | None) -> None:
     kb = _kb(
@@ -295,7 +315,6 @@ async def _send_orders_list(
 
     total = await _count_orders(tenant_id, tab=tab)
     rows = await _list_orders_page(tenant_id, page=page, tab=tab)
-
     title = _tab_title(tab)
 
     if not rows:
@@ -308,17 +327,17 @@ async def _send_orders_list(
         )
         return
 
-    order_ids: list[int] = [int(r["id"]) for r in rows if int(r.get("id") or 0) > 0]
+    order_ids: list[int] = [int(r["id"]) for r in rows if _to_int(r.get("id")) > 0]
     shown_from = page * PAGE_SIZE + 1
     shown_to = page * PAGE_SIZE + len(order_ids)
 
     lines = [f"{title} (показано {shown_from}-{shown_to} із {total})\n"]
     for r in rows:
-        oid = int(r.get("id") or 0)
-        uid = int(r.get("user_id") or 0)
+        oid = _to_int(r.get("id"))
+        uid = _to_int(r.get("user_id"))
         st = _st_label(str(r.get("status") or ""))
-        total_uah = _fmt_money(int(r.get("total_kop") or 0))
-        created = _fmt_dt(int(r.get("created_ts") or 0))
+        total_uah = _fmt_money(_to_int(r.get("total_kop")))
+        created = _fmt_dt(_to_int(r.get("created_ts")))
         lines.append(f"• #{oid} — `{uid}` — {st} — *{total_uah}* — _{created}_")
 
     has_prev = page > 0
@@ -355,12 +374,12 @@ async def _send_order_detail(
         )
         return
 
-    oid = int(o.get("id") or 0)
-    uid = int(o.get("user_id") or 0)
+    oid = _to_int(o.get("id"))
+    uid = _to_int(o.get("user_id"))
     st_raw = str(o.get("status") or "")
     st = _st_label(st_raw)
-    total = _fmt_money(int(o.get("total_kop") or 0))
-    created = _fmt_dt(int(o.get("created_ts") or 0))
+    total = _fmt_money(_to_int(o.get("total_kop")))
+    created = _fmt_dt(_to_int(o.get("created_ts")))
 
     is_arch = await TelegramShopOrdersAdminArchiveRepo.is_archived(tenant_id, oid)
 
@@ -409,8 +428,8 @@ async def _send_order_items(
     for it in items:
         name = str(it.get("name") or f"Товар #{it.get('product_id')}")
         sku = str(it.get("sku") or "").strip()
-        qty = int(it.get("qty") or 0)
-        price = _fmt_money(int(it.get("price_kop") or 0))
+        qty = _to_int(it.get("qty"), 0)
+        price = _fmt_money(_to_int(it.get("price_kop"), 0))
         sku_part = f" (`{sku}`)" if sku else ""
         lines.append(f"• *{name}*{sku_part} — {qty} шт × {price}")
 
@@ -440,7 +459,7 @@ async def _set_order_status(bot: Bot, tenant_id: str, order_id: int, new_status:
     await db_execute(q, {"st": new_status, "tid": tenant_id, "oid": int(order_id)})
 
     # optional notify user
-    user_id = int(o.get("user_id") or 0)
+    user_id = _to_int(o.get("user_id"), 0)
     if user_id > 0:
         try:
             st = _st_label(new_status)
@@ -456,8 +475,11 @@ async def _set_order_status(bot: Bot, tenant_id: str, order_id: int, new_status:
 
 
 async def _export_new_orders_picklist(bot: Bot, chat_id: int, tenant_id: str) -> None:
-    # беремо всі нові, які не в адмін-архіві
-    q = """
+    """
+    TSV pick-list for NEW orders (not archived in admin archive).
+    Optimized: 1 query for orders + 1 query for items.
+    """
+    q_orders = """
     SELECT o.id, o.user_id, o.created_ts
     FROM telegram_shop_orders o
     WHERE o.tenant_id = :tid
@@ -469,31 +491,66 @@ async def _export_new_orders_picklist(bot: Bot, chat_id: int, tenant_id: str) ->
     ORDER BY o.id ASC
     LIMIT 200
     """
-    orders = await db_fetch_all(q, {"tid": tenant_id}) or []
+    orders = await db_fetch_all(q_orders, {"tid": tenant_id}) or []
     if not orders:
         await bot.send_message(chat_id, "🆕 Нових замовлень немає.")
         return
 
-    # TSV як “накладна”
+    order_ids = [int(o["id"]) for o in orders if _to_int(o.get("id")) > 0]
+    if not order_ids:
+        await bot.send_message(chat_id, "🆕 Нових замовлень немає.")
+        return
+
+    # items snapshot (sku may exist)
+    q_items_with_sku = """
+    SELECT order_id, COALESCE(sku,'') AS sku, COALESCE(name,'') AS name, COALESCE(qty,0) AS qty, COALESCE(price_kop,0) AS price_kop
+    FROM telegram_shop_order_items
+    WHERE order_id = ANY(:oids)
+    ORDER BY order_id ASC, id ASC
+    """
+    q_items = """
+    SELECT order_id, '' AS sku, COALESCE(name,'') AS name, COALESCE(qty,0) AS qty, COALESCE(price_kop,0) AS price_kop
+    FROM telegram_shop_order_items
+    WHERE order_id = ANY(:oids)
+    ORDER BY order_id ASC, id ASC
+    """
+
+    try:
+        items = await db_fetch_all(q_items_with_sku, {"oids": order_ids}) or []
+    except Exception:
+        items = await db_fetch_all(q_items, {"oids": order_ids}) or []
+
+    items_by_order: dict[int, list[dict]] = {}
+    for it in items:
+        oid = _to_int(it.get("order_id"))
+        items_by_order.setdefault(oid, []).append(it)
+
+    # TSV
     out = io.StringIO()
     out.write("order_id\tuser_id\tcreated\tsku\tname\tqty\tprice_uah\n")
 
     for o in orders:
-        oid = int(o.get("id") or 0)
-        uid = int(o.get("user_id") or 0)
-        created = _fmt_dt(int(o.get("created_ts") or 0))
-        items = await TelegramShopOrdersRepo.list_order_items(oid)
-        for it in items or []:
+        oid = _to_int(o.get("id"))
+        uid = _to_int(o.get("user_id"))
+        created = _fmt_dt(_to_int(o.get("created_ts")))
+        for it in items_by_order.get(oid, []):
             sku = str(it.get("sku") or "").strip()
             name = str(it.get("name") or "")
-            qty = int(it.get("qty") or 0)
-            price = _fmt_money(int(it.get("price_kop") or 0))
+            qty = _to_int(it.get("qty"))
+            price = _fmt_money(_to_int(it.get("price_kop")))
             out.write(f"{oid}\t{uid}\t{created}\t{sku}\t{name}\t{qty}\t{price}\n")
 
     data = out.getvalue().encode("utf-8")
     file = BufferedInputFile(data, filename="new_orders_picklist.tsv")
-    await bot.send_document(chat_id, file, caption="📦 Накладна (pick-list) по *Нових* замовленнях", parse_mode="Markdown")
+    await bot.send_document(
+        chat_id,
+        file,
+        caption="📦 Накладна (pick-list) по *Нових* замовленнях",
+        parse_mode="Markdown",
+    )
 
+
+# ---------------- entrypoint ----------------
 
 async def admin_orders_handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
     cb = data.get("callback_query")
@@ -503,6 +560,14 @@ async def admin_orders_handle_update(*, tenant: dict, data: dict[str, Any], bot:
     payload = str(cb.get("data") or "").strip()
     if not payload.startswith("tgadm:ord"):
         return False
+
+    # stop spinner
+    cb_id = cb.get("id")
+    if cb_id:
+        try:
+            await bot.answer_callback_query(cb_id)
+        except Exception:
+            pass
 
     chat_id = int(cb["message"]["chat"]["id"])
     msg_id = int(cb["message"]["message_id"])
@@ -587,16 +652,14 @@ async def admin_orders_handle_update(*, tenant: dict, data: dict[str, Any], bot:
     return True
 
 
-# --- public wrappers (for reply-keyboard entry points) ---
+# --- public wrappers (reply-keyboard entry points) ---
 
 async def admin_orders_send_menu(bot: Bot, chat_id: int) -> None:
     await _send_admin_orders_menu(bot, chat_id, message_id=None)
 
 
 async def admin_orders_send_list(bot: Bot, chat_id: int, tenant_id: str, *, scope: str) -> None:
-    # scope: "new" | "work" | "done" | "arch" | "active"
     scope = (scope or "").strip().lower()
-
     if scope in ("arch", "archive"):
         tab = TAB_ARCH
     elif scope in ("work", "in_work"):
@@ -604,7 +667,6 @@ async def admin_orders_send_list(bot: Bot, chat_id: int, tenant_id: str, *, scop
     elif scope in ("done", "finished"):
         tab = TAB_DONE
     else:
-        # "new" або "active" -> відкриваємо нові
         tab = TAB_NEW
 
     await _send_orders_list(
