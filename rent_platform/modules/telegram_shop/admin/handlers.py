@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+import json
+import hmac
+import hashlib
+import ipaddress
+from typing import Any, Iterable
 
 from aiogram import Bot
 from aiogram.types import InputMediaPhoto
@@ -12,7 +16,7 @@ from rent_platform.modules.telegram_shop.admin_orders import admin_orders_handle
 from rent_platform.modules.telegram_shop.channel_announce import maybe_post_new_product
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
 from rent_platform.modules.telegram_shop.repo.support_links import TelegramShopSupportLinksRepo
-from rent_platform.modules.telegram_shop.ui.user_kb import BTN_ADMIN, BTN_ADMIN_ORDERS
+from rent_platform.modules.telegram_shop.ui.user_kb import BTN_ADMIN
 
 # CategoriesRepo optional (if file exists)
 try:
@@ -26,6 +30,7 @@ except Exception:  # pragma: no cover
 # ============================================================
 _STATE: dict[tuple[str, int], dict[str, Any]] = {}
 _SUP_MENU_MSG_ID: dict[tuple[str, int], int] = {}
+_KEYS_MENU_MSG_ID: dict[tuple[str, int], int] = {}
 
 
 # ============================================================
@@ -36,13 +41,6 @@ def admin_has_state(tenant_id: str, chat_id: int) -> bool:
 
 
 def is_admin_user(*, tenant: dict, user_id: int) -> bool:
-    """
-    Flexible admin check.
-    Supports:
-      - tenant["owner_user_id"]
-      - tenant["admin_user_ids"] as list[int] / "1,2,3"
-      - tenant["admins"] as list[int]
-    """
     try:
         uid = int(user_id)
     except Exception:
@@ -142,13 +140,6 @@ def _fmt_money(kop: int) -> str:
 
 
 def _parse_price_to_kop(raw: str) -> int | None:
-    """
-    Accepts:
-      - "1200" => 1200 грн
-      - "1200.50" / "1200,50" => 1200 грн 50 коп
-      - "1200 грн"
-    Returns копійки.
-    """
     s = (raw or "").lower().replace("грн", "").replace("uah", "").strip()
     s = s.replace(" ", "").replace(",", ".")
     if not s:
@@ -166,7 +157,6 @@ def _parse_price_to_kop(raw: str) -> int | None:
     if not s.isdigit():
         return None
     val = int(s)
-    # heuristic: if <= 200000 assume грн
     if val <= 200000:
         return val * 100
     return val
@@ -189,7 +179,6 @@ def _fmt_dt(ts: int) -> str:
 
 
 def _parse_dt_to_ts(raw: str) -> int | None:
-    """Parse `DD.MM.YYYY HH:MM` to unix ts (Europe/Kyiv if available)."""
     s = (raw or "").strip()
     if not s:
         return None
@@ -219,9 +208,6 @@ async def _send_or_edit(
     reply_markup: Any | None = None,
     parse_mode: str | None = "Markdown",
 ) -> int:
-    """
-    Returns message_id of the final message.
-    """
     if message_id:
         try:
             await bot.edit_message_text(
@@ -247,6 +233,187 @@ async def _send_or_edit(
 
 
 # ============================================================
+# IP allowlist helpers (CIDR/IP list)
+# ============================================================
+def _parse_ip_list(raw: str) -> list[str]:
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+    parts = []
+    for x in raw.replace("\n", ",").replace(";", ",").split(","):
+        x = x.strip()
+        if x:
+            parts.append(x)
+    return parts
+
+
+def _ip_allowed(client_ip: str, allow: Iterable[str]) -> bool:
+    ip = ipaddress.ip_address(client_ip)
+    any_rule = False
+    for rule in allow:
+        rule = (rule or "").strip()
+        if not rule:
+            continue
+        any_rule = True
+        try:
+            if "/" in rule:
+                if ip in ipaddress.ip_network(rule, strict=False):
+                    return True
+            else:
+                if ip == ipaddress.ip_address(rule):
+                    return True
+        except Exception:
+            continue
+    # якщо правил немає — allow all
+    return True if not any_rule else False
+
+
+# ============================================================
+# WayForPay helpers (signature + invoice)
+# ============================================================
+_WFP_KEYS = {
+    "wfp_merchantAccount": "WayForPay merchantAccount",
+    "wfp_secretKey": "WayForPay secretKey",
+    "wfp_domain": "WayForPay domain (merchantDomainName)",
+    "wfp_serviceUrl": "WayForPay serviceUrl (callback URL)",
+    "wfp_allowed_ips": "WayForPay allowed IPs (comma/CIDR)",
+}
+
+_WFP_SECRET_MASK_KEYS = {"wfp_secretKey"}
+
+
+async def _kv_get(tenant_id: str, key: str) -> str:
+    it = await TelegramShopSupportLinksRepo.get(tenant_id, key) or {}
+    return str(it.get("url") or "").strip()
+
+
+async def _kv_set(tenant_id: str, key: str, value: str) -> None:
+    await TelegramShopSupportLinksRepo.set_url(tenant_id, key, value)
+    if value:
+        await TelegramShopSupportLinksRepo.set_enabled(tenant_id, key, True)
+
+
+def _wfp_hmac_md5(secret: str, s: str) -> str:
+    return hmac.new(secret.encode("utf-8"), s.encode("utf-8"), hashlib.md5).hexdigest()
+
+
+def _wfp_join(parts: list[str]) -> str:
+    return ";".join([str(x) for x in parts])
+
+
+async def _wfp_can_pay(tenant_id: str) -> tuple[bool, str]:
+    acc = await _kv_get(tenant_id, "wfp_merchantAccount")
+    sec = await _kv_get(tenant_id, "wfp_secretKey")
+    dom = await _kv_get(tenant_id, "wfp_domain")
+    if not acc or not sec or not dom:
+        return False, "WayForPay не налаштовано: заповни merchantAccount + secretKey + domain у 🔑 IP ключі."
+    return True, ""
+
+
+async def _wfp_create_invoice(
+    *,
+    tenant_id: str,
+    order_ref: str,
+    amount_uah: str,
+    product_name: str,
+    product_price: str,
+    product_count: str = "1",
+) -> tuple[str | None, str]:
+    """
+    Реальний CREATE_INVOICE.
+    Повертає (invoiceUrl, err).
+    """
+    ok, err = await _wfp_can_pay(tenant_id)
+    if not ok:
+        return None, err
+
+    merchantAccount = await _kv_get(tenant_id, "wfp_merchantAccount")
+    secretKey = await _kv_get(tenant_id, "wfp_secretKey")
+    merchantDomainName = await _kv_get(tenant_id, "wfp_domain")
+    serviceUrl = await _kv_get(tenant_id, "wfp_serviceUrl")
+
+    orderDate = int(_now())
+    currency = "UAH"
+
+    # signature string per WayForPay docs:
+    # merchantAccount;merchantDomainName;orderReference;orderDate;amount;currency;productName...;productCount...;productPrice...
+    sign_str = _wfp_join(
+        [
+            merchantAccount,
+            merchantDomainName,
+            order_ref,
+            str(orderDate),
+            amount_uah,
+            currency,
+            product_name,
+            product_count,
+            product_price,
+        ]
+    )
+    merchantSignature = _wfp_hmac_md5(secretKey, sign_str)
+
+    payload = {
+        "transactionType": "CREATE_INVOICE",
+        "merchantAccount": merchantAccount,
+        "merchantAuthType": "SimpleSignature",
+        "merchantDomainName": merchantDomainName,
+        "merchantSignature": merchantSignature,
+        "apiVersion": 1,
+        "language": "UA",
+        "serviceUrl": serviceUrl or None,
+        "orderReference": order_ref,
+        "orderDate": orderDate,
+        "amount": float(amount_uah),
+        "currency": currency,
+        "productName": [product_name],
+        "productPrice": [float(product_price)],
+        "productCount": [int(product_count)],
+    }
+
+    # aiohttp
+    try:
+        import aiohttp
+
+        async with aiohttp.ClientSession() as s:
+            async with s.post("https://api.wayforpay.com/api", json=payload, timeout=25) as r:
+                txt = await r.text()
+                if r.status != 200:
+                    return None, f"WayForPay HTTP {r.status}: {txt[:250]}"
+                data = json.loads(txt or "{}")
+    except Exception as e:
+        return None, f"WayForPay request error: {e}"
+
+    invoiceUrl = str(data.get("invoiceUrl") or "").strip()
+    if not invoiceUrl:
+        return None, f"WayForPay відповів без invoiceUrl: {data}"
+    return invoiceUrl, ""
+
+
+def _wfp_verify_callback_signature(secretKey: str, payload: dict[str, Any]) -> bool:
+    """
+    Callback signature per docs:
+    merchantAccount;orderReference;amount;currency;authCode;cardPan;transactionStatus;reasonCode
+    """
+    try:
+        merchantAccount = str(payload.get("merchantAccount") or "")
+        orderReference = str(payload.get("orderReference") or "")
+        amount = str(payload.get("amount") or "")
+        currency = str(payload.get("currency") or "")
+        authCode = str(payload.get("authCode") or "")
+        cardPan = str(payload.get("cardPan") or "")
+        transactionStatus = str(payload.get("transactionStatus") or "")
+        reasonCode = str(payload.get("reasonCode") or "")
+        got = str(payload.get("merchantSignature") or "")
+        if not got:
+            return False
+        sign_str = _wfp_join([merchantAccount, orderReference, amount, currency, authCode, cardPan, transactionStatus, reasonCode])
+        exp = _wfp_hmac_md5(secretKey, sign_str)
+        return exp.lower() == got.lower()
+    except Exception:
+        return False
+
+
+# ============================================================
 # Menus
 # ============================================================
 def _admin_home_kb() -> dict:
@@ -254,7 +421,7 @@ def _admin_home_kb() -> dict:
         [
             [("📦 Каталог", "tgadm:catalog")],
             [("🧾 Замовлення", "tgadm:ord_menu:0")],
-            [("🔑 IP ключі", "tgadm:ip_keys")],
+            [("🔑 IP ключі", "tgadm:keys_menu")],
             [("🆘 Підтримка", "tgadm:sup_menu")],
             [("❌ Скинути дію", "tgadm:cancel")],
         ]
@@ -266,7 +433,6 @@ def _catalog_kb() -> dict:
         [
             [("📁 Категорії", "tgadm:cat_menu"), ("📦 Товари", "tgadm:prod_menu")],
             [("🗃 Архів (вимкнені)", "tgadm:archive:0"), ("🔥 Акції / Знижки", "tgadm:promos")],
-            [("🔎 Пошук (ID/SKU)", "tgadm:search")],
             [("🏠 В адмін-меню", "tgadm:home")],
         ]
     )
@@ -461,7 +627,7 @@ def _archive_product_kb(*, product_id: int) -> dict:
 
 
 # ============================================================
-# SUPPORT (admin)  ✅ NO MARKDOWN HERE (prevents entity errors)
+# SUPPORT (admin)  ✅ NO MARKDOWN HERE
 # ============================================================
 _SUPPORT_HINTS: dict[str, str] = {
     "support_channel": "Введи @username каналу або посилання.\nПриклад: https://t.me/your_channel",
@@ -521,7 +687,7 @@ async def _send_support_admin_menu(bot: Bot, chat_id: int, tenant_id: str, *, ed
         text=text,
         message_id=edit_message_id,
         reply_markup=kb,
-        parse_mode=None,  # ✅ no markdown
+        parse_mode=None,
     )
     return int(mid)
 
@@ -547,69 +713,89 @@ async def _send_support_edit_prompt(bot: Bot, chat_id: int, tenant_id: str, key:
 
 
 # ============================================================
-# IP KEYS (admin-only)
+# KEYS (admin) - IP ключі / оплати / allowlist
 # ============================================================
-def _ip_keys_kb() -> dict:
-    return _kb(
-        [
-            [("🌐 Allowlist IP", "tgadm:ipk:allowlist")],
-            [("📦 Нова Пошта (IP/API)", "tgadm:ipk:np")],
-            [("💳 Оплати (LiqPay/WayForPay)", "tgadm:ipk:pay")],
-            [("🧩 1C / Сайт (webhooks)", "tgadm:ipk:site")],
-            [("⬅️ В адмін-меню", "tgadm:home")],
-        ]
-    )
+_KEYS_HINTS: dict[str, str] = {
+    "wfp_merchantAccount": "WayForPay merchantAccount (наприклад test_merch_n1).",
+    "wfp_secretKey": "WayForPay secretKey (секретний ключ).",
+    "wfp_domain": "Домен магазину (merchantDomainName), напр. your-site.com",
+    "wfp_serviceUrl": "Callback URL (serviceUrl) для WayForPay. Має дивитись на твій бекенд.",
+    "wfp_allowed_ips": "Allowlist IP/CIDR для callback (через кому). Напр: 1.2.3.4, 5.6.0.0/16",
+}
 
 
-async def _send_ip_keys_home(bot: Bot, chat_id: int) -> None:
+def _mask_value(key: str, value: str) -> str:
+    v = (value or "").strip()
+    if not v:
+        return "—"
+    if key in _WFP_SECRET_MASK_KEYS:
+        return "••••••••"
+    return v
+
+
+def _keys_menu_kb(items: list[dict[str, Any]]) -> dict:
+    rows: list[list[tuple[str, str]]] = []
+    for key, title in _WFP_KEYS.items():
+        it = next((x for x in items if str(x.get("key") or "") == key), None) or {}
+        enabled = bool(it.get("enabled"))
+        val = str(it.get("url") or "")
+        icon = "✅" if enabled else "⛔"
+        rows.append(
+            [
+                (_safe_btn(f"{icon} {title}", 44), f"tgadm:key_toggle:{key}"),
+                (_safe_btn(f"✏️ {_sup_short(_mask_value(key, val), 18)}", 26), f"tgadm:key_edit:{key}"),
+            ]
+        )
+
+    rows.append([("⬅️ В адмін-меню", "tgadm:home")])
+    return _kb(rows)
+
+
+async def _ensure_keys_defaults(tenant_id: str) -> None:
+    # використовуємо ту ж таблицю (support_links) як KV store
+    for key, title in _WFP_KEYS.items():
+        cur = await TelegramShopSupportLinksRepo.get(tenant_id, key)
+        if not cur:
+            await TelegramShopSupportLinksRepo.upsert(tenant_id, key=key, title=title, url="", enabled=False)  # type: ignore[attr-defined]
+
+
+async def _send_keys_menu(bot: Bot, chat_id: int, tenant_id: str, *, edit_message_id: int | None = None) -> int:
+    await _ensure_keys_defaults(tenant_id)
+    items = await TelegramShopSupportLinksRepo.list_all(tenant_id)
+
     text = (
-        "🔑 IP ключі\n\n"
-        "Тут будемо зберігати все для інтеграцій:\n"
-        "• allowlist IP (дозволені IP)\n"
-        "• ключі оплат / webhook secrets\n"
-        "• IP/API Нової Пошти\n"
-        "• інтеграції з сайтом/1C\n\n"
-        "Зараз це меню-заглушка (без БД), але структура вже готова."
+        "🔑 IP ключі / Оплати\n\n"
+        "Тут зберігаємо ключі (секрети) та allowlist IP/CIDR.\n"
+        "• Тап по назві: увімк/вимк\n"
+        "• ✏️: змінити значення\n\n"
+        "WayForPay працює так:\n"
+        "1) Бот створює invoiceUrl\n"
+        "2) WayForPay шле callback на serviceUrl\n"
+        "3) Ми перевіряємо signature + (опційно) allowlist IP\n"
     )
-    await bot.send_message(chat_id, text, parse_mode=None, reply_markup=_ip_keys_kb(), disable_web_page_preview=True)
+
+    kb = _keys_menu_kb(items)
+    mid = await _send_or_edit(bot, chat_id=chat_id, text=text, message_id=edit_message_id, reply_markup=kb, parse_mode=None)
+    return int(mid)
 
 
-async def _send_ip_keys_section(bot: Bot, chat_id: int, section: str) -> None:
-    mapping = {
-        "allowlist": (
-            "🌐 Allowlist IP\n\n"
-            "Сюди додамо список дозволених IP для доступу до адмін/API.\n"
-            "Приклад: 1.2.3.4, 5.6.7.8/32\n\n"
-            "Пізніше: збереження в БД + перевірка в middleware."
-        ),
-        "np": (
-            "📦 Нова Пошта (IP/API)\n\n"
-            "Тут будуть:\n"
-            "• API key НП\n"
-            "• whitelist IP НП (якщо треба)\n"
-            "• endpoint-и/ттн вебхуки (якщо будуть)\n\n"
-            "Пізніше: додамо поля та репозиторій."
-        ),
-        "pay": (
-            "💳 Оплати (LiqPay/WayForPay)\n\n"
-            "Тут будуть:\n"
-            "• public/private keys\n"
-            "• webhook URL + secret\n"
-            "• allowed IP провайдера (якщо потрібно)\n\n"
-            "Пізніше: валідація підписів та логування."
-        ),
-        "site": (
-            "🧩 1C / Сайт (webhooks)\n\n"
-            "Тут будуть:\n"
-            "• webhook secret\n"
-            "• URL API\n"
-            "• токени інтеграції\n"
-            "• мапінг variant_id/barcode/SKU\n\n"
-            "Пізніше: експорт/імпорт товарів."
-        ),
-    }
-    text = mapping.get(section, "Розділ не знайдено.")
-    await bot.send_message(chat_id, text, parse_mode=None, reply_markup=_ip_keys_kb(), disable_web_page_preview=True)
+async def _send_key_edit_prompt(bot: Bot, chat_id: int, tenant_id: str, key: str) -> None:
+    it = await TelegramShopSupportLinksRepo.get(tenant_id, key) or {}
+    cur = str(it.get("url") or "")
+    hint = _KEYS_HINTS.get(key, "Введи значення одним повідомленням.")
+    show_cur = _mask_value(key, cur)
+
+    await bot.send_message(
+        chat_id,
+        "✏️ Зміна ключа\n\n"
+        f"Ключ: {key}\n"
+        f"Поточне: {show_cur}\n\n"
+        f"{hint}\n\n"
+        "Скасувати: /cancel",
+        parse_mode=None,
+        reply_markup=_kb([[("❌ Скасувати", "tgadm:cancel")]]),
+        disable_web_page_preview=True,
+    )
 
 
 # ============================================================
@@ -1038,204 +1224,6 @@ async def _edit_admin_product_card(bot: Bot, chat_id: int, message_id: int, tena
 
 
 # ============================================================
-# Wizard: create product
-# name -> sku -> price -> promo_price (or no promo) -> desc -> category -> photos
-# ============================================================
-async def _wiz_ask_name(bot: Bot, chat_id: int, tenant_id: str) -> None:
-    _state_set(tenant_id, chat_id, {"mode": "wiz_name", "draft": {}})
-    await bot.send_message(
-        chat_id,
-        "➕ *Новий товар*\n\n1/6 Введи *назву* товару:",
-        parse_mode="Markdown",
-        reply_markup=_wiz_nav_kb(),
-        disable_web_page_preview=True,
-    )
-
-
-async def _wiz_ask_sku(bot: Bot, chat_id: int, tenant_id: str, draft: dict) -> None:
-    _state_set(tenant_id, chat_id, {"mode": "wiz_sku", "draft": draft})
-    await bot.send_message(
-        chat_id,
-        "2/6 Введи *SKU/артикул* (або натисни `Пропустити`):",
-        parse_mode="Markdown",
-        reply_markup=_wiz_nav_kb(allow_skip=True),
-        disable_web_page_preview=True,
-    )
-
-
-async def _wiz_ask_price(bot: Bot, chat_id: int, tenant_id: str, draft: dict) -> None:
-    _state_set(tenant_id, chat_id, {"mode": "wiz_price", "draft": draft})
-    await bot.send_message(
-        chat_id,
-        "3/6 Введи *ціну* (наприклад `1200.50` або `1200`):",
-        parse_mode="Markdown",
-        reply_markup=_wiz_nav_kb(),
-        disable_web_page_preview=True,
-    )
-
-
-async def _wiz_ask_promo_price(bot: Bot, chat_id: int, tenant_id: str, draft: dict) -> None:
-    _state_set(tenant_id, chat_id, {"mode": "wiz_promo_price", "draft": draft})
-    await bot.send_message(
-        chat_id,
-        "4/6 *Акційна ціна*\n\nВведи *акційну ціну* (наприклад `999.99`) або натисни кнопку нижче 👇",
-        parse_mode="Markdown",
-        reply_markup=_wiz_promo_kb(),
-        disable_web_page_preview=True,
-    )
-
-
-async def _wiz_ask_desc(bot: Bot, chat_id: int, tenant_id: str, draft: dict) -> None:
-    _state_set(tenant_id, chat_id, {"mode": "wiz_desc", "draft": draft})
-    await bot.send_message(
-        chat_id,
-        "5/6 Додай *опис* (або натисни `Пропустити`):",
-        parse_mode="Markdown",
-        reply_markup=_wiz_nav_kb(allow_skip=True),
-        disable_web_page_preview=True,
-    )
-
-
-async def _wiz_ask_category(bot: Bot, chat_id: int, tenant_id: str, draft: dict) -> None:
-    if CategoriesRepo is None:
-        draft["category_id"] = None
-        await _wiz_create_and_go_photos(bot, chat_id, tenant_id, draft)
-        return
-
-    default_cid = await CategoriesRepo.ensure_default(tenant_id)  # type: ignore[misc]
-    cats = await CategoriesRepo.list(tenant_id, limit=50)  # type: ignore[misc]
-    _state_set(
-        tenant_id,
-        chat_id,
-        {"mode": "wiz_category", "draft": draft, "default_category_id": int(default_cid or 0)},
-    )
-
-    await bot.send_message(
-        chat_id,
-        "6/6 *Категорія*\n\nОбери категорію для товару:",
-        parse_mode="Markdown",
-        reply_markup=_category_pick_kb(cats, prefix="tgadm:wiz_cat", back_to="tgadm:prod_menu"),
-        disable_web_page_preview=True,
-    )
-
-
-async def _wiz_create_product(tenant_id: str, draft: dict) -> int | None:
-    name = str(draft.get("name") or "").strip()
-    sku = str(draft.get("sku") or "").strip()[:64] or None
-    price_kop = int(draft.get("price_kop") or 0)
-    desc = str(draft.get("description") or "").strip()
-
-    category_id = draft.get("category_id", None)
-    if isinstance(category_id, str) and category_id.isdigit():
-        category_id = int(category_id)
-    elif category_id is not None and not isinstance(category_id, int):
-        category_id = None
-
-    pid = await ProductsRepo.add(tenant_id, name, price_kop, is_active=True, category_id=category_id, sku=sku)  # type: ignore[arg-type]
-    if not pid:
-        return None
-
-    pid_i = int(pid)
-
-    if desc:
-        await ProductsRepo.set_description(tenant_id, pid_i, desc)
-
-    promo_price_kop = int(draft.get("promo_price_kop") or 0)
-    promo_until_ts = int(draft.get("promo_until_ts") or 0)
-    if promo_price_kop > 0:
-        await ProductsRepo.set_promo(tenant_id, pid_i, promo_price_kop, promo_until_ts)
-
-    return pid_i
-
-
-async def _wiz_create_and_go_photos(bot: Bot, chat_id: int, tenant_id: str, draft: dict) -> None:
-    pid = await _wiz_create_product(tenant_id, draft)
-    _state_clear(tenant_id, chat_id)
-
-    if not pid:
-        await bot.send_message(chat_id, "❌ Не вдалося створити товар (перевір БД/міграції).", reply_markup=_admin_home_kb())
-        return
-
-    await _wiz_photos_start(bot, chat_id, tenant_id, pid)
-
-
-async def _wiz_photos_start(bot: Bot, chat_id: int, tenant_id: str, product_id: int) -> None:
-    _state_set(tenant_id, chat_id, {"mode": "wiz_photo", "product_id": int(product_id), "announced": False})
-    await bot.send_message(
-        chat_id,
-        f"📷 Фото для товару *#{product_id}*\n\nНадсилай фото (можна кілька).",
-        parse_mode="Markdown",
-        reply_markup=_wiz_photos_kb(product_id=product_id),
-        disable_web_page_preview=True,
-    )
-
-
-async def _wiz_finish(bot: Bot, chat_id: int, product_id: int) -> None:
-    await bot.send_message(
-        chat_id,
-        f"✅ *Готово!* Товар *#{product_id}* створено.\n\nМожеш додати фото/опис або створити ще.",
-        parse_mode="Markdown",
-        reply_markup=_wiz_finish_kb(product_id=product_id),
-        disable_web_page_preview=True,
-    )
-
-
-# ============================================================
-# Search (ID / SKU)
-# ============================================================
-async def _send_search_prompt(bot: Bot, chat_id: int, tenant_id: str) -> None:
-    _state_set(tenant_id, chat_id, {"mode": "search"})
-    await bot.send_message(
-        chat_id,
-        "🔎 Пошук\n\nНадішли:\n• ID товару (цифрою)\nабо\n• SKU (текст)\n\nСкасувати: /cancel",
-        parse_mode=None,
-        reply_markup=_kb([[("❌ Скасувати", "tgadm:cancel")]]),
-        disable_web_page_preview=True,
-    )
-
-
-async def _open_product_by_id_or_sku(bot: Bot, chat_id: int, tenant_id: str, raw: str) -> None:
-    s = (raw or "").strip()
-    if not s:
-        await bot.send_message(chat_id, "Порожній запит.", parse_mode=None)
-        return
-
-    if s.isdigit():
-        pid = int(s)
-        card = await _build_admin_product_card(tenant_id, pid, 0)
-        if not card:
-            await bot.send_message(chat_id, "❌ Товар не знайдено.", reply_markup=_catalog_kb())
-            return
-        if card["has_photo"]:
-            await bot.send_photo(chat_id, photo=card["file_id"], caption=card["text"], parse_mode="Markdown", reply_markup=card["kb"])
-        else:
-            await bot.send_message(chat_id, card["text"], parse_mode="Markdown", reply_markup=card["kb"], disable_web_page_preview=True)
-        return
-
-    q = """
-    SELECT id
-    FROM telegram_shop_products
-    WHERE tenant_id = :tid AND COALESCE(sku,'') = :sku
-    ORDER BY id DESC
-    LIMIT 1
-    """
-    row = await db_fetch_one(q, {"tid": tenant_id, "sku": s}) or {}
-    pid = int(row.get("id") or 0)
-    if pid <= 0:
-        await bot.send_message(chat_id, "❌ За таким SKU нічого не знайдено.", reply_markup=_catalog_kb())
-        return
-
-    card = await _build_admin_product_card(tenant_id, pid, 0)
-    if not card:
-        await bot.send_message(chat_id, "❌ Товар не знайдено.", reply_markup=_catalog_kb())
-        return
-    if card["has_photo"]:
-        await bot.send_photo(chat_id, photo=card["file_id"], caption=card["text"], parse_mode="Markdown", reply_markup=card["kb"])
-    else:
-        await bot.send_message(chat_id, card["text"], parse_mode="Markdown", reply_markup=card["kb"], disable_web_page_preview=True)
-
-
-# ============================================================
 # Main entry
 # ============================================================
 async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
@@ -1282,21 +1270,24 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             await _send_catalog_home(bot, chat_id)
             return True
 
-        # IP KEYS
-        if action == "ip_keys":
+        # 🔑 KEYS MENU
+        if action == "keys_menu":
             _state_clear(tenant_id, chat_id)
-            await _send_ip_keys_home(bot, chat_id)
+            mid = _KEYS_MENU_MSG_ID.get((tenant_id, chat_id))
+            mid2 = await _send_keys_menu(bot, chat_id, tenant_id, edit_message_id=mid)
+            _KEYS_MENU_MSG_ID[(tenant_id, chat_id)] = int(mid2)
             return True
 
-        if action == "ipk" and arg:
-            _state_clear(tenant_id, chat_id)
-            await _send_ip_keys_section(bot, chat_id, arg)
+        if action == "key_toggle" and arg:
+            await TelegramShopSupportLinksRepo.toggle_enabled(tenant_id, arg)
+            mid = _KEYS_MENU_MSG_ID.get((tenant_id, chat_id))
+            mid2 = await _send_keys_menu(bot, chat_id, tenant_id, edit_message_id=mid)
+            _KEYS_MENU_MSG_ID[(tenant_id, chat_id)] = int(mid2)
             return True
 
-        # SEARCH
-        if action == "search":
-            _state_clear(tenant_id, chat_id)
-            await _send_search_prompt(bot, chat_id, tenant_id)
+        if action == "key_edit" and arg:
+            _state_set(tenant_id, chat_id, {"mode": "key_edit", "key": arg})
+            await _send_key_edit_prompt(bot, chat_id, tenant_id, arg)
             return True
 
         if action == "prod_menu":
@@ -1715,18 +1706,6 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
         await _send_admin_home(bot, chat_id)
         return True
 
-    if text == BTN_ADMIN_ORDERS:
-        _state_clear(tenant_id, chat_id)
-        await bot.send_message(
-            chat_id,
-            "🧾 *Замовлення*\n\nВідкриваю меню замовлень 👇",
-            parse_mode="Markdown",
-            reply_markup=_kb([[("🧾 Замовлення", "tgadm:ord_menu:0")], [("⬅️ В адмін-меню", "tgadm:home")]]),
-            disable_web_page_preview=True,
-        )
-        return True
-
-    # Support shortcut
     if text in ("/sup", "🆘 Підтримка", "SOS Підтримка", "Підтримка"):
         _state_clear(tenant_id, chat_id)
         mid = _SUP_MENU_MSG_ID.get((tenant_id, chat_id))
@@ -1739,12 +1718,6 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
         return False
 
     mode = str(st.get("mode") or "")
-
-    # SEARCH mode
-    if mode == "search":
-        _state_clear(tenant_id, chat_id)
-        await _open_product_by_id_or_sku(bot, chat_id, tenant_id, text)
-        return True
 
     # SUPPORT (admin) message modes
     if mode == "sup_edit":
@@ -1767,6 +1740,23 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
         _SUP_MENU_MSG_ID[(tenant_id, chat_id)] = int(mid2)
         return True
 
+    # KEYS edit mode
+    if mode == "key_edit":
+        key = str(st.get("key") or "").strip()
+        val = (text or "").strip()
+        if not key:
+            _state_clear(tenant_id, chat_id)
+            return True
+
+        await _kv_set(tenant_id, key, val)
+        _state_clear(tenant_id, chat_id)
+        await bot.send_message(chat_id, "✅ Збережено.", parse_mode=None)
+
+        mid = _KEYS_MENU_MSG_ID.get((tenant_id, chat_id))
+        mid2 = await _send_keys_menu(bot, chat_id, tenant_id, edit_message_id=mid)
+        _KEYS_MENU_MSG_ID[(tenant_id, chat_id)] = int(mid2)
+        return True
+
     # photo modes
     if mode in ("wiz_photo", "add_photo_to_pid", "arch_add_photo"):
         product_id = int(st.get("product_id") or 0)
@@ -1782,7 +1772,6 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
 
         await ProductsRepo.add_product_photo(tenant_id, product_id, file_id)
 
-        # ✅ автопост у канал — лише для "нового товару" у wizard і тільки 1 раз
         if mode == "wiz_photo" and not bool(st.get("announced")):
             try:
                 await maybe_post_new_product(bot, tenant_id, product_id)
@@ -2037,3 +2026,145 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
 
 # Backward-compatible alias (router imports admin_handle_update)
 admin_handle_update = handle_update
+
+
+# ============================================================
+# Wizard functions (з твого файлу; лишив як у тебе)
+# ============================================================
+async def _wiz_ask_name(bot: Bot, chat_id: int, tenant_id: str) -> None:
+    _state_set(tenant_id, chat_id, {"mode": "wiz_name", "draft": {}})
+    await bot.send_message(
+        chat_id,
+        "➕ *Новий товар*\n\n1/6 Введи *назву* товару:",
+        parse_mode="Markdown",
+        reply_markup=_wiz_nav_kb(),
+        disable_web_page_preview=True,
+    )
+
+
+async def _wiz_ask_sku(bot: Bot, chat_id: int, tenant_id: str, draft: dict) -> None:
+    _state_set(tenant_id, chat_id, {"mode": "wiz_sku", "draft": draft})
+    await bot.send_message(
+        chat_id,
+        "2/6 Введи *SKU/артикул* (або натисни `Пропустити`):",
+        parse_mode="Markdown",
+        reply_markup=_wiz_nav_kb(allow_skip=True),
+        disable_web_page_preview=True,
+    )
+
+
+async def _wiz_ask_price(bot: Bot, chat_id: int, tenant_id: str, draft: dict) -> None:
+    _state_set(tenant_id, chat_id, {"mode": "wiz_price", "draft": draft})
+    await bot.send_message(
+        chat_id,
+        "3/6 Введи *ціну* (наприклад `1200.50` або `1200`):",
+        parse_mode="Markdown",
+        reply_markup=_wiz_nav_kb(),
+        disable_web_page_preview=True,
+    )
+
+
+async def _wiz_ask_promo_price(bot: Bot, chat_id: int, tenant_id: str, draft: dict) -> None:
+    _state_set(tenant_id, chat_id, {"mode": "wiz_promo_price", "draft": draft})
+    await bot.send_message(
+        chat_id,
+        "4/6 *Акційна ціна*\n\nВведи *акційну ціну* (наприклад `999.99`) або натисни кнопку нижче 👇",
+        parse_mode="Markdown",
+        reply_markup=_wiz_promo_kb(),
+        disable_web_page_preview=True,
+    )
+
+
+async def _wiz_ask_desc(bot: Bot, chat_id: int, tenant_id: str, draft: dict) -> None:
+    _state_set(tenant_id, chat_id, {"mode": "wiz_desc", "draft": draft})
+    await bot.send_message(
+        chat_id,
+        "5/6 Додай *опис* (або натисни `Пропустити`):",
+        parse_mode="Markdown",
+        reply_markup=_wiz_nav_kb(allow_skip=True),
+        disable_web_page_preview=True,
+    )
+
+
+async def _wiz_ask_category(bot: Bot, chat_id: int, tenant_id: str, draft: dict) -> None:
+    if CategoriesRepo is None:
+        draft["category_id"] = None
+        await _wiz_create_and_go_photos(bot, chat_id, tenant_id, draft)
+        return
+
+    default_cid = await CategoriesRepo.ensure_default(tenant_id)  # type: ignore[misc]
+    cats = await CategoriesRepo.list(tenant_id, limit=50)  # type: ignore[misc]
+    _state_set(
+        tenant_id,
+        chat_id,
+        {"mode": "wiz_category", "draft": draft, "default_category_id": int(default_cid or 0)},
+    )
+
+    await bot.send_message(
+        chat_id,
+        "6/6 *Категорія*\n\nОбери категорію для товару:",
+        parse_mode="Markdown",
+        reply_markup=_category_pick_kb(cats, prefix="tgadm:wiz_cat", back_to="tgadm:prod_menu"),
+        disable_web_page_preview=True,
+    )
+
+
+async def _wiz_create_product(tenant_id: str, draft: dict) -> int | None:
+    name = str(draft.get("name") or "").strip()
+    sku = str(draft.get("sku") or "").strip()[:64] or None
+    price_kop = int(draft.get("price_kop") or 0)
+    desc = str(draft.get("description") or "").strip()
+
+    category_id = draft.get("category_id", None)
+    if isinstance(category_id, str) and category_id.isdigit():
+        category_id = int(category_id)
+    elif category_id is not None and not isinstance(category_id, int):
+        category_id = None
+
+    pid = await ProductsRepo.add(tenant_id, name, price_kop, is_active=True, category_id=category_id, sku=sku)  # type: ignore[arg-type]
+    if not pid:
+        return None
+
+    pid_i = int(pid)
+
+    if desc:
+        await ProductsRepo.set_description(tenant_id, pid_i, desc)
+
+    promo_price_kop = int(draft.get("promo_price_kop") or 0)
+    promo_until_ts = int(draft.get("promo_until_ts") or 0)
+    if promo_price_kop > 0:
+        await ProductsRepo.set_promo(tenant_id, pid_i, promo_price_kop, promo_until_ts)
+
+    return pid_i
+
+
+async def _wiz_create_and_go_photos(bot: Bot, chat_id: int, tenant_id: str, draft: dict) -> None:
+    pid = await _wiz_create_product(tenant_id, draft)
+    _state_clear(tenant_id, chat_id)
+
+    if not pid:
+        await bot.send_message(chat_id, "❌ Не вдалося створити товар (перевір БД/міграції).", reply_markup=_admin_home_kb())
+        return
+
+    await _wiz_photos_start(bot, chat_id, tenant_id, pid)
+
+
+async def _wiz_photos_start(bot: Bot, chat_id: int, tenant_id: str, product_id: int) -> None:
+    _state_set(tenant_id, chat_id, {"mode": "wiz_photo", "product_id": int(product_id), "announced": False})
+    await bot.send_message(
+        chat_id,
+        f"📷 Фото для товару *#{product_id}*\n\nНадсилай фото (можна кілька).",
+        parse_mode="Markdown",
+        reply_markup=_wiz_photos_kb(product_id=product_id),
+        disable_web_page_preview=True,
+    )
+
+
+async def _wiz_finish(bot: Bot, chat_id: int, product_id: int) -> None:
+    await bot.send_message(
+        chat_id,
+        f"✅ *Готово!* Товар *#{product_id}* створено.\n\nМожеш додати фото/опис або створити ще.",
+        parse_mode="Markdown",
+        reply_markup=_wiz_finish_kb(product_id=product_id),
+        disable_web_page_preview=True,
+    )
