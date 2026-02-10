@@ -1,80 +1,66 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import hashlib
 import hmac
-import time
+import hashlib
 from typing import Any
 
 
-def _sign(secret: str, fields: list[str]) -> str:
-    raw = ";".join(fields)
-    return hmac.new(secret.encode(), raw.encode(), hashlib.md5).hexdigest()
+def _hmac_md5(secret_key: str, s: str) -> str:
+    return hmac.new(secret_key.encode("utf-8"), s.encode("utf-8"), hashlib.md5).hexdigest()
 
 
-def build_invoice(
+def build_purchase_signature(
     *,
-    merchant: str,
-    secret: str,
+    secret_key: str,
+    merchant_account: str,
+    merchant_domain: str,
     order_reference: str,
-    amount_uah: float,
-    domain: str,
-    return_url: str,
-    service_url: str,
-) -> dict[str, Any]:
-    ts = str(int(time.time()))
-
-    # Мінімальний "товар" 1 шт, щоб пройти вимоги
-    fields = [
-        merchant,
-        domain,
+    order_date: int,
+    amount: str,
+    currency: str,
+    product_names: list[str],
+    product_counts: list[int],
+    product_prices: list[str],
+) -> str:
+    """
+    Request signature for /pay form:
+    merchantAccount;merchantDomainName;orderReference;orderDate;amount;currency;
+    productName...;productCount...;productPrice... 1
+    """
+    parts: list[str] = [
+        merchant_account,
+        merchant_domain,
         order_reference,
-        ts,
-        f"{amount_uah:.2f}",
-        "UAH",
-        "Cart payment",
-        "1",
-        f"{amount_uah:.2f}",
+        str(int(order_date)),
+        str(amount),
+        str(currency),
     ]
-
-    signature = _sign(secret, fields)
-
-    return {
-        "merchantAccount": merchant,
-        "merchantDomainName": domain,
-        "orderReference": order_reference,
-        "orderDate": ts,
-        "amount": f"{amount_uah:.2f}",
-        "currency": "UAH",
-        "productName[]": ["Cart payment"],
-        "productCount[]": ["1"],
-        "productPrice[]": [f"{amount_uah:.2f}"],
-        "merchantSignature": signature,
-        "returnUrl": return_url,
-        "serviceUrl": service_url,
-    }
+    parts += [str(x) for x in product_names]
+    parts += [str(int(x)) for x in product_counts]
+    parts += [str(x) for x in product_prices]
+    base = ";".join(parts)
+    return _hmac_md5(secret_key, base)
 
 
-def verify_callback_signature(secret: str, data: dict[str, Any]) -> bool:
+def verify_service_callback_signature(secret_key: str, payload: dict[str, Any]) -> bool:
     """
-    WayForPay callback signature depends on fields.
-    Тут робимо максимально практично:
-    беремо стандартний набор полів з документації:
-    merchantAccount;orderReference;amount;currency;authCode;cardPan;transactionStatus;reasonCode
+    Callback signature for serviceUrl:
+    merchantAccount;orderReference;amount;currency;authCode;cardPan;transactionStatus;reasonCode 2
     """
-    try:
-        fields = [
-            str(data.get("merchantAccount") or ""),
-            str(data.get("orderReference") or ""),
-            str(data.get("amount") or ""),
-            str(data.get("currency") or ""),
-            str(data.get("authCode") or ""),
-            str(data.get("cardPan") or ""),
-            str(data.get("transactionStatus") or ""),
-            str(data.get("reasonCode") or ""),
-        ]
-        expected = _sign(secret, fields)
-        got = str(data.get("merchantSignature") or "")
-        return bool(got) and hmac.compare_digest(expected, got)
-    except Exception:
+    need = ["merchantAccount", "orderReference", "amount", "currency", "authCode", "cardPan", "transactionStatus", "reasonCode"]
+    if any(k not in payload for k in need):
         return False
+    base = ";".join(str(payload.get(k, "")) for k in need)
+    sig = _hmac_md5(secret_key, base)
+    got = str(payload.get("merchantSignature") or "")
+    return sig.lower() == got.lower()
+
+
+def build_accept_response_signature(secret_key: str, order_reference: str, status: str, ts: int) -> str:
+    """
+    Merchant response signature:
+    orderReference;status;time 3
+    """
+    base = ";".join([str(order_reference), str(status), str(int(ts))])
+    return _hmac_md5(secret_key, base)
