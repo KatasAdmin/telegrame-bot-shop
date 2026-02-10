@@ -1,22 +1,18 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-#===•===•====•====•====•===•===#1 Ну шо, погналі?
-#===•===•====•====•====•===•===#1 Ну шо, погналі?
-#===•===•====•====•====•===•===#1 Ну шо, погналі?
-
 import time
 from typing import Any
 
 from aiogram import Bot
 from aiogram.types import InputMediaPhoto
 
-from rent_platform.modules.telegram_shop.ui.user_kb import BTN_ADMIN, BTN_ADMIN_ORDERS
-from rent_platform.db.session import db_fetch_all, db_fetch_one, db_execute  # noqa: F401
+from rent_platform.db.session import db_fetch_all, db_fetch_one, db_execute
 from rent_platform.modules.telegram_shop.admin_orders import admin_orders_handle_update
 from rent_platform.modules.telegram_shop.channel_announce import maybe_post_new_product
 from rent_platform.modules.telegram_shop.repo.products import ProductsRepo
 from rent_platform.modules.telegram_shop.repo.support_links import TelegramShopSupportLinksRepo
+from rent_platform.modules.telegram_shop.ui.user_kb import BTN_ADMIN, BTN_ADMIN_ORDERS
 
 # CategoriesRepo optional (if file exists)
 try:
@@ -25,19 +21,12 @@ except Exception:  # pragma: no cover
     CategoriesRepo = None  # type: ignore
 
 
-#===•===•====•====•====•===•===#2 Ну шо, погналі?
-#===•===•====•====•====•===•===#2 Ну шо, погналі?
-#===•===•====•====•====•===•===#2 Ну шо, погналі?
-
+# ============================================================
+# In-memory state
+# ============================================================
 _STATE: dict[tuple[str, int], dict[str, Any]] = {}
-
-# Remember last support menu message_id to edit in-place
 _SUP_MENU_MSG_ID: dict[tuple[str, int], int] = {}
 
-
-#===•===•====•====•====•===•===#3 Ну шо, погналі?
-#===•===•====•====•====•===•===#3 Ну шо, погналі?
-#===•===•====•====•====•===•===#3 Ну шо, погналі?
 
 # ============================================================
 # Public helpers (imported by router)
@@ -48,18 +37,17 @@ def admin_has_state(tenant_id: str, chat_id: int) -> bool:
 
 def is_admin_user(*, tenant: dict, user_id: int) -> bool:
     """
-    Гнучка перевірка адміна (щоб не ламалось при різних схемах tenant-а).
-    Підтримує:
+    Flexible admin check.
+    Supports:
       - tenant["owner_user_id"]
-      - tenant["admin_user_ids"] як list[int] / str з комами
-      - tenant["admins"] як list[int]
+      - tenant["admin_user_ids"] as list[int] / "1,2,3"
+      - tenant["admins"] as list[int]
     """
     try:
         uid = int(user_id)
     except Exception:
         return False
 
-    # owner
     owner = tenant.get("owner_user_id")
     try:
         if owner is not None and int(owner) == uid:
@@ -67,7 +55,6 @@ def is_admin_user(*, tenant: dict, user_id: int) -> bool:
     except Exception:
         pass
 
-    # list fields
     for k in ("admin_user_ids", "admins"):
         v = tenant.get(k)
         if not v:
@@ -90,15 +77,68 @@ def is_admin_user(*, tenant: dict, user_id: int) -> bool:
     return False
 
 
-#===•===•====•====•====•===•===#4 Ну шо, погналі?
-#===•===•====•====•====•===•===#4 Ну шо, погналі?
-#===•===•====•====•====•===•===#4 Ну шо, погналі?
+# ============================================================
+# Utils
+# ============================================================
+def _now() -> int:
+    return int(time.time())
+
+
+def _kb(rows: list[list[tuple[str, str]]]) -> dict:
+    return {"inline_keyboard": [[{"text": t, "callback_data": d} for (t, d) in row] for row in rows]}
+
+
+def _extract_message(data: dict[str, Any]) -> dict | None:
+    return data.get("message") or data.get("edited_message")
+
+
+def _extract_callback(data: dict[str, Any]) -> dict | None:
+    return data.get("callback_query")
+
+
+def _state_get(tenant_id: str, chat_id: int) -> dict[str, Any] | None:
+    return _STATE.get((tenant_id, chat_id))
+
+
+def _state_set(tenant_id: str, chat_id: int, st: dict[str, Any]) -> None:
+    _STATE[(tenant_id, chat_id)] = st
+
+
+def _state_clear(tenant_id: str, chat_id: int) -> None:
+    _STATE.pop((tenant_id, chat_id), None)
+
+
+def _safe_name(s: str, n: int = 28) -> str:
+    s = (s or "").strip()
+    if len(s) <= n:
+        return s
+    return s[: n - 1] + "…"
+
+
+def _safe_btn(s: str, n: int = 60) -> str:
+    s = (s or "").strip()
+    if len(s) <= n:
+        return s
+    return s[: n - 1] + "…"
+
+
+def _extract_image_file_id(msg: dict) -> str | None:
+    photos = msg.get("photo") or []
+    if photos:
+        return str(photos[-1].get("file_id"))
+
+    doc = msg.get("document")
+    if doc:
+        mime = (doc.get("mime_type") or "").lower()
+        if mime.startswith("image/"):
+            return str(doc.get("file_id"))
+
+    return None
+
 
 def _fmt_money(kop: int) -> str:
     kop = int(kop or 0)
-    uah = kop // 100
-    cents = kop % 100
-    return f"{uah}.{cents:02d} грн"
+    return f"{kop // 100}.{kop % 100:02d} грн"
 
 
 def _parse_price_to_kop(raw: str) -> int | None:
@@ -126,6 +166,7 @@ def _parse_price_to_kop(raw: str) -> int | None:
     if not s.isdigit():
         return None
     val = int(s)
+    # heuristic: if <= 200000 assume грн
     if val <= 200000:
         return val * 100
     return val
@@ -169,65 +210,41 @@ def _parse_dt_to_ts(raw: str) -> int | None:
         return None
 
 
-#===•===•====•====•====•===•===#5 Ну шо, погналі?
-#===•===•====•====•====•===•===#5 Ну шо, погналі?
-#===•===•====•====•====•===•===#5 Ну шо, погналі?
+async def _send_or_edit(
+    bot: Bot,
+    *,
+    chat_id: int,
+    text: str,
+    message_id: int | None,
+    reply_markup: Any | None = None,
+    parse_mode: str | None = "Markdown",
+) -> int:
+    """
+    Returns message_id of the final message.
+    """
+    if message_id:
+        try:
+            await bot.edit_message_text(
+                text,
+                chat_id=chat_id,
+                message_id=int(message_id),
+                parse_mode=parse_mode,
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+            )
+            return int(message_id)
+        except Exception:
+            pass
 
-def _extract_message(data: dict[str, Any]) -> dict | None:
-    return data.get("message") or data.get("edited_message")
+    m = await bot.send_message(
+        chat_id,
+        text,
+        parse_mode=parse_mode,
+        reply_markup=reply_markup,
+        disable_web_page_preview=True,
+    )
+    return int(m.message_id)
 
-
-def _extract_callback(data: dict[str, Any]) -> dict | None:
-    return data.get("callback_query")
-
-
-def _kb(rows: list[list[tuple[str, str]]]) -> dict:
-    return {"inline_keyboard": [[{"text": t, "callback_data": d} for (t, d) in row] for row in rows]}
-
-
-def _state_get(tenant_id: str, chat_id: int) -> dict[str, Any] | None:
-    return _STATE.get((tenant_id, chat_id))
-
-
-def _state_set(tenant_id: str, chat_id: int, st: dict[str, Any]) -> None:
-    _STATE[(tenant_id, chat_id)] = st
-
-
-def _state_clear(tenant_id: str, chat_id: int) -> None:
-    _STATE.pop((tenant_id, chat_id), None)
-
-
-def _safe_name(s: str, n: int = 28) -> str:
-    s = (s or "").strip()
-    if len(s) <= n:
-        return s
-    return s[: n - 1] + "…"
-
-
-def _safe_btn(s: str, n: int = 60) -> str:
-    s = (s or "").strip()
-    if len(s) <= n:
-        return s
-    return s[: n - 1] + "…"
-
-
-def _extract_image_file_id(msg: dict) -> str | None:
-    photos = msg.get("photo") or []
-    if photos:
-        return str(photos[-1].get("file_id"))
-
-    doc = msg.get("document")
-    if doc:
-        mime = (doc.get("mime_type") or "").lower()
-        if mime.startswith("image/"):
-            return str(doc.get("file_id"))
-
-    return None
-
-
-#===•===•====•====•====•===•===#6 Ну шо, погналі?
-#===•===•====•====•====•===•===#6 Ну шо, погналі?
-#===•===•====•====•====•===•===#6 Ну шо, погналі?
 
 # ============================================================
 # Menus
@@ -297,9 +314,10 @@ def _promos_list_kb(items: list[dict[str, Any]], *, page: int, has_next: bool) -
             label = f"🔥 #{pid} {sku} {title}"
         rows.append([(_safe_btn(label, 60), f"tgadm:promo_open:{pid}:0")])
 
-    nav: list[tuple[str, str]] = []
-    nav.append(("⬅️", f"tgadm:promo_list:{page-1}:0") if page > 0 else ("·", "tgadm:noop"))
-    nav.append(("➡️", f"tgadm:promo_list:{page+1}:0") if has_next else ("·", "tgadm:noop"))
+    nav: list[tuple[str, str]] = [
+        ("⬅️", f"tgadm:promo_list:{page-1}:0") if page > 0 else ("·", "tgadm:noop"),
+        ("➡️", f"tgadm:promo_list:{page+1}:0") if has_next else ("·", "tgadm:noop"),
+    ]
     rows.append(nav)
     rows.append([("⬅️ Акції", "tgadm:promos")])
     return _kb(rows)
@@ -320,9 +338,10 @@ def _products_list_kb(items: list[dict[str, Any]], *, page: int, has_next: bool)
 
         rows.append([(_safe_btn(label, 60), f"tgadm:p_open:{pid}:0")])
 
-    nav: list[tuple[str, str]] = []
-    nav.append(("⬅️", f"tgadm:listp:{page-1}:0") if page > 0 else ("·", "tgadm:noop"))
-    nav.append(("➡️", f"tgadm:listp:{page+1}:0") if has_next else ("·", "tgadm:noop"))
+    nav: list[tuple[str, str]] = [
+        ("⬅️", f"tgadm:listp:{page-1}:0") if page > 0 else ("·", "tgadm:noop"),
+        ("➡️", f"tgadm:listp:{page+1}:0") if has_next else ("·", "tgadm:noop"),
+    ]
     rows.append(nav)
     rows.append([("⬅️ Назад", "tgadm:prod_menu")])
     return _kb(rows)
@@ -330,12 +349,11 @@ def _products_list_kb(items: list[dict[str, Any]], *, page: int, has_next: bool)
 
 def _promo_product_card_kb(*, product_id: int, category_id: int, has_prev: bool, has_next: bool, promo_active: bool) -> dict:
     cid = int(category_id)
-    nav_row: list[tuple[str, str]] = []
-    nav_row.append(("⬅️", f"tgadm:pp_prev:{product_id}:{cid}") if has_prev else ("·", "tgadm:noop"))
-    nav_row.append(("➡️", f"tgadm:pp_next:{product_id}:{cid}") if has_next else ("·", "tgadm:noop"))
-
+    nav_row: list[tuple[str, str]] = [
+        ("⬅️", f"tgadm:pp_prev:{product_id}:{cid}") if has_prev else ("·", "tgadm:noop"),
+        ("➡️", f"tgadm:pp_next:{product_id}:{cid}") if has_next else ("·", "tgadm:noop"),
+    ]
     clear_btn = ("❌ Зняти акцію", f"tgadm:promo_clear:{product_id}:{cid}") if promo_active else ("·", "tgadm:noop")
-
     return _kb(
         [
             nav_row,
@@ -354,12 +372,7 @@ def _wiz_nav_kb(*, allow_skip: bool = False) -> dict:
 
 
 def _wiz_promo_kb() -> dict:
-    return _kb(
-        [
-            [("🚫 Не буде акції", "tgadm:wiz_no_promo")],
-            [("❌ Скасувати", "tgadm:cancel")],
-        ]
-    )
+    return _kb([[("🚫 Не буде акції", "tgadm:wiz_no_promo")], [("❌ Скасувати", "tgadm:cancel")]])
 
 
 def _wiz_photos_kb(*, product_id: int) -> dict:
@@ -396,10 +409,10 @@ def _category_pick_kb(categories: list[dict], *, prefix: str, back_to: str) -> d
 
 def _admin_product_card_kb(*, product_id: int, category_id: int, has_prev: bool, has_next: bool) -> dict:
     cid = int(category_id)
-    nav_row: list[tuple[str, str]] = []
-    nav_row.append(("⬅️", f"tgadm:pc_prev:{product_id}:{cid}") if has_prev else ("·", "tgadm:noop"))
-    nav_row.append(("➡️", f"tgadm:pc_next:{product_id}:{cid}") if has_next else ("·", "tgadm:noop"))
-
+    nav_row: list[tuple[str, str]] = [
+        ("⬅️", f"tgadm:pc_prev:{product_id}:{cid}") if has_prev else ("·", "tgadm:noop"),
+        ("➡️", f"tgadm:pc_next:{product_id}:{cid}") if has_next else ("·", "tgadm:noop"),
+    ]
     return _kb(
         [
             nav_row,
@@ -424,9 +437,10 @@ def _archive_list_kb(items: list[dict[str, Any]], *, page: int, has_next: bool) 
             label = f"📦 #{pid} {sku} {title}"
         rows.append([(_safe_btn(label, 60), f"tgadm:arch_open:{pid}")])
 
-    nav: list[tuple[str, str]] = []
-    nav.append(("⬅️", f"tgadm:archive:{page-1}") if page > 0 else ("·", "tgadm:noop"))
-    nav.append(("➡️", f"tgadm:archive:{page+1}") if has_next else ("·", "tgadm:noop"))
+    nav: list[tuple[str, str]] = [
+        ("⬅️", f"tgadm:archive:{page-1}") if page > 0 else ("·", "tgadm:noop"),
+        ("➡️", f"tgadm:archive:{page+1}") if has_next else ("·", "tgadm:noop"),
+    ]
     rows.append(nav)
     rows.append([("⬅️ Назад", "tgadm:catalog")])
     return _kb(rows)
@@ -444,15 +458,8 @@ def _archive_product_kb(*, product_id: int) -> dict:
     )
 
 
-#===•===•====•====•====•===•===#7 Ну шо, погналі?
-#===•===•====•====•====•===•===#7 Ну шо, погналі?
-#===•===•====•====•====•===•===#7 Ну шо, погналі?
-
 # ============================================================
 # SUPPORT (admin)
-# tgadm:sup_menu
-# tgadm:sup_toggle:<key>
-# tgadm:sup_edit:<key>
 # ============================================================
 _SUPPORT_HINTS: dict[str, str] = {
     "support_channel": "Введи @username каналу або посилання.\nПриклад: https://t.me/your_channel",
@@ -498,23 +505,14 @@ async def _send_support_admin_menu(bot: Bot, chat_id: int, tenant_id: str, *, ed
     items = await TelegramShopSupportLinksRepo.list_all(tenant_id)
 
     text = (
-        "🆘 Підтримка — налаштування\n\n"
+        "🆘 *Підтримка — налаштування*\n\n"
         "• Тап по назві: увімк/вимк кнопку\n"
         "• ✏️: встановити значення (chat_id / @username / URL / email)\n\n"
-        "Для автопосту новинок: ввімкни 'Автопост новинок (канал): chat_id' і задай chat_id каналу."
+        "Автопост новинок: увімкни *Автопост новинок (канал)* і вкажи *announce_chat_id*.\n"
+        "Формат: `-1001234567890`"
     )
     kb = _sup_admin_kb(items)
-
-    if edit_message_id:
-        try:
-            await bot.edit_message_text(text, chat_id=chat_id, message_id=edit_message_id, reply_markup=kb)
-            return int(edit_message_id)
-        except Exception:
-            # якщо редагування неможливе — просто шлемо нове меню
-            pass
-
-    m = await bot.send_message(chat_id, text, reply_markup=kb)
-    return int(m.message_id)
+    return await _send_or_edit(bot, chat_id=chat_id, text=text, message_id=edit_message_id, reply_markup=kb)
 
 
 async def _send_support_edit_prompt(bot: Bot, chat_id: int, tenant_id: str, key: str) -> None:
@@ -525,37 +523,37 @@ async def _send_support_edit_prompt(bot: Bot, chat_id: int, tenant_id: str, key:
     hint = _SUPPORT_HINTS.get(key, "Введи значення одним повідомленням.")
     await bot.send_message(
         chat_id,
-        f"✏️ Зміна значення\n\n"
-        f"Пункт: {title}\n"
-        f"Ключ: {key}\n"
-        f"Поточне: {cur if cur else '—'}\n\n"
+        f"✏️ *Зміна значення*\n\n"
+        f"Пункт: *{title}*\n"
+        f"Ключ: `{key}`\n"
+        f"Поточне: `{cur if cur else '—'}`\n\n"
         f"{hint}\n\n"
         f"Скасувати: /cancel",
+        parse_mode="Markdown",
         reply_markup=_kb([[("❌ Скасувати", "tgadm:cancel")]]),
+        disable_web_page_preview=True,
     )
 
-
-#===•===•====•====•====•===•===#8 Ну шо, погналі?
-#===•===•====•====•====•===•===#8 Ну шо, погналі?
-#===•===•====•====•====•===•===#8 Ну шо, погналі?
 
 # ============================================================
 # Senders
 # ============================================================
-async def _send_admin_home(bot: Bot, chat_id: int) -> None:
-    await bot.send_message(
-        chat_id,
-        "🛠 *Адмінка магазину*\n\nОдна точка входу — *📦 Каталог* 👇",
-        parse_mode="Markdown",
+async def _send_admin_home(bot: Bot, chat_id: int, *, edit_message_id: int | None = None) -> None:
+    await _send_or_edit(
+        bot,
+        chat_id=chat_id,
+        message_id=edit_message_id,
+        text="🛠 *Адмінка магазину*\n\nОдна точка входу — *📦 Каталог* 👇",
         reply_markup=_admin_home_kb(),
     )
 
 
-async def _send_catalog_home(bot: Bot, chat_id: int) -> None:
-    await bot.send_message(
-        chat_id,
-        "📦 *Каталог*\n\nОбери розділ 👇",
-        parse_mode="Markdown",
+async def _send_catalog_home(bot: Bot, chat_id: int, *, edit_message_id: int | None = None) -> None:
+    await _send_or_edit(
+        bot,
+        chat_id=chat_id,
+        message_id=edit_message_id,
+        text="📦 *Каталог*\n\nОбери розділ 👇",
         reply_markup=_catalog_kb(),
     )
 
@@ -578,17 +576,43 @@ async def _send_categories_menu(bot: Bot, chat_id: int, tenant_id: str) -> None:
     )
 
 
-async def _send_products_list_inline(bot: Bot, chat_id: int, tenant_id: str, page: int) -> None:
+# ============================================================
+# Products paging (SQL, no heavy list+sort)
+# ============================================================
+async def _list_active_products_page(tenant_id: str, *, page: int, page_size: int = 12) -> tuple[list[dict[str, Any]], bool]:
     page = max(0, int(page))
-    limit = 12
-    offset = page * limit
+    off = page * page_size
 
-    rows = await ProductsRepo.list_active(tenant_id, limit=500)
-    rows_sorted = sorted(rows, key=lambda x: int(x["id"]), reverse=True)
+    q = """
+    SELECT id, name, COALESCE(sku,'') AS sku, COALESCE(price_kop,0) AS price_kop
+    FROM telegram_shop_products
+    WHERE tenant_id = :tid AND is_active = true
+    ORDER BY id DESC
+    LIMIT :lim OFFSET :off
+    """
+    rows = await db_fetch_all(q, {"tid": tenant_id, "lim": int(page_size) + 1, "off": int(off)}) or []
+    has_next = len(rows) > page_size
+    return (rows[:page_size], has_next)
 
-    chunk = rows_sorted[offset : offset + limit]
-    has_next = len(rows_sorted) > offset + limit
 
+async def _list_inactive_products_page(tenant_id: str, *, page: int, page_size: int = 12) -> tuple[list[dict[str, Any]], bool]:
+    page = max(0, int(page))
+    off = page * page_size
+
+    q = """
+    SELECT id, name, COALESCE(sku,'') AS sku, COALESCE(price_kop,0) AS price_kop
+    FROM telegram_shop_products
+    WHERE tenant_id = :tid AND is_active = false
+    ORDER BY id DESC
+    LIMIT :lim OFFSET :off
+    """
+    rows = await db_fetch_all(q, {"tid": tenant_id, "lim": int(page_size) + 1, "off": int(off)}) or []
+    has_next = len(rows) > page_size
+    return (rows[:page_size], has_next)
+
+
+async def _send_products_list_inline(bot: Bot, chat_id: int, tenant_id: str, page: int) -> None:
+    chunk, has_next = await _list_active_products_page(tenant_id, page=page, page_size=12)
     if not chunk:
         await bot.send_message(chat_id, "Поки що немає активних товарів.", reply_markup=_catalog_kb())
         return
@@ -601,15 +625,11 @@ async def _send_products_list_inline(bot: Bot, chat_id: int, tenant_id: str, pag
     )
 
 
-#===•===•====•====•====•===•===#9 Ну шо, погналі?
-#===•===•====•====•====•===•===#9 Ну шо, погналі?
-#===•===•====•====•====•===•===#9 Ну шо, погналі?
-
 # ============================================================
-# Promos helpers
+# Promos
 # ============================================================
 async def _send_promos_home(bot: Bot, chat_id: int, tenant_id: str) -> None:
-    now = int(time.time())
+    now = _now()
     q = """
     SELECT COUNT(*) AS cnt
     FROM telegram_shop_products
@@ -632,10 +652,10 @@ async def _send_promos_home(bot: Bot, chat_id: int, tenant_id: str) -> None:
 
 
 async def _send_promos_list(bot: Bot, chat_id: int, tenant_id: str, page: int) -> None:
-    now = int(time.time())
+    now = _now()
     page = max(0, int(page))
-    limit = 12
-    offset = page * limit
+    lim = 12
+    off = page * lim
 
     q = """
     SELECT id, name, COALESCE(sku,'') AS sku, promo_price_kop, promo_until_ts
@@ -645,10 +665,11 @@ async def _send_promos_list(bot: Bot, chat_id: int, tenant_id: str, page: int) -
       AND COALESCE(promo_price_kop, 0) > 0
       AND (COALESCE(promo_until_ts, 0) = 0 OR COALESCE(promo_until_ts, 0) > :now)
     ORDER BY CASE WHEN promo_until_ts = 0 THEN 2147483647 ELSE promo_until_ts END ASC, id DESC
+    LIMIT :lim OFFSET :off
     """
-    rows = await db_fetch_all(q, {"tid": tenant_id, "now": now}) or []
-    chunk = rows[offset : offset + limit]
-    has_next = len(rows) > offset + limit
+    rows = await db_fetch_all(q, {"tid": tenant_id, "now": now, "lim": lim + 1, "off": off}) or []
+    has_next = len(rows) > lim
+    chunk = rows[:lim]
 
     if not chunk:
         await bot.send_message(chat_id, "Поки що немає активних акцій.", reply_markup=_promos_kb())
@@ -695,7 +716,7 @@ async def _build_promo_product_card(tenant_id: str, product_id: int, category_id
 
     cover_file_id = await ProductsRepo.get_cover_photo_file_id(tenant_id, pid)
 
-    now = int(time.time())
+    now = _now()
     promo_active = promo_price > 0 and (promo_until == 0 or promo_until > now)
 
     text = f"🔥 *{name}*\n\nБазова ціна: *{_fmt_money(price)}*\nID: `{pid}`"
@@ -749,24 +770,11 @@ async def _edit_promo_product_card(bot: Bot, chat_id: int, message_id: int, tena
         return False
 
 
-#===•===•====•====•====•===•===#10 Ну шо, погналі?
-#===•===•====•====•====•===•===#10 Ну шо, погналі?
-#===•===•====•====•====•===•===#10 Ну шо, погналі?
-
 # ============================================================
 # Archive
 # ============================================================
 async def _send_archive(bot: Bot, chat_id: int, tenant_id: str, page: int) -> None:
-    page = max(0, int(page))
-    limit = 12
-    offset = page * limit
-
-    rows = await ProductsRepo.list_inactive(tenant_id, limit=500)  # type: ignore[attr-defined]
-    rows_sorted = sorted(rows, key=lambda x: int(x["id"]), reverse=True)
-
-    chunk = rows_sorted[offset : offset + limit]
-    has_next = len(rows_sorted) > offset + limit
-
+    chunk, has_next = await _list_inactive_products_page(tenant_id, page=page, page_size=12)
     if not chunk:
         await bot.send_message(chat_id, "🗃 Архів порожній (вимкнених товарів нема).", reply_markup=_catalog_kb())
         return
@@ -812,10 +820,6 @@ async def _send_archive_product(bot: Bot, chat_id: int, tenant_id: str, product_
     else:
         await bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=kb)
 
-
-#===•===•====•====•====•===•===#11 Ну шо, погналі?
-#===•===•====•====•====•===•===#11 Ну шо, погналі?
-#===•===•====•====•====•===•===#11 Ну шо, погналі?
 
 # ============================================================
 # Category browsing (admin cards)
@@ -921,10 +925,6 @@ async def _edit_admin_product_card(bot: Bot, chat_id: int, message_id: int, tena
     except Exception:
         return False
 
-
-#===•===•====•====•====•===•===#12 Ну шо, погналі?
-#===•===•====•====•====•===•===#12 Ну шо, погналі?
-#===•===•====•====•====•===•===#12 Ну шо, погналі?
 
 # ============================================================
 # Wizard: create product
@@ -1061,19 +1061,11 @@ async def _wiz_finish(bot: Bot, chat_id: int, product_id: int) -> None:
     )
 
 
-#===•===•====•====•====•===•===#13 Ну шо, погналі?
-#===•===•====•====•====•===•===#13 Ну шо, погналі?
-#===•===•====•====•====•===•===#13 Ну шо, погналі?
-
 # ============================================================
-# Main entry
+# MAIN entry
 # ============================================================
 async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
     tenant_id = str(tenant["id"])
-
-    #===•===•====•====•====•===•===#14 Ну шо, погналі?
-    #===•===•====•====•====•===•===#14 Ну шо, погналі?
-    #===•===•====•====•====•===•===#14 Ну шо, погналі?
 
     # ---------------- callbacks ----------------
     cb = _extract_callback(data)
@@ -1084,11 +1076,23 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
 
         chat_id = int(cb["message"]["chat"]["id"])
         msg_id = int(cb["message"]["message_id"])
-        cb_id = cb.get("id")
-        if cb_id:
-            await bot.answer_callback_query(cb_id)
 
-        # ✅ Orders admin module (separate file)
+        # permissions (important: block non-admin immediately)
+        if not is_admin_user(tenant=tenant, user_id=chat_id):
+            try:
+                await bot.answer_callback_query(cb.get("id"), text="⛔️ Нема доступу", show_alert=True)
+            except Exception:
+                pass
+            return True
+
+        # acknowledge callback (avoid spinner)
+        try:
+            if cb.get("id"):
+                await bot.answer_callback_query(cb["id"])
+        except Exception:
+            pass
+
+        # ✅ Orders module (separate file)
         if payload.startswith("tgadm:ord"):
             handled = await admin_orders_handle_update(tenant=tenant, data=data, bot=bot)
             if handled:
@@ -1099,27 +1103,29 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
         arg = parts[2] if len(parts) > 2 else ""
         arg2 = parts[3] if len(parts) > 3 else ""
 
-        if action == "noop":
+        if action in ("noop",):
             return True
-
-        #===•===•====•====•====•===•===#15 Ну шо, погналі?
-        #===•===•====•====•====•===•===#15 Ну шо, погналі?
-        #===•===•====•====•====•===•===#15 Ну шо, погналі?
 
         # HOME / CATALOG
         if action == "home":
             _state_clear(tenant_id, chat_id)
-            await _send_admin_home(bot, chat_id)
+            await _send_admin_home(bot, chat_id, edit_message_id=msg_id)
             return True
 
         if action == "catalog":
             _state_clear(tenant_id, chat_id)
-            await _send_catalog_home(bot, chat_id)
+            await _send_catalog_home(bot, chat_id, edit_message_id=msg_id)
             return True
 
         if action == "prod_menu":
             _state_clear(tenant_id, chat_id)
-            await bot.send_message(chat_id, "📦 *Товари*\n\nОбери дію 👇", parse_mode="Markdown", reply_markup=_products_menu_kb())
+            await _send_or_edit(
+                bot,
+                chat_id=chat_id,
+                message_id=msg_id,
+                text="📦 *Товари*\n\nОбери дію 👇",
+                reply_markup=_products_menu_kb(),
+            )
             return True
 
         if action == "cat_menu":
@@ -1127,15 +1133,11 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             await _send_categories_menu(bot, chat_id, tenant_id)
             return True
 
-        #===•===•====•====•====•===•===#16 Ну шо, погналі?
-        #===•===•====•====•====•===•===#16 Ну шо, погналі?
-        #===•===•====•====•====•===•===#16 Ну шо, погналі?
-
-        # =====================
         # SUPPORT (admin)
         if action == "sup_menu":
             _state_clear(tenant_id, chat_id)
-            mid = await _send_support_admin_menu(bot, chat_id, tenant_id, edit_message_id=None)
+            mid = _SUP_MENU_MSG_ID.get((tenant_id, chat_id))
+            mid = await _send_support_admin_menu(bot, chat_id, tenant_id, edit_message_id=mid)
             _SUP_MENU_MSG_ID[(tenant_id, chat_id)] = int(mid)
             return True
 
@@ -1151,7 +1153,7 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             await _send_support_edit_prompt(bot, chat_id, tenant_id, arg)
             return True
 
-        # Wizard: promo quick button (no promo)
+        # Wizard: promo quick (no promo)
         if action == "wiz_no_promo":
             st = _state_get(tenant_id, chat_id) or {}
             draft = st.get("draft") or {}
@@ -1160,10 +1162,7 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             await _wiz_ask_desc(bot, chat_id, tenant_id, draft)
             return True
 
-        #===•===•====•====•====•===•===#17 Ну шо, погналі?
-        #===•===•====•====•====•===•===#17 Ну шо, погналі?
-        #===•===•====•====•====•===•===#17 Ну шо, погналі?
-
+        # Categories toggles
         if action == "toggle_default":
             if CategoriesRepo is None:
                 return True
@@ -1242,10 +1241,7 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             await bot.send_message(chat_id, f"🏷 Надішли SKU для товару #{arg} (або `-` щоб очистити):", reply_markup=_wiz_nav_kb())
             return True
 
-        #===•===•====•====•====•===•===#18 Ну шо, погналі?
-        #===•===•====•====•====•===•===#18 Ну шо, погналі?
-        #===•===•====•====•====•===•===#18 Ну шо, погналі?
-
+        # Categories manage/delete
         if action == "cat_manage":
             _state_clear(tenant_id, chat_id)
             await _send_manage_categories_pick(bot, chat_id, tenant_id)
@@ -1373,7 +1369,7 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             await bot.send_message(chat_id, f"📝 Надішли новий опис для товару #{pid}:", reply_markup=_wiz_nav_kb(allow_skip=True))
             return True
 
-        # Product cards actions (admin + promos)
+        # Product cards actions (admin + promos nav)
         if action in ("pc_prev", "pc_next", "p_to_arch", "p_enable", "p_setcat", "pprice", "pname", "p_photo", "psku", "pp_prev", "pp_next"):
             if not (arg.isdigit() and arg2.isdigit()):
                 return True
@@ -1470,10 +1466,7 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
                     await _send_admin_category_first_product(bot, chat_id, tenant_id, back_cid)
             return True
 
-        #===•===•====•====•====•===•===#19 Ну шо, погналі?
-        #===•===•====•====•====•===•===#19 Ну шо, погналі?
-        #===•===•====•====•====•===•===#19 Ну шо, погналі?
-
+        # PROMOS
         if action == "promos":
             _state_clear(tenant_id, chat_id)
             await _send_promos_home(bot, chat_id, tenant_id)
@@ -1518,12 +1511,10 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             await bot.send_message(chat_id, "✅ Скасовано.", reply_markup=_admin_home_kb())
             return True
 
-        return False
+        # If it's tgadm:* but unknown -> absorb to avoid leaking handlers
+        return True
 
-    #===•===•====•====•====•===•===#20 Ну шо, погналі?
-    #===•===•====•====•====•===•===#20 Ну шо, погналі?
-    #===•===•====•====•====•===•===#20 Ну шо, погналі?
-
+    # ---------------- messages ----------------
     msg = _extract_message(data)
     if not msg:
         return False
@@ -1531,13 +1522,17 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
     chat_id = int(msg["chat"]["id"])
     text = (msg.get("text") or "").strip()
 
+    # permissions for message flows
+    if not is_admin_user(tenant=tenant, user_id=chat_id):
+        return False
+
     # cancel always
     if text == "/cancel":
         _state_clear(tenant_id, chat_id)
         await bot.send_message(chat_id, "✅ Скасовано.", reply_markup=_admin_home_kb())
         return True
 
-    # shortcuts (commands + reply keyboard buttons)
+    # shortcuts
     if text in ("/a", "/a_help", BTN_ADMIN):
         _state_clear(tenant_id, chat_id)
         await _send_admin_home(bot, chat_id)
@@ -1545,7 +1540,6 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
 
     if text == BTN_ADMIN_ORDERS:
         _state_clear(tenant_id, chat_id)
-        # одразу відкриваємо меню замовлень (інлайн), далі вже відпрацює admin_orders_handle_update по callback
         await bot.send_message(
             chat_id,
             "🧾 *Замовлення*\n\nВідкриваю меню замовлень 👇",
@@ -1567,8 +1561,7 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
 
     mode = str(st.get("mode") or "")
 
-    # =========================
-    # SUPPORT (admin) message modes
+    # SUPPORT edit
     if mode == "sup_edit":
         key = str(st.get("key") or "").strip()
         val = (text or "").strip()
@@ -1604,7 +1597,7 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
 
         await ProductsRepo.add_product_photo(tenant_id, product_id, file_id)
 
-        # ✅ автопост у канал — лише для "нового товару" у wizard і тільки 1 раз
+        # announce only once in wizard
         if mode == "wiz_photo" and not bool(st.get("announced")):
             try:
                 await maybe_post_new_product(bot, tenant_id, product_id)
@@ -1802,7 +1795,7 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             await _send_admin_category_first_product(bot, chat_id, tenant_id, cid)
         return True
 
-    # PROMOS: wizard (manual add promo by product id)
+    # PROMOS: manual add promo by product id
     if mode == "promo_pick_id":
         if not text.isdigit():
             await bot.send_message(chat_id, "Надішли тільки цифру ID товару.", reply_markup=_wiz_nav_kb())
@@ -1855,10 +1848,6 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
 
     return False
 
-
-#===•===•====•====•====•===•===#21 Ну шо, погналі?
-#===•===•====•====•====•===•===#21 Ну шо, погналі?
-#===•===•====•====•====•===•===#21 Ну шо, погналі?
 
 # Backward-compatible alias (router imports admin_handle_update)
 admin_handle_update = handle_update
