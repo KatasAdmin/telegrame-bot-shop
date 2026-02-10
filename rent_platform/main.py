@@ -24,6 +24,7 @@ log = logging.getLogger(__name__)
 
 app = FastAPI()
 app.include_router(admin_router)
+app.include_router(payments_router)
 
 # =========================================================
 # Platform bot + dispatcher
