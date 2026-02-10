@@ -254,7 +254,7 @@ def _admin_home_kb() -> dict:
         [
             [("📦 Каталог", "tgadm:catalog")],
             [("🧾 Замовлення", "tgadm:ord_menu:0")],
-            [("⚙️ Інтеграції", "tgadm:integrations")],  # <-- NEW
+            [("🔑 IP ключі", "tgadm:ip_keys")],
             [("🆘 Підтримка", "tgadm:sup_menu")],
             [("❌ Скинути дію", "tgadm:cancel")],
         ]
@@ -266,6 +266,7 @@ def _catalog_kb() -> dict:
         [
             [("📁 Категорії", "tgadm:cat_menu"), ("📦 Товари", "tgadm:prod_menu")],
             [("🗃 Архів (вимкнені)", "tgadm:archive:0"), ("🔥 Акції / Знижки", "tgadm:promos")],
+            [("🔎 Пошук (ID/SKU)", "tgadm:search")],
             [("🏠 В адмін-меню", "tgadm:home")],
         ]
     )
@@ -514,14 +515,13 @@ async def _send_support_admin_menu(bot: Bot, chat_id: int, tenant_id: str, *, ed
     )
     kb = _sup_admin_kb(items)
 
-    # IMPORTANT: parse_mode=None avoids Telegram markdown entity errors for values with "_" etc.
     mid = await _send_or_edit(
         bot,
         chat_id=chat_id,
         text=text,
         message_id=edit_message_id,
         reply_markup=kb,
-        parse_mode=None,
+        parse_mode=None,  # ✅ no markdown
     )
     return int(mid)
 
@@ -540,10 +540,76 @@ async def _send_support_edit_prompt(bot: Bot, chat_id: int, tenant_id: str, key:
         f"Поточне: {cur if cur else '—'}\n\n"
         f"{hint}\n\n"
         "Скасувати: /cancel",
-        parse_mode=None,  # ✅
+        parse_mode=None,
         reply_markup=_kb([[("❌ Скасувати", "tgadm:cancel")]]),
         disable_web_page_preview=True,
     )
+
+
+# ============================================================
+# IP KEYS (admin-only)
+# ============================================================
+def _ip_keys_kb() -> dict:
+    return _kb(
+        [
+            [("🌐 Allowlist IP", "tgadm:ipk:allowlist")],
+            [("📦 Нова Пошта (IP/API)", "tgadm:ipk:np")],
+            [("💳 Оплати (LiqPay/WayForPay)", "tgadm:ipk:pay")],
+            [("🧩 1C / Сайт (webhooks)", "tgadm:ipk:site")],
+            [("⬅️ В адмін-меню", "tgadm:home")],
+        ]
+    )
+
+
+async def _send_ip_keys_home(bot: Bot, chat_id: int) -> None:
+    text = (
+        "🔑 IP ключі\n\n"
+        "Тут будемо зберігати все для інтеграцій:\n"
+        "• allowlist IP (дозволені IP)\n"
+        "• ключі оплат / webhook secrets\n"
+        "• IP/API Нової Пошти\n"
+        "• інтеграції з сайтом/1C\n\n"
+        "Зараз це меню-заглушка (без БД), але структура вже готова."
+    )
+    await bot.send_message(chat_id, text, parse_mode=None, reply_markup=_ip_keys_kb(), disable_web_page_preview=True)
+
+
+async def _send_ip_keys_section(bot: Bot, chat_id: int, section: str) -> None:
+    mapping = {
+        "allowlist": (
+            "🌐 Allowlist IP\n\n"
+            "Сюди додамо список дозволених IP для доступу до адмін/API.\n"
+            "Приклад: 1.2.3.4, 5.6.7.8/32\n\n"
+            "Пізніше: збереження в БД + перевірка в middleware."
+        ),
+        "np": (
+            "📦 Нова Пошта (IP/API)\n\n"
+            "Тут будуть:\n"
+            "• API key НП\n"
+            "• whitelist IP НП (якщо треба)\n"
+            "• endpoint-и/ттн вебхуки (якщо будуть)\n\n"
+            "Пізніше: додамо поля та репозиторій."
+        ),
+        "pay": (
+            "💳 Оплати (LiqPay/WayForPay)\n\n"
+            "Тут будуть:\n"
+            "• public/private keys\n"
+            "• webhook URL + secret\n"
+            "• allowed IP провайдера (якщо потрібно)\n\n"
+            "Пізніше: валідація підписів та логування."
+        ),
+        "site": (
+            "🧩 1C / Сайт (webhooks)\n\n"
+            "Тут будуть:\n"
+            "• webhook secret\n"
+            "• URL API\n"
+            "• токени інтеграції\n"
+            "• мапінг variant_id/barcode/SKU\n\n"
+            "Пізніше: експорт/імпорт товарів."
+        ),
+    }
+    text = mapping.get(section, "Розділ не знайдено.")
+    await bot.send_message(chat_id, text, parse_mode=None, reply_markup=_ip_keys_kb(), disable_web_page_preview=True)
 
 
 # ============================================================
@@ -607,6 +673,7 @@ async def _list_active_products_page(tenant_id: str, *, page: int, page_size: in
     rows = await db_fetch_all(q, {"tid": tenant_id, "lim": int(page_size) + 1, "off": int(off)}) or []
     has_next = len(rows) > page_size
     return (rows[:page_size], bool(has_next))
+
 
 # ============================================================
 # Products list / cards / promos / archive
@@ -971,20 +1038,6 @@ async def _edit_admin_product_card(bot: Bot, chat_id: int, message_id: int, tena
 
 
 # ============================================================
-# Integrations (admin-only, hidden from user menus)
-# ============================================================
-async def _send_integrations_home(bot: Bot, chat_id: int) -> None:
-    # parse_mode=None to avoid any entity issues (keys/urls)
-    text = (
-        "⚙️ Інтеграції\n\n"
-        "Тут будемо підключати зовнішні сервіси (1C/сайт/оплати/склади).\n"
-        "Поки що це меню-заглушка.\n\n"
-        "• Автопост новинок — налаштовується в Підтримка (announce_chat_id)\n"
-    )
-    await bot.send_message(chat_id, text, parse_mode=None, reply_markup=_kb([[("⬅️ В адмін-меню", "tgadm:home")]]))
-
-
-# ============================================================
 # Wizard: create product
 # name -> sku -> price -> promo_price (or no promo) -> desc -> category -> photos
 # ============================================================
@@ -1128,6 +1181,61 @@ async def _wiz_finish(bot: Bot, chat_id: int, product_id: int) -> None:
 
 
 # ============================================================
+# Search (ID / SKU)
+# ============================================================
+async def _send_search_prompt(bot: Bot, chat_id: int, tenant_id: str) -> None:
+    _state_set(tenant_id, chat_id, {"mode": "search"})
+    await bot.send_message(
+        chat_id,
+        "🔎 Пошук\n\nНадішли:\n• ID товару (цифрою)\nабо\n• SKU (текст)\n\nСкасувати: /cancel",
+        parse_mode=None,
+        reply_markup=_kb([[("❌ Скасувати", "tgadm:cancel")]]),
+        disable_web_page_preview=True,
+    )
+
+
+async def _open_product_by_id_or_sku(bot: Bot, chat_id: int, tenant_id: str, raw: str) -> None:
+    s = (raw or "").strip()
+    if not s:
+        await bot.send_message(chat_id, "Порожній запит.", parse_mode=None)
+        return
+
+    if s.isdigit():
+        pid = int(s)
+        card = await _build_admin_product_card(tenant_id, pid, 0)
+        if not card:
+            await bot.send_message(chat_id, "❌ Товар не знайдено.", reply_markup=_catalog_kb())
+            return
+        if card["has_photo"]:
+            await bot.send_photo(chat_id, photo=card["file_id"], caption=card["text"], parse_mode="Markdown", reply_markup=card["kb"])
+        else:
+            await bot.send_message(chat_id, card["text"], parse_mode="Markdown", reply_markup=card["kb"], disable_web_page_preview=True)
+        return
+
+    q = """
+    SELECT id
+    FROM telegram_shop_products
+    WHERE tenant_id = :tid AND COALESCE(sku,'') = :sku
+    ORDER BY id DESC
+    LIMIT 1
+    """
+    row = await db_fetch_one(q, {"tid": tenant_id, "sku": s}) or {}
+    pid = int(row.get("id") or 0)
+    if pid <= 0:
+        await bot.send_message(chat_id, "❌ За таким SKU нічого не знайдено.", reply_markup=_catalog_kb())
+        return
+
+    card = await _build_admin_product_card(tenant_id, pid, 0)
+    if not card:
+        await bot.send_message(chat_id, "❌ Товар не знайдено.", reply_markup=_catalog_kb())
+        return
+    if card["has_photo"]:
+        await bot.send_photo(chat_id, photo=card["file_id"], caption=card["text"], parse_mode="Markdown", reply_markup=card["kb"])
+    else:
+        await bot.send_message(chat_id, card["text"], parse_mode="Markdown", reply_markup=card["kb"], disable_web_page_preview=True)
+
+
+# ============================================================
 # Main entry
 # ============================================================
 async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool:
@@ -1174,9 +1282,21 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
             await _send_catalog_home(bot, chat_id)
             return True
 
-        if action == "integrations":
+        # IP KEYS
+        if action == "ip_keys":
             _state_clear(tenant_id, chat_id)
-            await _send_integrations_home(bot, chat_id)
+            await _send_ip_keys_home(bot, chat_id)
+            return True
+
+        if action == "ipk" and arg:
+            _state_clear(tenant_id, chat_id)
+            await _send_ip_keys_section(bot, chat_id, arg)
+            return True
+
+        # SEARCH
+        if action == "search":
+            _state_clear(tenant_id, chat_id)
+            await _send_search_prompt(bot, chat_id, tenant_id)
             return True
 
         if action == "prod_menu":
@@ -1606,6 +1726,7 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
         )
         return True
 
+    # Support shortcut
     if text in ("/sup", "🆘 Підтримка", "SOS Підтримка", "Підтримка"):
         _state_clear(tenant_id, chat_id)
         mid = _SUP_MENU_MSG_ID.get((tenant_id, chat_id))
@@ -1618,6 +1739,12 @@ async def handle_update(*, tenant: dict, data: dict[str, Any], bot: Bot) -> bool
         return False
 
     mode = str(st.get("mode") or "")
+
+    # SEARCH mode
+    if mode == "search":
+        _state_clear(tenant_id, chat_id)
+        await _open_product_by_id_or_sku(bot, chat_id, tenant_id, text)
+        return True
 
     # SUPPORT (admin) message modes
     if mode == "sup_edit":
